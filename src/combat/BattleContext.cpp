@@ -3142,7 +3142,7 @@ namespace sts {
             << ", seed: " << bc.seed
             << "\n";
 
-        os << bc.monsters;
+        bc.monsters.print(os, bc);
         os << bc.player;
         os << bc.cards;
         os << "}\n";

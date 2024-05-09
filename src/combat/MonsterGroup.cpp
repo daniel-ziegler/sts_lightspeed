@@ -630,6 +630,31 @@ void MonsterGroup::applyEmeraldEliteBuff(BattleContext &bc, const int buffType, 
 
 }
 
+void MonsterGroup::print(std::ostream &os, const BattleContext &bc) const {
+    const std::string s = "\n\t";
+
+    os << "MonsterGroup { ";
+    os << s << "monsterCount: " << this->monsterCount;
+    os << s << "monstersAlive: " << this->monstersAlive;
+    os << s << "extraRollMoveOnTurnBits: " << this->extraRollMoveOnTurn.to_string();
+
+    for (int i = 0; i < this->monsterCount; ++i) {
+        os << s << this->arr[i];
+        DamageInfo dInfo = this->arr[i].getMoveBaseDamage(bc);
+        os << s << "nextActionDamage: ";
+        if (dInfo.attackCount == 0) {
+            os << "-";
+        } else {
+            int damage = this->arr[i].calculateDamageToPlayer(bc, dInfo.damage);
+            os << damage;
+            if (dInfo.attackCount > 1) {
+                os << "x" << dInfo.attackCount;
+            }
+        }
+    }
+    os << "\n}\n";
+}
+
 namespace sts {
 
     std::ostream &operator<<(std::ostream &os, const MonsterGroup &g) {
