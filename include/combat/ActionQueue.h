@@ -11,21 +11,12 @@
 #include <functional>
 #include <cassert>
 
+#include "combat/Actions.h"
+
 
 namespace sts {
 
     class BattleContext;
-    typedef std::function<void (BattleContext &)> ActionFunction;
-
-    struct Action {
-        ActionFunction actFunc;
-        bool clearOnCombatVictory = true;
-
-        Action() = default;
-        Action(ActionFunction a) : actFunc(std::move(a)) {}
-        Action(ActionFunction a, bool b) : actFunc(std::move(a)), clearOnCombatVictory(b) {}
-    };
-
 
     // Simple deque
     template<int capacity>
@@ -34,10 +25,9 @@ namespace sts {
         int front = 0;
         int back = 0;
         int size = 0;
-        std::bitset<capacity> bits; // for the shouldClear field
 
 #ifdef sts_action_queue_use_raw_array
-        ActionFunction arr[capacity];
+        Action arr[capacity];
         ActionQueue() = default;
         ActionQueue(const ActionQueue &rhs) : size(rhs.size), back(rhs.back), front(rhs.front), bits(rhs.bits) {
             int cur = rhs.front;
@@ -49,14 +39,14 @@ namespace sts {
             }
         }
 #else
-        std::array<ActionFunction,capacity> arr;
+        std::array<Action, capacity> arr;
 #endif
 
         void clear();
         void pushFront(Action a);
         void pushBack(Action a);
         bool isEmpty();
-        ActionFunction popFront();
+        Action popFront();
         [[nodiscard]] int getCapacity() const;
     };
 
@@ -77,8 +67,7 @@ namespace sts {
         if (front < 0) {
             front = capacity-1;
         }
-        bits.set(front, a.clearOnCombatVictory);
-        arr[front] = std::move(a.actFunc);
+        arr[front] = std::move(a);
     }
 
     template<int capacity>
@@ -91,8 +80,7 @@ namespace sts {
         if (back >= capacity) {
             back = 0;
         }
-        bits.set(back, a.clearOnCombatVictory);
-        arr[back] = std::move(a.actFunc);
+        arr[back] = std::move(a);
         ++back;
         ++size;
     }
@@ -103,11 +91,11 @@ namespace sts {
     }
 
     template<int capacity>
-    ActionFunction ActionQueue<capacity>::popFront() {
+    Action ActionQueue<capacity>::popFront() {
 #ifdef sts_asserts
         assert(size > 0 );
 #endif
-        ActionFunction a = arr[front];
+        Action a = arr[front];
         ++front;
         --size;
         if (front >= capacity) {

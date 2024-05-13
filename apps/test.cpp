@@ -35,7 +35,7 @@ void printSizes() {
     std::cout << "sizeof MonsterGroup : " << sizeof(MonsterGroup) << '\n';
     std::cout << "sizeof CardInstance: " << sizeof(CardInstance) << '\n';
     std::cout << "sizeof CardManager : " << sizeof(CardManager) << '\n';
-    std::cout << "sizeof ActionFunction : " << sizeof(ActionFunction) << '\n';
+    std::cout << "sizeof Action : " << sizeof(Action) << '\n';
     std::cout << "sizeof ActionQueue<40> : " << sizeof(ActionQueue<40>) << '\n';
     std::cout << "sizeof BattleContext: " << sizeof(BattleContext) << '\n';
 

@@ -395,7 +395,7 @@ void BattleContext::initRelics(const GameContext &gc) {
     for (auto r : atBattleStart) {
         switch (r) {
             case R::BAG_OF_MARBLES:
-                addToBot( Actions::DebuffAllEnemy<MS::VULNERABLE>(1, false) );
+                addToBot( Actions::DebuffAllEnemy(MS::VULNERABLE, 1, false) );
                 break;
 
             case R::BAG_OF_PREPARATION:
@@ -403,7 +403,7 @@ void BattleContext::initRelics(const GameContext &gc) {
                 break;
 
             case R::CLOCKWORK_SOUVENIR:
-                addToBot( Actions::BuffPlayer<PS::ARTIFACT>(1) );
+                addToBot( Actions::BuffPlayer(PS::ARTIFACT, 1) );
                 break;
 
             case R::GREMLIN_VISAGE:
@@ -415,7 +415,7 @@ void BattleContext::initRelics(const GameContext &gc) {
                 break;
 
             case R::RED_MASK:
-                addToBot( Actions::DebuffAllEnemy<MS::WEAK>(1) );
+                addToBot( Actions::DebuffAllEnemy(MS::WEAK, 1) );
                 break;
 
             case R::RING_OF_THE_SNAKE:
@@ -423,7 +423,7 @@ void BattleContext::initRelics(const GameContext &gc) {
                 break;
 
             case R::TWISTED_FUNNEL:
-                addToBot( Actions::DebuffAllEnemy<MS::POISON>(4) );
+                addToBot( Actions::DebuffAllEnemy(MS::POISON, 4) );
                 break;
 
             default:
@@ -686,7 +686,7 @@ void BattleContext::clearPostCombatActions() {
         if (curIdx >= actionQueue.getCapacity()) {
             curIdx = 0;
         }
-        const bool shouldClear = actionQueue.bits[curIdx];
+        const bool shouldClear = clearOnCombatVictory(actionQueue.arr[curIdx]);
 
         if (shouldClear) {
             --actionQueue.size;
@@ -696,7 +696,6 @@ void BattleContext::clearPostCombatActions() {
             }
 
             actionQueue.arr[placeIdx] = actionQueue.arr[curIdx];
-            actionQueue.bits[placeIdx] = actionQueue.bits[curIdx];
             ++placeIdx;
         }
         ++curIdx;
@@ -750,7 +749,7 @@ void BattleContext::executeActions() {
         if (!actionQueue.isEmpty()) {
             // do a action
             auto a = std::move(actionQueue.popFront());
-            a(*this);
+            std::visit([this](auto&& arg) { arg(*this); }, a);
             continue;
         }
 
@@ -982,7 +981,7 @@ void BattleContext::useAttackCard() {
         case CardId::BASH:
             // technically calculate attack damage is called first, keep note if we optimize addToBot later
             addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, up ? 10 : 8)) );
-            addToBot( Actions::DebuffEnemy<MS::VULNERABLE>(t, up ? 3 : 2, false) );
+            addToBot( Actions::DebuffEnemy(MS::VULNERABLE, t, up ? 3 : 2, false) );
             break;
 
         case CardId::BITE:
@@ -1018,7 +1017,7 @@ void BattleContext::useAttackCard() {
 
         case CardId::CLOTHESLINE:
             addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, up ? 14 : 12)) );
-            addToBot( Actions::DebuffEnemy<MS::WEAK>(t, up ? 3 : 2, false) );
+            addToBot( Actions::DebuffEnemy(MS::WEAK, t, up ? 3 : 2, false) );
             break;
 
         case CardId::DRAMATIC_ENTRANCE: {
@@ -1160,7 +1159,7 @@ void BattleContext::useAttackCard() {
         case CardId::THUNDERCLAP: {
             int baseDamage = (up ? 7 : 4) + player.getStatus<PS::VIGOR>();
             addToBot( Actions::AttackAllEnemy(baseDamage));
-            addToBot( Actions::DebuffAllEnemy<MS::VULNERABLE>(1, false) );
+            addToBot( Actions::DebuffAllEnemy(MS::VULNERABLE, 1, false) );
             break;
         }
 
@@ -1173,8 +1172,8 @@ void BattleContext::useAttackCard() {
 
         case CardId::UPPERCUT:
             addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, 13)) );
-            addToBot( Actions::DebuffEnemy<MS::WEAK>(t, up ? 2 : 1, false) );
-            addToBot( Actions::DebuffEnemy<MS::VULNERABLE>(t, up ? 2 : 1, false) );
+            addToBot( Actions::DebuffEnemy(MS::WEAK, t, up ? 2 : 1, false) );
+            addToBot( Actions::DebuffEnemy(MS::VULNERABLE, t, up ? 2 : 1, false) );
             break;
 
         case CardId::WHIRLWIND: {
@@ -1230,7 +1229,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::APPARITION:
-            addToBot( Actions::BuffPlayer<PS::INTANGIBLE>(1) );
+            addToBot( Actions::BuffPlayer(PS::INTANGIBLE, 1) );
             break;
 
         case CardId::BANDAGE_UP:
@@ -1239,14 +1238,14 @@ void BattleContext::useSkillCard() {
 
         case CardId::BATTLE_TRANCE:
             addToBot( Actions::DrawCards(up ? 4 : 3) );
-            addToBot( Actions::DebuffPlayer<PS::NO_DRAW>() );
+            addToBot( Actions::DebuffPlayer(PS::NO_DRAW) );
             break;
 
         case CardId::BLIND:
             if (up) {
-                addToBot( Actions::DebuffAllEnemy<MS::WEAK>(2, false) );
+                addToBot( Actions::DebuffAllEnemy(MS::WEAK, 2, false) );
             } else {
-                addToBot( Actions::DebuffEnemy<MS::WEAK>(t, 2, false) );
+                addToBot( Actions::DebuffEnemy(MS::WEAK, t, 2, false) );
             }
             break;
 
@@ -1265,9 +1264,9 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::DARK_SHACKLES:
-            addToBot( Actions::DebuffEnemy<MS::STRENGTH>(t, up ? 15 : 9) );
+            addToBot( Actions::DebuffEnemy(MS::STRENGTH, t, up ? 15 : 9) );
             if (monsters.arr[t].hasStatus<MS::ARTIFACT>()) {
-                addToBot( Actions::BuffEnemy<MS::SHACKLED>(t, up ? 15 : 9) );
+                addToBot( Actions::BuffEnemy(MS::SHACKLED, t, up ? 15 : 9) );
             }
             break;
 
@@ -1281,7 +1280,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::DISARM:
-            addToBot( Actions::DebuffEnemy<MS::STRENGTH>(t, -2, false) );
+            addToBot( Actions::DebuffEnemy(MS::STRENGTH, t, -2, false) );
             break;
 
         case CardId::DISCOVERY:
@@ -1290,7 +1289,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::DOUBLE_TAP:
-            addToBot(Actions::BuffPlayer<PS::DOUBLE_TAP>(up ? 2 : 1));
+            addToBot(Actions::BuffPlayer(PS::DOUBLE_TAP, up ? 2 : 1));
             break;
 
         case CardId::DUAL_WIELD:
@@ -1320,12 +1319,12 @@ void BattleContext::useSkillCard() {
 
         case CardId::FLAME_BARRIER:
             addToBot( Actions::GainBlock(calculateCardBlock(up ? 16 : 12)) );
-            addToBot( Actions::BuffPlayer<PS::FLAME_BARRIER>(up ? 6 : 4) );
+            addToBot( Actions::BuffPlayer(PS::FLAME_BARRIER, up ? 6 : 4) );
             break;
 
         case CardId::FLEX:
-            addToBot( Actions::BuffPlayer<PS::STRENGTH>(up ? 4 : 2) );
-            addToBot( Actions::DebuffPlayer<PS::LOSE_STRENGTH>(up ? 4 : 2) );
+            addToBot( Actions::BuffPlayer(PS::STRENGTH, up ? 4 : 2) );
+            addToBot( Actions::DebuffPlayer(PS::LOSE_STRENGTH, up ? 4 : 2) );
             break;
 
         case CardId::GHOSTLY_ARMOR:
@@ -1363,7 +1362,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::INTIMIDATE:
-            addToBot( Actions::DebuffAllEnemy<MS::WEAK>(up ? 2 : 1, false) ); // game justs adds one for each enemy in order
+            addToBot( Actions::DebuffAllEnemy(MS::WEAK, up ? 2 : 1, false) ); // game justs adds one for each enemy in order
             break;
 
         case CardId::JACK_OF_ALL_TRADES: // the game decides the random cards here and adds maketempcardtobot
@@ -1372,7 +1371,7 @@ void BattleContext::useSkillCard() {
 
         case CardId::JAX:
             addToBot( Actions::PlayerLoseHp(3, true) );
-            addToBot( Actions::BuffPlayer<PS::STRENGTH>(up ? 3 : 2) );
+            addToBot( Actions::BuffPlayer(PS::STRENGTH, up ? 3 : 2) );
             break;
 
         case CardId::LIMIT_BREAK:
@@ -1398,12 +1397,12 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::PANACEA:
-            addToBot( Actions::BuffPlayer<PS::ARTIFACT>(up ? 2 : 1) );
+            addToBot( Actions::BuffPlayer(PS::ARTIFACT, up ? 2 : 1) );
             break;
 
         case CardId::PANIC_BUTTON:
             addToBot( Actions::GainBlock(calculateCardBlock(up ? 40 : 30)) );
-            addToBot( Actions::DebuffPlayer<PS::NO_BLOCK>(2) );
+            addToBot( Actions::DebuffPlayer(PS::NO_BLOCK, 2) );
             break;
 
         case CardId::POWER_THROUGH:
@@ -1416,7 +1415,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::RAGE:
-            addToBot( Actions::BuffPlayer<PS::RAGE>(up ? 5 : 3) );
+            addToBot( Actions::BuffPlayer(PS::RAGE, up ? 5 : 3) );
             break;
 
         case CardId::SECRET_TECHNIQUE:
@@ -1440,8 +1439,8 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::SHOCKWAVE:
-            addToBot( Actions::DebuffAllEnemy<MS::WEAK>(up ? 5 : 3, false) );
-            addToBot( Actions::DebuffAllEnemy<MS::VULNERABLE>(up ? 5 : 3, false) );
+            addToBot( Actions::DebuffAllEnemy(MS::WEAK, up ? 5 : 3, false) );
+            addToBot( Actions::DebuffAllEnemy(MS::VULNERABLE, up ? 5 : 3, false) );
             break;
 
         case CardId::SHRUG_IT_OFF:
@@ -1454,7 +1453,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::THE_BOMB:
-            addToBot( Actions::BuffPlayer<PS::THE_BOMB>(up ? 50 : 40) );
+            addToBot( Actions::BuffPlayer(PS::THE_BOMB, up ? 50 : 40) );
             break;
 
         case CardId::THINKING_AHEAD: // same as upgraded warcry
@@ -1475,9 +1474,9 @@ void BattleContext::useSkillCard() {
 
         case CardId::TRIP: // maybe fixed --- todo this doesn't work properly because it only requires a target when not upgraded, also the trip card doesn't uses its own implementation of debuff all enemy
             if (up) {
-                addToBot( Actions::DebuffAllEnemy<MS::VULNERABLE>(2, false) );
+                addToBot( Actions::DebuffAllEnemy(MS::VULNERABLE, 2, false) );
             } else {
-                addToBot( Actions::DebuffEnemy<MS::VULNERABLE>(t, 2, false) );
+                addToBot( Actions::DebuffEnemy(MS::VULNERABLE, t, 2, false) );
             }
             break;
 
@@ -1523,76 +1522,76 @@ void BattleContext::usePowerCard() {
 
         case CardId::BERSERK:
             ++player.energyPerTurn;
-            addToBot( Actions::DebuffPlayer<PS::VULNERABLE>(up ? 1 : 2, false) );
+            addToBot( Actions::DebuffPlayer(PS::VULNERABLE, up ? 1 : 2, false) );
             break;
 
         case CardId::BRUTALITY:
-            addToBot( Actions::BuffPlayer<PS::BRUTALITY>(1) );
+            addToBot( Actions::BuffPlayer(PS::BRUTALITY, 1) );
             break;
 
         case CardId::CORRUPTION:
-            addToBot( Actions::BuffPlayer<PS::CORRUPTION>() );
+            addToBot( Actions::BuffPlayer(PS::CORRUPTION) );
             break;
 
         case CardId::COMBUST:
-            addToBot( Actions::BuffPlayer<PS::COMBUST>(up ? 7 : 5) );
+            addToBot( Actions::BuffPlayer(PS::COMBUST, up ? 7 : 5) );
             break;
 
         case CardId::DEMON_FORM:
-            addToBot( Actions::BuffPlayer<PS::DEMON_FORM>(up ? 3 : 2) );
+            addToBot( Actions::BuffPlayer(PS::DEMON_FORM, up ? 3 : 2) );
             break;
 
         case CardId::DARK_EMBRACE:
-            addToBot( Actions::BuffPlayer<PS::DARK_EMBRACE>(1) );
+            addToBot( Actions::BuffPlayer(PS::DARK_EMBRACE, 1) );
             break;
 
         case CardId::EVOLVE:
-            addToBot( Actions::BuffPlayer<PS::EVOLVE>(up ? 2 : 1) );
+            addToBot( Actions::BuffPlayer(PS::EVOLVE, up ? 2 : 1) );
             break;
 
         case CardId::FEEL_NO_PAIN:
-            addToBot( Actions::BuffPlayer<PS::FEEL_NO_PAIN>(up ? 4 : 3) );
+            addToBot( Actions::BuffPlayer(PS::FEEL_NO_PAIN, up ? 4 : 3) );
             break;
 
         case CardId::FIRE_BREATHING:
-            addToBot( Actions::BuffPlayer<PS::FIRE_BREATHING>(up ? 10 : 6) );
+            addToBot( Actions::BuffPlayer(PS::FIRE_BREATHING, up ? 10 : 6) );
             break;
 
         case CardId::INFLAME:
-            addToBot( Actions::BuffPlayer<PS::STRENGTH>(up ? 3 : 2) );
+            addToBot( Actions::BuffPlayer(PS::STRENGTH, up ? 3 : 2) );
             break;
 
         case CardId::JUGGERNAUT:
-            addToBot( Actions::BuffPlayer<PS::JUGGERNAUT>(up ? 7 : 5) );
+            addToBot( Actions::BuffPlayer(PS::JUGGERNAUT, up ? 7 : 5) );
             break;
 
         case CardId::MAGNETISM:
-            addToBot( Actions::BuffPlayer<PS::MAGNETISM>(1) );
+            addToBot( Actions::BuffPlayer(PS::MAGNETISM, 1) );
             break;
 
         case CardId::MAYHEM:
-            addToBot( Actions::BuffPlayer<PS::MAYHEM>(1) );
+            addToBot( Actions::BuffPlayer(PS::MAYHEM, 1) );
             break;
 
         case CardId::METALLICIZE:
-            addToBot( Actions::BuffPlayer<PS::METALLICIZE>(up ? 4 : 3) );
+            addToBot( Actions::BuffPlayer(PS::METALLICIZE, up ? 4 : 3) );
             break;
 
         case CardId::PANACHE:
-            addToBot( Actions::BuffPlayer<PS::PANACHE>(up ? 14 : 10) );
+            addToBot( Actions::BuffPlayer(PS::PANACHE, up ? 14 : 10) );
             break;
 
         case CardId::RUPTURE:
-            addToBot(Actions::BuffPlayer<PS::RUPTURE>(up ? 2 : 1));
+            addToBot(Actions::BuffPlayer(PS::RUPTURE, up ? 2 : 1));
             break;
 
         case CardId::SADISTIC_NATURE:
-            addToBot( Actions::BuffPlayer<PS::SADISTIC>(up ? 7 : 5) );
+            addToBot( Actions::BuffPlayer(PS::SADISTIC, up ? 7 : 5) );
             break;
 
         case CardId::WRAITH_FORM:
-            addToBot( Actions::BuffPlayer<PS::INTANGIBLE>(up ? 3 : 2) );
-            addToBot( Actions::DebuffPlayer<PS::WRAITH_FORM>(1) );
+            addToBot( Actions::BuffPlayer(PS::INTANGIBLE, up ? 3 : 2) );
+            addToBot( Actions::DebuffPlayer(PS::WRAITH_FORM, 1) );
             break;
 
         default:
@@ -1656,7 +1655,7 @@ void BattleContext::onUseAttackCard() {
 
     if (p.hasStatus<PS::PEN_NIB>()) {
         // todo does this need to be added to bot?
-        addToBot( Actions::RemoveStatus<PS::PEN_NIB>() );
+        addToBot( Actions::RemoveStatus(PS::PEN_NIB) );
     }
 
     // ********* Relics onUseCard *********
@@ -1671,7 +1670,7 @@ void BattleContext::onUseAttackCard() {
     }
 
     if (p.hasRelic<R::KUNAI>() && p.attacksPlayedThisTurn % 3 == 0) {
-        addToBot( Actions::BuffPlayer<PS::DEXTERITY>(1) );
+        addToBot( Actions::BuffPlayer(PS::DEXTERITY, 1) );
     }
 
     if (p.hasRelic<R::ORANGE_PELLETS>()) {
@@ -1687,7 +1686,7 @@ void BattleContext::onUseAttackCard() {
     }
 
     if (p.hasRelic<R::SHURIKEN>() && p.attacksPlayedThisTurn % 3 == 0) {
-        addToBot( Actions::BuffPlayer<PS::STRENGTH>(1) );
+        addToBot( Actions::BuffPlayer(PS::STRENGTH, 1) );
     }
 
     if (p.hasRelic<R::NECRONOMICON>() && !p.haveUsedNecronomiconThisTurn && !item.freeToPlay && !item.purgeOnUse &&
@@ -1699,7 +1698,7 @@ void BattleContext::onUseAttackCard() {
     if (p.hasRelic<R::PEN_NIB>()) {
         ++p.penNibCounter;
         if (p.penNibCounter == 9) {
-            addToBot( Actions::BuffPlayer<PS::PEN_NIB>(1) );
+            addToBot( Actions::BuffPlayer(PS::PEN_NIB, 1) );
             p.penNibCounter = -1; // take note of this
         }
     }
@@ -2251,7 +2250,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::ANCIENT_POTION:
-            addToBot(Actions::BuffPlayer<PS::ARTIFACT>(hasBark ? 2 : 1));
+            addToBot(Actions::BuffPlayer(PS::ARTIFACT, hasBark ? 2 : 1));
             break;
 
         case Potion::ATTACK_POTION:
@@ -2282,7 +2281,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::CULTIST_POTION:
-            addToBot(Actions::BuffPlayer<PS::RITUAL>(hasBark ? 2 : 1));
+            addToBot(Actions::BuffPlayer(PS::RITUAL, hasBark ? 2 : 1));
             break;
 
         case Potion::CUNNING_POTION:
@@ -2290,7 +2289,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::DEXTERITY_POTION:
-            addToBot(Actions::BuffPlayer<PS::DEXTERITY>(hasBark ? 4 : 2));
+            addToBot(Actions::BuffPlayer(PS::DEXTERITY, hasBark ? 4 : 2));
             break;
 
         case Potion::DISTILLED_CHAOS: {
@@ -2302,7 +2301,7 @@ void BattleContext::drinkPotion(int idx, int target) {
         }
 
         case Potion::DUPLICATION_POTION:
-            addToBot(Actions::BuffPlayer<PS::DUPLICATION>(hasBark ? 2 : 1));
+            addToBot(Actions::BuffPlayer(PS::DUPLICATION, hasBark ? 2 : 1));
             break;
 
         case Potion::ELIXIR_POTION:
@@ -2326,7 +2325,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::ESSENCE_OF_STEEL:
-            addToBot( Actions::BuffPlayer<PS::PLATED_ARMOR>(hasBark ? 8 : 4) );
+            addToBot( Actions::BuffPlayer(PS::PLATED_ARMOR, hasBark ? 8 : 4) );
             break;
 
         case Potion::EXPLOSIVE_POTION: {
@@ -2336,7 +2335,7 @@ void BattleContext::drinkPotion(int idx, int target) {
         }
 
         case Potion::FEAR_POTION:
-            addToBot( Actions::DebuffEnemy<MS::VULNERABLE>(target, hasBark ? 6 : 3, false) );
+            addToBot( Actions::DebuffEnemy(MS::VULNERABLE, target, hasBark ? 6 : 3, false) );
             break;
 
         case Potion::FIRE_POTION:
@@ -2344,12 +2343,12 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::FLEX_POTION:
-            addToBot( Actions::BuffPlayer<PS::STRENGTH>(hasBark ? 10 : 5) );
-            addToBot( Actions::DebuffPlayer<PS::LOSE_STRENGTH>(hasBark ? 10 : 5) );
+            addToBot( Actions::BuffPlayer(PS::STRENGTH, hasBark ? 10 : 5) );
+            addToBot( Actions::DebuffPlayer(PS::LOSE_STRENGTH, hasBark ? 10 : 5) );
             break;
 
         case Potion::FOCUS_POTION:
-            addToBot(Actions::BuffPlayer<PS::FOCUS>(hasBark ? 4 : 2));
+            addToBot(Actions::BuffPlayer(PS::FOCUS, hasBark ? 4 : 2));
             break;
 
         case Potion::FRUIT_JUICE:
@@ -2361,15 +2360,15 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::GHOST_IN_A_JAR:
-            addToBot(Actions::BuffPlayer<PS::INTANGIBLE>(hasBark ? 2 : 1));
+            addToBot(Actions::BuffPlayer(PS::INTANGIBLE, hasBark ? 2 : 1));
             break;
 
         case Potion::HEART_OF_IRON:
-            addToBot(Actions::BuffPlayer<PS::METALLICIZE>(hasBark ? 12 : 6));
+            addToBot(Actions::BuffPlayer(PS::METALLICIZE, hasBark ? 12 : 6));
             break;
 
         case Potion::LIQUID_BRONZE:
-            addToBot(Actions::BuffPlayer<PS::THORNS>(hasBark ? 6 : 3));
+            addToBot(Actions::BuffPlayer(PS::THORNS, hasBark ? 6 : 3));
             break;
 
         case Potion::LIQUID_MEMORIES:
@@ -2377,7 +2376,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::POISON_POTION:
-            addToBot( Actions::DebuffEnemy<MS::POISON>(target, hasBark ? 12 : 6) );
+            addToBot( Actions::DebuffEnemy(MS::POISON, target, hasBark ? 12 : 6) );
             break;
 
         case Potion::POTION_OF_CAPACITY:
@@ -2390,7 +2389,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::REGEN_POTION:
-            addToBot(Actions::BuffPlayer<PS::REGEN>(hasBark ? 10 : 5));
+            addToBot(Actions::BuffPlayer(PS::REGEN, hasBark ? 10 : 5));
             break;
 
         case Potion::SKILL_POTION:
@@ -2407,8 +2406,8 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::SPEED_POTION:
-            addToBot(Actions::BuffPlayer<PS::DEXTERITY>(hasBark ? 10 : 5));
-            addToBot(Actions::DebuffPlayer<PS::LOSE_DEXTERITY>(hasBark ? 10 : 5));
+            addToBot(Actions::BuffPlayer(PS::DEXTERITY, hasBark ? 10 : 5));
+            addToBot(Actions::DebuffPlayer(PS::LOSE_DEXTERITY, hasBark ? 10 : 5));
             break;
 
         case Potion::STANCE_POTION:
@@ -2416,7 +2415,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::STRENGTH_POTION:
-            addToBot(Actions::BuffPlayer<PS::STRENGTH>(hasBark ? 4 : 2));
+            addToBot(Actions::BuffPlayer(PS::STRENGTH, hasBark ? 4 : 2));
             break;
 
         case Potion::SWIFT_POTION:
@@ -2424,7 +2423,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::WEAK_POTION:
-            addToBot(Actions::DebuffEnemy<MS::WEAK>(target, hasBark ? 6 : 3, false));
+            addToBot(Actions::DebuffEnemy(MS::WEAK, target, hasBark ? 6 : 3, false));
             break;
 
         case Potion::INVALID:
@@ -2622,12 +2621,12 @@ void BattleContext::triggerOnEndOfTurnForPlayingCards() {
 //                    break;
 //
 //                case CardId::DOUBT:
-//                    addToTop( Actions::DebuffPlayer<PS::WEAK>(1) );
+//                    addToTop( Actions::DebuffPlayer(PS::WEAK, 1) );
 //                    foundCurse = true;
 //                    break;
 //
 //                case CardId::SHAME:
-//                    addToTop( Actions::DebuffPlayer<PS::FRAIL>(1) );
+//                    addToTop( Actions::DebuffPlayer(PS::FRAIL, 1) );
 //                    foundCurse = true;
 //                    break;
 //

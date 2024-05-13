@@ -112,6 +112,7 @@ namespace sts {
         template <MonsterStatus> void setStatus(int amount);
         template <MonsterStatus> void decrementStatus(int amount=1);
         template <MonsterStatus> void addDebuff(int amount, bool isSourceMonster=true);
+        void addDebuff(MonsterStatus s, int amount, bool isSourceMonster=true);
         template <MonsterStatus> void removeStatus();
         template <MonsterStatus> void buff(int amount=1);
         void buff(MonsterStatus s, int amount=1);
@@ -224,57 +225,60 @@ namespace sts {
             }
         }
     }
-
     template <MonsterStatus s>
     void Monster::addDebuff(int amount, bool isSourceMonster) {
+        addDebuff(s, amount, isSourceMonster);
+    }
+
+    inline void Monster::addDebuff(MonsterStatus s, int amount, bool isSourceMonster) {
         if (isSourceMonster && (s == MS::WEAK || s == MS::VULNERABLE)) {
-            setJustApplied<s>(true);
+            setJustApplied(s, true);
         }
 
         switch (s) {
             case MonsterStatus::BLOCK_RETURN:
                 blockReturn += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::CHOKED:
                 choked += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::CORPSE_EXPLOSION:
                 corpseExplosion += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::LOCK_ON:
                 lockOn += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::MARK:
                 mark += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::POISON:
                 poison += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::STRENGTH:
                 strength += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::VULNERABLE:
                 vulnerable += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             case MonsterStatus::WEAK:
                 weak += amount;
-                setHasStatus<s>(true);
+                setHasStatus(s, true);
                 return;
 
             default:

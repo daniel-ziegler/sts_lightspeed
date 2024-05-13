@@ -429,7 +429,7 @@ void Monster::die(BattleContext &bc) {
 
     if (hasStatus<MS::SPORE_CLOUD>()) {
         // spore cloud always has a value of 2 in game
-        bc.addToTop( Actions::DebuffPlayer<PS::VULNERABLE>(2, bc.turnHasEnded) );
+        bc.addToTop( Actions::DebuffPlayer(PS::VULNERABLE, 2, bc.turnHasEnded) );
 
     } else if (hasStatus<MS::REGROW>()) {
         resetAllStatusEffects();
@@ -473,7 +473,7 @@ void Monster::attackedUnblockedHelper(BattleContext &bc, int damage) { // todo, 
     }
 
     if (bc.player.hasStatus<PS::ENVENOM>()) {
-        bc.addToTop( Actions::DebuffEnemy<MS::POISON>(this->idx, bc.player.getStatus<PS::ENVENOM>()) );
+        bc.addToTop( Actions::DebuffEnemy(MS::POISON, this->idx, bc.player.getStatus<PS::ENVENOM>()) );
     }
 
     if (hasStatus<MS::INVINCIBLE>()) {
@@ -562,7 +562,7 @@ void Monster::attacked(BattleContext &bc, int damage) {
     block = std::max(0, block - tempDamage);
 
     if (hadBlock && block == 0 && bc.player.hasRelic<RelicId::HAND_DRILL>()) {
-        bc.addToBot(Actions::DebuffEnemy<MS::VULNERABLE>(idx, 2, false) );
+        bc.addToBot(Actions::DebuffEnemy(MS::VULNERABLE, idx, 2, false) );
     }
 
     if (damage > 0) { // todo can damage be zero???
@@ -617,7 +617,7 @@ void Monster::damage(BattleContext &bc, int damage) {
     block = std::max(0, block-tempDamage);
 
     if (hadBlock && block == 0 && bc.player.hasRelic<RelicId::HAND_DRILL>()) {
-        bc.addToBot(Actions::DebuffEnemy<MS::VULNERABLE>(idx, 2, false) );
+        bc.addToBot(Actions::DebuffEnemy(MS::VULNERABLE, idx, 2, false) );
     }
 
     if (damage > 0) {

@@ -98,6 +98,7 @@ namespace sts {
 
         template <PlayerStatus> void removeStatus();
         template <PlayerStatus> void decrementStatus(int amount=1);
+        void decrementStatus(PlayerStatus s, int amount=1);
         template <PlayerStatus> void decrementIfNotJustApplied();
 
 
@@ -177,6 +178,10 @@ namespace sts {
 
     template <PlayerStatus s>
     void Player::decrementStatus(int amount) {
+        decrementStatus(s, amount);
+    }
+
+    inline void Player::decrementStatus(PlayerStatus s, int amount) {
         switch (s) {
             case PS::ARTIFACT:
                 artifact -= amount;
@@ -197,7 +202,7 @@ namespace sts {
             default:
                 statusMap.at(s) -= amount;
                 if (!statusMap.at(s)) {
-                    setHasStatus<s>(false);
+                    setHasStatus(s, false);
                 }
         }
     }

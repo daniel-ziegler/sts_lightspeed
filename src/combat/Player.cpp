@@ -421,7 +421,7 @@ void Player::applyEndOfTurnPowers(BattleContext &bc) {
 
         switch (pair.first) {
             case PS::BURST:
-                bc.addToBot(Actions::RemoveStatus<PS::BURST>());
+                bc.addToBot(Actions::RemoveStatus(PS::BURST));
                 break;
 
             case PS::COMBUST:
@@ -436,11 +436,11 @@ void Player::applyEndOfTurnPowers(BattleContext &bc) {
                 break;
 
             case PS::DOUBLE_TAP:
-                bc.addToBot(Actions::RemoveStatus<PS::DOUBLE_TAP>());
+                bc.addToBot(Actions::RemoveStatus(PS::DOUBLE_TAP));
                 break;
 
             case PS::ENTANGLED:
-                bc.addToBot(Actions::RemoveStatus<PS::ENTANGLED>());
+                bc.addToBot(Actions::RemoveStatus(PS::ENTANGLED));
                 break;
 
             case PS::EQUILIBRIUM:
@@ -452,17 +452,17 @@ void Player::applyEndOfTurnPowers(BattleContext &bc) {
                 break;
 
             case PS::LOSE_DEXTERITY:
-                bc.addToBot(Actions::DebuffPlayer<PS::DEXTERITY>(-pair.second));
-                bc.addToBot(Actions::RemoveStatus<PS::LOSE_DEXTERITY>());
+                bc.addToBot(Actions::DebuffPlayer(PS::DEXTERITY, -pair.second));
+                bc.addToBot(Actions::RemoveStatus(PS::LOSE_DEXTERITY));
                 break;
 
             case PS::LOSE_STRENGTH:
-                bc.addToBot(Actions::DebuffPlayer<PS::STRENGTH>(-pair.second));
-                bc.addToBot(Actions::RemoveStatus<PS::LOSE_STRENGTH>());
+                bc.addToBot(Actions::DebuffPlayer(PS::STRENGTH, -pair.second));
+                bc.addToBot(Actions::RemoveStatus(PS::LOSE_STRENGTH));
                 break;
 
             case PS::NO_DRAW:
-                bc.addToBot(Actions::RemoveStatus<PS::NO_DRAW>());
+                bc.addToBot(Actions::RemoveStatus(PS::NO_DRAW));
                 break;
 
             case PS::OMEGA:
@@ -474,23 +474,23 @@ void Player::applyEndOfTurnPowers(BattleContext &bc) {
                 break;
 
             case PS::REBOUND:
-                bc.addToBot(Actions::RemoveStatus<PS::REBOUND>());
+                bc.addToBot(Actions::RemoveStatus(PS::REBOUND));
                 break;
 
             case PS::REGEN:
                 bc.addToTop(Actions::HealPlayer(pair.second));
-                bc.addToTop(Actions::DecrementStatus<PS::REGEN>());
+                bc.addToTop(Actions::DecrementStatus(PS::REGEN));
                 break;
 
                 //case RetainCardPower -> if not has relic runic pyramid and not has power equilibrium, addToBot retain cards action
 
             case PS::RITUAL:
-                bc.addToBot(Actions::BuffPlayer<PS::STRENGTH>(pair.second));
+                bc.addToBot(Actions::BuffPlayer(PS::STRENGTH, pair.second));
                 break;
                 // case TheBomb
 
             case PS::WRAITH_FORM: // todo does this debuff or just decrement?
-                bc.addToBot(Actions::DecrementStatus<PS::DEXTERITY>(pair.second));
+                bc.addToBot(Actions::DecrementStatus(PS::DEXTERITY, pair.second));
                 break;
 
             default:
@@ -571,7 +571,7 @@ void Player::applyStartOfTurnRelics(BattleContext &bc) {
     }
 
     if (hasRelic<R::DAMARU>()) {
-        bc.addToBot( Actions::BuffPlayer<PS::MANTRA>(1) );
+        bc.addToBot( Actions::BuffPlayer(PS::MANTRA, 1) );
         // todo handle mantra change stance
     }
 
@@ -595,16 +595,19 @@ void Player::applyStartOfTurnRelics(BattleContext &bc) {
     if (hasRelic<R::INCENSE_BURNER>()) {
         if (++incenseBurnerCounter == 6) {
             incenseBurnerCounter = 0;
-            bc.addToBot( Actions::BuffPlayer<PS::INTANGIBLE>(1) );
+            bc.addToBot( Actions::BuffPlayer(PS::INTANGIBLE, 1) );
         }
     }
 
     if (hasRelic<R::INSERTER>()) {
         if (++inserterCounter == 2) {
             inserterCounter = 0; // todo
+            assert(false);
+/*
             bc.addToBot( {[=](BattleContext &bc) {
                 bc.player.increaseOrbSlots(1);
             }});
+*/
         }
     }
 
@@ -635,7 +638,7 @@ void Player::applyStartOfTurnPowers(BattleContext &bc) {
                 break;
 
             case PS::BIAS:
-                bc.addToBot( Actions::DecrementStatus<PS::FOCUS>(pair.second) );
+                bc.addToBot( Actions::DecrementStatus(PS::FOCUS, pair.second) );
                 break;
 
             case PS::CREATIVE_AI:
@@ -701,7 +704,7 @@ void Player::applyStartOfTurnPowers(BattleContext &bc) {
 
             case PS::PHANTASMAL:
                 decrementStatus<PS::PHANTASMAL>();
-                bc.addToBot( Actions::BuffPlayer<PS::DOUBLE_DAMAGE>() );
+                bc.addToBot( Actions::BuffPlayer(PS::DOUBLE_DAMAGE) );
                 break;
 
                 // time maze not used in standard modes
@@ -745,11 +748,11 @@ void Player::applyStartOfTurnPostDrawPowers(BattleContext &bc) {
                 break;
 
             case PS::DEMON_FORM:
-                bc.addToBot( Actions::BuffPlayer<PS::STRENGTH>(pair.second) );
+                bc.addToBot( Actions::BuffPlayer(PS::STRENGTH, pair.second) );
                 break;
 
             case PS::DEVOTION: // the implementation of this is really weird in the game code
-                bc.addToBot( Actions::BuffPlayer<PS::MANTRA>(pair.second) ); // todo make buffing mantra switch stance
+                bc.addToBot( Actions::BuffPlayer(PS::MANTRA, pair.second) ); // todo make buffing mantra switch stance
                 break;
 
             case PS::DRAW_CARD_NEXT_TURN:
@@ -758,7 +761,7 @@ void Player::applyStartOfTurnPostDrawPowers(BattleContext &bc) {
                 break;
 
             case PS::NOXIOUS_FUMES:
-                bc.addToBot( Actions::DebuffAllEnemy<MS::POISON>(pair.second) );
+                bc.addToBot( Actions::DebuffAllEnemy(MS::POISON, pair.second) );
                 break;
 
             case PS::TOOLS_OF_THE_TRADE:
