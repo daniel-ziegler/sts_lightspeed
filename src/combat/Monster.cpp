@@ -234,6 +234,137 @@ int Monster::getStatusInternal(MonsterStatus s) const {
     }
 }
 
+void Monster::setHasStatus(MonsterStatus s, bool value) {
+    if (s == MS::STRENGTH) {
+        return; // should not be called
+    }
+    if (value) {
+        statusBits |= (1ULL << (int)s);
+    } else {
+        statusBits &= ~(1ULL << (int)s);
+    }
+}
+
+void Monster::setStatus(MonsterStatus s, int amount) {
+    if (isBooleanPower(s)) {
+        setHasStatus(s, amount);
+        return;
+    }
+
+    switch (s) {
+        case MonsterStatus::ARTIFACT:
+            artifact = amount;
+            return;
+
+        case MonsterStatus::BLOCK_RETURN:
+            blockReturn = amount;
+            return;
+
+        case MonsterStatus::CHOKED:
+            choked = amount;
+            return;
+
+        case MonsterStatus::CORPSE_EXPLOSION:
+            corpseExplosion = amount;
+            return;
+
+        case MonsterStatus::LOCK_ON:
+            lockOn = amount;
+            return;
+
+        case MonsterStatus::MARK:
+            mark = amount;
+            return;
+
+        case MonsterStatus::METALLICIZE:
+            metallicize = amount;
+            return;
+
+        case MonsterStatus::PLATED_ARMOR:
+            platedArmor = amount;
+            return;
+
+        case MonsterStatus::POISON:
+            poison = amount;
+            return;
+
+        case MonsterStatus::REGEN:
+            regen = amount;
+            return;
+
+        case MonsterStatus::SHACKLED:
+            shackled = amount;
+            return;
+
+        case MonsterStatus::STRENGTH:
+            strength = amount;
+            return;
+
+        case MonsterStatus::VULNERABLE:
+            vulnerable = amount;
+            return;
+
+        case MonsterStatus::WEAK:
+            weak = amount;
+            return;
+
+        case MonsterStatus::ANGRY:
+        case MonsterStatus::BEAT_OF_DEATH:
+        case MonsterStatus::CURIOSITY:
+        case MonsterStatus::CURL_UP:
+        case MonsterStatus::ENRAGE:
+        case MonsterStatus::FADING:
+        case MonsterStatus::FLIGHT:
+        case MonsterStatus::GENERIC_STRENGTH_UP:
+        case MonsterStatus::INTANGIBLE:
+        case MonsterStatus::MALLEABLE:
+        case MonsterStatus::MODE_SHIFT:
+        case MonsterStatus::RITUAL:
+        case MonsterStatus::SLOW:
+        case MonsterStatus::SPORE_CLOUD:
+        case MonsterStatus::THIEVERY:
+        case MonsterStatus::THORNS:
+        case MonsterStatus::TIME_WARP:
+            uniquePower0 = amount;
+            return;
+
+        case MonsterStatus::INVINCIBLE:
+        case MonsterStatus::REACTIVE:
+        case MonsterStatus::SHARP_HIDE:
+            uniquePower1 = amount;
+            return;
+    }
+}
+
+void Monster::setJustApplied(MonsterStatus s, bool value) {
+    std::uint64_t mask;
+    if (s == MonsterStatus::VULNERABLE) {
+        mask = 0x1ULL << 63;
+    } else if (s == MonsterStatus::WEAK) {
+        mask = 0x1ULL << 62;
+    } else if (s == MonsterStatus::RITUAL) {
+        mask = 0x1ULL << 61;
+    }
+
+    if (value) {
+        statusBits |= mask;
+    } else {
+        statusBits &= ~mask;
+    }
+}
+
+bool Monster::wasJustApplied(MonsterStatus s) const {
+    std::uint64_t mask;
+    if (s == MonsterStatus::VULNERABLE) {
+        mask = 0x1ULL << 63;
+    } else if (s == MonsterStatus::WEAK) {
+        mask = 0x1ULL << 62;
+    } else if (s == MonsterStatus::RITUAL) {
+        mask = 0x1ULL << 61;
+    }
+    return statusBits & mask;
+}
+
 bool Monster::isAlive() const {
     return curHp > 0;
 }

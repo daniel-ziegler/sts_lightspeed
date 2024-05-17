@@ -179,6 +179,7 @@ namespace sts {
 
         template <MonsterStatus s>
         void debuffEnemy(int idx, int amount, bool isSourceMonster=true);
+        void debuffEnemy(MonsterStatus s, int idx, int amount, bool isSourceMonster=true);
 
         [[nodiscard]] int calculateCardDamage(const CardInstance &card, int targetIdx, int baseDamage) const;
         [[nodiscard]] int calculateCardBlock(int baseBlock) const;

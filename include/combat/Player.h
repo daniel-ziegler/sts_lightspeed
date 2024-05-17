@@ -91,7 +91,9 @@ namespace sts {
         int8_t bomb3 = 0;
 
         template <RelicId r> void setHasRelic(bool value);
+        void setHasStatus(PlayerStatus s, bool value);
         template <PlayerStatus> void setHasStatus(bool value);
+        void setStatusValueNoChecks(PlayerStatus s, int value);
         template <PlayerStatus> void setStatusValueNoChecks(int value);
 
         template <PlayerStatus> void removeStatus();
@@ -104,6 +106,7 @@ namespace sts {
 
         // for statuses classified as debuff only
         template <PlayerStatus> [[nodiscard]] bool wasJustApplied() const;
+        void setJustApplied(PlayerStatus s, bool value);
         template<PlayerStatus> void setJustApplied(bool value);
 
 
@@ -113,7 +116,9 @@ namespace sts {
         template <PlayerStatus> [[nodiscard]] int getStatus() const;
 
         template <PlayerStatus> void buff(int amount=1);
+        void buff(PlayerStatus s, int amount=1);
         template <PlayerStatus> void debuff(int amount, bool isSourceMonster=true);
+        void debuff(PlayerStatus s, int amount, bool isSourceMonster=true);
 
         template <Stance> void changeStance();
 
@@ -157,11 +162,7 @@ namespace sts {
 // intangible
     template <PlayerStatus s>
     void Player::setJustApplied(bool value) {
-        if (value) {
-            justAppliedBits |= (1ULL << static_cast<int>(s));
-        } else {
-            justAppliedBits &= ~(1ULL << static_cast<int>(s));
-        }
+        setJustApplied(s, value);
     }
 
     template <PlayerStatus s>
@@ -231,33 +232,7 @@ namespace sts {
 
     template <PlayerStatus s>
     void Player::setHasStatus(bool value) {
-//        static_assert(s != PlayerStatus::THE_BOMB);
-
-        switch (s) {
-            case PS::ARTIFACT:
-            case PS::DEXTERITY:
-            case PS::STRENGTH:
-            case PS::FOCUS:
-                return;
-            default:
-                break;
-        }
-
-        //static_assert(((int)s) < 64); // did we add too many status effects
-        int idx = static_cast<int>(s);
-        if (value) {
-            if (idx < 64) {
-                statusBits0 |= 1ULL << idx;
-            } else {
-                statusBits1 |= 1ULL << (idx-64);
-            }
-        } else {
-            if (idx < 64) {
-                statusBits0 &= ~(1ULL << idx);
-            } else {
-                statusBits1 &= ~(1ULL << (idx-64));
-            }
-        }
+        setHasStatus(s, value);
     }
 
     template <PlayerStatus s>
@@ -300,6 +275,10 @@ namespace sts {
 
     template <PlayerStatus s>
     void Player::buff(int amount) {
+        buff(s, amount);
+    }
+
+    inline void Player::buff(PlayerStatus s, int amount) {
         // corruption effects handled elsewhere
 
         if (amount == 0) {
@@ -338,28 +317,32 @@ namespace sts {
             s == PS::PEN_NIB ||
             s == PS::SURROUNDED
             ) {
-            setHasStatus<s>(true);
+            setHasStatus(s, true);
             return;
         }
 
         if (s == PS::DOUBLE_DAMAGE || s == PS::INTANGIBLE) { // todo this is definitely wrong
-            setJustApplied<s>(true);
+            setJustApplied(s, true);
         }
 
         if (s == PS::COMBUST) {
             ++combustHpLoss;
         }
 
-        if (hasStatus<s>()) {
+        if (hasStatusRuntime(s)) {
             statusMap[s] += amount;
         } else {
-            setHasStatus<s>(true);
+            setHasStatus(s, true);
             statusMap[s] = amount;
         }
     }
 
     template <const PlayerStatus s>
     void Player::debuff(int amount, bool isSourceMonster) {
+        debuff(s, amount, isSourceMonster);
+    }
+
+    inline void Player::debuff(PlayerStatus s, int amount, bool isSourceMonster) {
         if (amount == 0) {
             return;
         }
@@ -378,8 +361,8 @@ namespace sts {
         }
 
         if (s == PS::WEAK || s == PS::FRAIL || s == PS::VULNERABLE || s == PS::DRAW_REDUCTION) {
-            if (isSourceMonster && !hasStatus<s>()) {
-                setJustApplied<s>(true);
+            if (isSourceMonster && !hasStatusRuntime(s)) {
+                setJustApplied(s, true);
             }
         }
 
@@ -404,41 +387,22 @@ namespace sts {
         }
 
         if (s == PS::CONFUSED || s == PS::HEX) {
-            setHasStatus<s>(true);
+            setHasStatus(s, true);
             return;
         }
 
-        if (hasStatus<s>()) {
+        if (hasStatusRuntime(s)) {
             statusMap[s] += amount;
         } else {
             statusMap[s] = amount;
         }
 
-        setHasStatus<s>(true);
+        setHasStatus(s, true);
     }
 
     template <PlayerStatus s>
     void Player::setStatusValueNoChecks(int value) {
-        switch (s) {
-            case PS::ARTIFACT:
-                artifact = value;
-                break;
-
-            case PS::DEXTERITY:
-                dexterity = value;
-                break;
-
-            case PS::FOCUS:
-                focus = value;
-                break;
-
-            case PS::STRENGTH:
-                strength = value;
-                break;
-
-            default:
-                statusMap[s] = value;
-        }
+        setStatusValueNoChecks(s, value);
     }
 
     template <RelicId r>
