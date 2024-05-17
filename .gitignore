@@ -1,3 +1,10 @@
 /cmake-build-*/
 /files/
 /.idea/
+/CMakeFiles/
+/CMakeCache.txt
+/Makefile
+.gdb_history
+.vscode
+/playground
+/cmake_install.cmake
