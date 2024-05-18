@@ -245,14 +245,14 @@ void _MakeTempCardInDrawPile::operator()(BattleContext &bc) const {
     for (int i = 0; i < amount; ++i) {
         if (shuffleInto) {
             const int idx = bc.cards.drawPile.empty() ? 0 : bc.cardRandomRng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-            bc.cards.createTempCardInDrawPile(idx, *c);
+            bc.cards.createTempCardInDrawPile(idx, c);
         }
         // todo else
     }
 }
 
 void _MakeTempCardInDiscard::operator()(BattleContext &bc) const {
-    CardInstance c_copy(*c);
+    CardInstance c_copy(c);
     for (int i = 0; i < amount; ++i) {
         bc.cards.createTempCardInDiscard(c_copy);
     }
@@ -1146,7 +1146,7 @@ void _AttackAllMonsterRecursive::operator()(BattleContext &bc) const {
     }
 }
 
-bool clearOnCombatVictory(const Action &action) {
+bool sts::clearOnCombatVictory(const Action &action) {
     return std::holds_alternative<_AttackPlayer>(action) ||
         std::holds_alternative<_DamagePlayer>(action) ||
         std::holds_alternative<_PlayerLoseHp>(action) ||

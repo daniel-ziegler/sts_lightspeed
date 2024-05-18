@@ -346,9 +346,6 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
     const int eliteDiffIdx = getTriIdx(bc.ascension, 3, 18);
     const int bossDiffIdx = getTriIdx(bc.ascension, 4, 19);
 
-    const CardInstance slimed_card {CardId::SLIMED};
-    const CardInstance burn_card {CardId::BURN};
-
     switch (moveHistory[0]) {
 
         // ************ ACID_SLIME_L ************
@@ -1090,7 +1087,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
         // ************ SLIME BOSS ************
 
         case MMID::SLIME_BOSS_GOOP_SPRAY:
-            _MakeTempCardInDiscard { &slimed_card, asc19 ? 5 : 3 }(bc);
+            _MakeTempCardInDiscard { {CardId::SLIMED}, asc19 ? 5 : 3 }(bc);
             setMove(MMID::SLIME_BOSS_PREPARING);
             break;
 
@@ -1572,7 +1569,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
             break;
 
         case MMID::NEMESIS_DEBUFF:
-            _MakeTempCardInDiscard { &burn_card, asc3 ? 5 : 3 }(bc);
+            _MakeTempCardInDiscard { {CardId::BURN}, asc3 ? 5 : 3 }(bc);
             rollMove(bc);
             if (!hasStatus<MS::INTANGIBLE>()) {
                 buff<MS::INTANGIBLE>(2);
