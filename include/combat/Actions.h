@@ -18,6 +18,7 @@
 #include "combat/InputState.h"
 #include "combat/CardSelectInfo.h"
 #include "combat/CardInstance.h"
+#include "combat/CardQueue.h"
 
 namespace sts {
 
@@ -143,7 +144,7 @@ namespace sts {
 
     // ************
 
-    struct _TimeEaterPlayCardQueueItem { const CardQueueItem *item; void operator()(BattleContext& bc) const; };
+    struct _TimeEaterPlayCardQueueItem { CardQueueItem item; void operator()(BattleContext& bc) const; };
     struct _UpgradeAllCardsInHand { void operator()(BattleContext& bc) const; };
     struct _OnAfterCardUsed { void operator()(BattleContext& bc) const; }; // called UseCardAction in game
     struct _EssenceOfDarkness { int darkOrbsPerSlot; void operator()(BattleContext& bc) const; }; // handle sacred bark
@@ -557,7 +558,7 @@ namespace sts {
         // ************
 
         static Action TimeEaterPlayCardQueueItem(const CardQueueItem &item) {
-            return Action(_TimeEaterPlayCardQueueItem {&item});
+            return Action(_TimeEaterPlayCardQueueItem {item});
         }
         static Action UpgradeAllCardsInHand() {
             return Action(_UpgradeAllCardsInHand {});

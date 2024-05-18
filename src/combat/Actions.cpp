@@ -816,7 +816,7 @@ void _WarcryAction::operator()(BattleContext &bc) const {
 }
 
 void _TimeEaterPlayCardQueueItem::operator()(BattleContext &bc) const {
-    auto item = *this->item;
+    auto item = this->item;
     item.exhaustOnUse |= bc.curCardQueueItem.card.doesExhaust();
     item.triggerOnUse = false;
     bc.curCardQueueItem = item;
