@@ -48,6 +48,8 @@ namespace sts {
         bool isEmpty();
         Action popFront();
         [[nodiscard]] int getCapacity() const;
+        Action& operator[](int index);
+        const Action& operator[](int index) const;
     };
 
     template<int capacity>
@@ -93,7 +95,7 @@ namespace sts {
     template<int capacity>
     Action ActionQueue<capacity>::popFront() {
 #ifdef sts_asserts
-        assert(size > 0 );
+        assert(size > 0);
 #endif
         Action a = arr[front];
         ++front;
@@ -107,6 +109,34 @@ namespace sts {
     template<int capacity>
     int ActionQueue<capacity>::getCapacity() const {
         return capacity;
+    }
+
+    template<int capacity>
+    Action& ActionQueue<capacity>::operator[](int index) {
+#ifdef sts_asserts
+        assert(0 <= index && index < size);
+#endif
+        return arr[(front + index) % capacity];
+    }
+
+    template<int capacity>
+    const Action& ActionQueue<capacity>::operator[](int index) const {
+#ifdef sts_asserts
+        assert(0 <= index && index < size);
+#endif
+        return arr[(front + index) % capacity];
+    }
+    
+    template<int capacity> std::ostream& operator<<(std::ostream &os, const ActionQueue<capacity> &queue) {
+        os << "[";
+        for (int i = 0; i < queue.size; i++) {
+            if (i > 0) {
+                os << ", ";
+            }
+            os << queue[i];
+        }
+        os << "]";
+        return os;
     }
 
 }

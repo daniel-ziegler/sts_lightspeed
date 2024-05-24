@@ -8,6 +8,7 @@
 #include <utility>
 #include <functional>
 #include <variant>
+#include <iostream>
 #include <cstdint>
 
 #include "constants/PlayerStatusEffects.h"
@@ -634,6 +635,8 @@ namespace sts {
     };
 
     bool clearOnCombatVictory(const Action &action);
+    
+    std::ostream& operator<<(std::ostream& os, const Action &action);
 }
 
 #endif //STS_LIGHTSPEED_ACTIONS_H

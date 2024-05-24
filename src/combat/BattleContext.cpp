@@ -2557,6 +2557,7 @@ void BattleContext::exhaustSpecificCardInHand(int idx, std::int16_t uniqueId) {
 
     if (foundIdx == -1) {
         std::cerr << "exhaustSpecificCardInHand: card not found in hand\n";
+        assert(false);
         return;
     }
 
