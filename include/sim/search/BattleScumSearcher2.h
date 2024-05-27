@@ -13,6 +13,8 @@
 #include <iostream>
 #include <limits>
 
+#include "sim/search/SimpleAgent.h"
+
 namespace sts::search {
 
     typedef std::function<double (const BattleContext&)> EvalFnc;
@@ -46,6 +48,8 @@ namespace sts::search {
 
         std::vector<Node*> searchStack;
         std::vector<Action> actionStack;
+        
+        SimpleAgent rolloutAgent;
 
         explicit BattleScumSearcher2(const BattleContext &bc, EvalFnc evalFnc=&evaluateEndState);
 
@@ -61,7 +65,7 @@ namespace sts::search {
         int selectBestEdgeToSearch(const Node &cur);
         int selectFirstActionForLeafNode(const Node &leafNode);
 
-        void playoutRandom(BattleContext &state, std::vector<Action> &actionStack);
+        void rolloutToEnd(BattleContext &state, std::vector<Action> &actionStack);
 
         void enumerateActionsForNode(Node &node, const BattleContext &bc);
         void enumerateCardActions(Node &node, const BattleContext &bc);

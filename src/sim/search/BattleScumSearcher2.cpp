@@ -68,7 +68,7 @@ void search::BattleScumSearcher2::step() {
             actionStack.push_back(edgeTaken.action);
             searchStack.push_back(&edgeTaken.node);
 
-            playoutRandom(curState, actionStack);
+            rolloutToEnd(curState, actionStack);
             updateFromPlayout(searchStack, actionStack, curState);
             return;
 
@@ -149,26 +149,29 @@ int search::BattleScumSearcher2::selectFirstActionForLeafNode(const search::Batt
     return dist(randGen);
 }
 
-void search::BattleScumSearcher2::playoutRandom(BattleContext &state, std::vector<Action> &actionStack) {
-    Node tempNode; // temp
-    while (!isTerminalState(state)) {
+void search::BattleScumSearcher2::rolloutToEnd(BattleContext &bc, std::vector<Action> &actionStack) {
+    while (!isTerminalState(bc)) {
         ++simulationIdx;
-        enumerateActionsForNode(tempNode, state);
-        if (tempNode.edges.empty()) {
-            std::cerr << state.seed << " " << simulationIdx << std::endl;
-            std::cerr << state.monsters.arr[0].getName() << " " << state.floorNum << " " << monsterEncounterStrings[static_cast<int>(state.encounter)] << std::endl;
-            assert(false);
+        Action action;
+        switch (bc.inputState) {
+            case InputState::PLAYER_NORMAL:
+                action = rolloutAgent.chooseBattleCardPlay(bc);
+                break;
+
+            case InputState::CARD_SELECT:
+                action = rolloutAgent.chooseBattleCardSelect(bc);
+                break;
+
+            default:
+#ifdef sts_asserts
+                std::cerr << "enumerateActionsForNode: invalid input state: " << static_cast<int>(bc.inputState) << std::endl;
+                assert(false);
+#endif
+                break;
         }
 
-        auto dist = std::uniform_int_distribution<int>(0, static_cast<int>(tempNode.edges.size())-1);
-        const int selectedIdx = dist(randGen);
-
-        const auto action = tempNode.edges[selectedIdx].action;
-//        action.printDesc(std::cout, state) << std::endl;
         actionStack.push_back(action);
-        action.execute(state);
-
-        tempNode.edges.clear();
+        action.execute(bc);
     }
 }
 
