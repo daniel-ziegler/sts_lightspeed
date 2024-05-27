@@ -312,12 +312,12 @@ void search::SimpleAgent::playoutBattle(BattleContext &bc) {
     bool usedPotions = !isBossEncounter(bc.encounter);
     while (bc.outcome == Outcome::UNDECIDED) {
         if (bc.inputState == InputState::CARD_SELECT) {
-            stepBattleCardSelect(bc);
-
+            Action action = chooseBattleCardSelect(bc);
+            takeAction(bc, action);
         } else if (bc.inputState == InputState::PLAYER_NORMAL) {
             if (usedPotions) {
-                stepBattleCardPlay(bc);
-
+                Action action = chooseBattleCardPlay(bc);
+                takeAction(bc, action);
             } else {
                 usedPotions = playPotion(bc);
             }
@@ -327,10 +327,9 @@ void search::SimpleAgent::playoutBattle(BattleContext &bc) {
     }
 }
 
-void search::SimpleAgent::stepBattleCardPlay(BattleContext &bc) {
+sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc) {
     if (!bc.isCardPlayAllowed() || bc.player.cardsPlayedThisTurn > 1000) {
-        takeAction(bc, Action(ActionType::END_TURN));
-        return;
+        return Action(ActionType::END_TURN);
     }
 
     fixed_list<int,10> playableCardsIdxs;
@@ -342,8 +341,7 @@ void search::SimpleAgent::stepBattleCardPlay(BattleContext &bc) {
     }
 
     if (playableCardsIdxs.empty()) {
-        takeAction(bc, Action(ActionType::END_TURN));
-        return;
+        return Action(ActionType::END_TURN);
     }
 
     fixed_list<int,10> zeroCost;
@@ -406,14 +404,12 @@ void search::SimpleAgent::stepBattleCardPlay(BattleContext &bc) {
         bestCardIdx = getBestCardToPlay(bc, zeroCostAttacks);
 
     } else {
-        takeAction(bc, Action(ActionType::END_TURN));
-        return;
+        return Action(ActionType::END_TURN);
     }
 
     const auto &c = bc.cards.hand[bestCardIdx];
     if (!c.requiresTarget()) {
-        takeAction(bc, Action(ActionType::CARD, bestCardIdx));
-        return;
+        return Action(ActionType::CARD, bestCardIdx);
     }
 
     int targetIdx;
@@ -422,7 +418,7 @@ void search::SimpleAgent::stepBattleCardPlay(BattleContext &bc) {
     } else {
         targetIdx = getHighHpMonster(bc);
     }
-    takeAction(bc, Action(ActionType::CARD, bestCardIdx, targetIdx));
+    return Action(ActionType::CARD, bestCardIdx, targetIdx);
 }
 
 template <typename ForwardIt>
@@ -439,7 +435,7 @@ void setupCardOptionsHelper(std::vector<std::pair<search::Action,CardInstance>> 
 
 
 
-void search::SimpleAgent::stepBattleCardSelect(BattleContext &bc) {
+search::Action search::SimpleAgent::chooseBattleCardSelect(BattleContext &bc) {
 
     std::vector<std::pair<search::Action,CardInstance>> actions;
     switch (bc.cardSelectInfo.cardSelectTask) {
@@ -501,9 +497,9 @@ void search::SimpleAgent::stepBattleCardSelect(BattleContext &bc) {
             break;
 
         case CardSelectTask::EXHAUST_MANY:
-        case CardSelectTask::GAMBLE: // just select none
-            takeAction(bc, search::Action(search::ActionType::MULTI_CARD_SELECT, 0));
-            return;
+        case CardSelectTask::GAMBLE:
+            // just select none
+            return search::Action(search::ActionType::MULTI_CARD_SELECT, 0);
 
         default:
 #ifdef sts_asserts
@@ -535,13 +531,11 @@ void search::SimpleAgent::stepBattleCardSelect(BattleContext &bc) {
         case CardSelectTask::SETUP:
         case CardSelectTask::SEEK:
         case CardSelectTask::WARCRY:
-            takeAction(bc, actions.front().first);
-            break;
+            return actions.front().first;
 
         case CardSelectTask::EXHAUST_ONE:
         case CardSelectTask::RECYCLE:
-            takeAction(bc, actions.back().first);
-            break;
+            return actions.back().first;
 
         case CardSelectTask::EXHAUST_MANY:
         case CardSelectTask::INVALID:

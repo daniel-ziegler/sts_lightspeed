@@ -29,8 +29,8 @@ namespace sts::search {
         void takeAction(BattleContext &bc, Action a);
         void playoutBattle(BattleContext &bc);
 
-        void stepBattleCardPlay(BattleContext &bc);
-        void stepBattleCardSelect(BattleContext &bc);
+        Action chooseBattleCardPlay(BattleContext &bc);
+        Action chooseBattleCardSelect(BattleContext &bc);
 
         void stepOutOfCombat(GameContext &gc);
         void stepEventScreen(sts::GameContext &gc);

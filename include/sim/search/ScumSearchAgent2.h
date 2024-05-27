@@ -33,8 +33,7 @@ namespace sts::search {
         int stepsWithSolution = 15;
 
         std::default_random_engine rng;
-
-
+        
         // public interface
         void playout(GameContext &gc);
 
