@@ -93,6 +93,8 @@ namespace sts {
 
         std::bitset<32> miscBits; // 0 stolen gold check,
 
+        const GameContext *gameContext = nullptr;
+
         BattleContext() = default;
         BattleContext(const BattleContext &rhs) = default;
 

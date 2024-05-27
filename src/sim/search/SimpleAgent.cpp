@@ -155,7 +155,7 @@ int search::SimpleAgent::getIncomingDamage(const BattleContext &bc) const {
 
         DamageInfo dInfo;
         if (bc.player.hasRelic<R::RUNIC_DOME>()) {
-            dInfo = {5*curGameContext->act, 1};
+            dInfo = {5*bc.gameContext->act, 1};
 
         } else {
             dInfo = m.getMoveBaseDamage(bc);
@@ -264,8 +264,6 @@ void search::SimpleAgent::takeAction(BattleContext &bc, search::Action a) {
 }
 
 void search::SimpleAgent::playout(GameContext &gc) {
-    curGameContext = &gc;
-
     BattleContext bc;
     const auto seedStr = std::string(SeedHelper::getString(gc.seed));
 
@@ -372,7 +370,7 @@ void search::SimpleAgent::stepBattleCardPlay(BattleContext &bc) {
     }
 
     const int incomingDamage = getIncomingDamage(bc);
-    if (bc.player.block > (incomingDamage - curGameContext->act - 4)) {
+    if (bc.player.block > (incomingDamage - bc.gameContext->act - 4)) {
         fixed_list<int,10> offensiveCards;
         for (auto handIdx : nonZeroCostCards) {
             const auto &c = bc.cards.hand[handIdx];

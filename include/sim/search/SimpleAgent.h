@@ -14,7 +14,6 @@ namespace sts::search {
     struct SimpleAgent {
 
         std::vector<int> actionHistory;
-        GameContext *curGameContext; // unsafe only use in private methods during playout
 
         fixed_list<int,16> mapPath;
 
