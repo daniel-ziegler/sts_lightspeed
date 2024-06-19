@@ -45,7 +45,7 @@ void search::BattleScumSearcher2::step() {
     doPlayout(root, actionStack);
 }
 
-#define SEARCH_DEBUG 0
+#define SEARCH_DEBUG 1
 
 void indent(int n) {
     for (int i = 0; i < n; ++i) {
@@ -86,7 +86,11 @@ void search::BattleScumSearcher2::doPlayout(Node& curNode, std::vector<Action> &
         BattleContext endState = edgeTaken.node->state;
         rolloutToEnd(endState, actionStack);
         edgeTaken.node->heuristic = updateFromPlayout(actionStack, endState);
+        edgeTaken.node->evaluationSum = edgeTaken.node->heuristic;
         edgeTaken.visitCount++;
+        
+        // TODO(dmz) this is weird
+        //curNode.heuristic = edgeTaken.node->heuristic;
     } else {
         const auto selectIdx = selectBestEdgeToSearch(curNode);
         auto &edgeTaken = curNode.edges[selectIdx];
@@ -108,7 +112,7 @@ void search::BattleScumSearcher2::doPlayout(Node& curNode, std::vector<Action> &
     
     actionStack.resize(oldStackSize);
 
-    curNode.simulationCount = 1;
+    curNode.simulationCount = 0; // TODO(dmz)
     for (const auto &edge : curNode.edges) {
         curNode.simulationCount += edge.visitCount;
     }
@@ -150,6 +154,11 @@ double search::BattleScumSearcher2::evaluateEdge(const search::BattleScumSearche
     double qualityValue = 0;
     if (!bestActionSequence.empty()) {
         double avgEvaluation = edge.node == nullptr ? 0.0 : edge.node->evaluationSum / (edge.node->simulationCount+1);
+#if SEARCH_DEBUG
+        if (edge.node != nullptr) {
+            edge.action.printDesc(std::cout, parent.state) << "avgEval: " << avgEvaluation << std::endl;       
+        }
+#endif
         double evalRange = bestActionValue - minActionValue;
         qualityValue = avgEvaluation / evalRange;
     }
