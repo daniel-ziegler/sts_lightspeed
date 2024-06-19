@@ -66,7 +66,7 @@ void search::BattleScumSearcher2::step() {
             edgeTaken.action.execute(curState);
 
             actionStack.push_back(edgeTaken.action);
-            searchStack.push_back(&edgeTaken.node);
+            searchStack.push_back(edgeTaken.node.get());
 
             rolloutToEnd(curState, actionStack);
             updateFromPlayout(searchStack, actionStack, curState);
@@ -80,7 +80,7 @@ void search::BattleScumSearcher2::step() {
             edgeTaken.action.execute(curState);
 
             actionStack.push_back(edgeTaken.action);
-            searchStack.push_back(&edgeTaken.node);
+            searchStack.push_back(edgeTaken.node.get());
         }
     }
 }
@@ -115,13 +115,13 @@ double search::BattleScumSearcher2::evaluateEdge(const search::BattleScumSearche
 
     double qualityValue = 0;
     if (!bestActionSequence.empty()) {
-        auto avgEvaluation = edge.node.evaluationSum / (edge.node.simulationCount+1);
+        auto avgEvaluation = edge.node->evaluationSum / (edge.node->simulationCount+1);
         double evalRange = bestActionValue - minActionValue;
         qualityValue = avgEvaluation / evalRange;
     }
 
     double explorationValue = explorationParameter *
-            std::sqrt(std::log(parent.simulationCount+1) / (edge.node.simulationCount+1));
+            std::sqrt(std::log(parent.simulationCount+1) / (edge.node->simulationCount+1));
 
     return qualityValue + explorationValue;
 }
@@ -464,7 +464,7 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleScumSearcher2 &s, int
         BattleContext bc(*curStack.back().bc);
         action.execute(bc);
 
-        curStack.push_back( {&curStack.back().node->edges[nextIdx++].node, new BattleContext(bc), 0} );
+        curStack.push_back( {curStack.back().node->edges[nextIdx++].node.get(), new BattleContext(bc), 0} );
     }
 
     return layerEdges;
@@ -486,7 +486,7 @@ void search::BattleScumSearcher2::printSearchTree(std::ostream &os, int levels) 
 
     for (int depth = 0; depth < levels; ++depth) {
         for (const auto &x : layerEdges[depth]) {
-            os << "(" << x.first.node.simulationCount << ")";
+            os << "(" << x.first.node->simulationCount << ")";
             x.first.action.printDesc(os, *x.second) << "\t";
         }
         std::cout << '\n';

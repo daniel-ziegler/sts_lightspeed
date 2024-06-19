@@ -30,7 +30,9 @@ namespace sts::search {
 
         struct Edge {
             Action action;
-            Node node;
+            std::shared_ptr<Node> node;
+
+            Edge(Action action) : action(action), node(new Node{}) {}
         };
 
         std::unique_ptr<const BattleContext> rootState;
