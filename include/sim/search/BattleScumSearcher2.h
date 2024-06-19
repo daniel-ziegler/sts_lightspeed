@@ -24,6 +24,7 @@ namespace sts::search {
         class Edge;
         struct Node {
             std::int64_t simulationCount = 0;
+            double heuristic = 0;
             double evaluationSum = 0;
             std::vector<Edge> edges;
             BattleContext state;
@@ -31,6 +32,7 @@ namespace sts::search {
 
         struct Edge {
             Action action;
+            std::int32_t visitCount = 0;
             std::shared_ptr<Node> node;
 
             Edge(Action action) : action(action) {}
@@ -60,7 +62,8 @@ namespace sts::search {
         void step();
 
         // private helpers
-        void updateFromPlayout(const std::vector<Node*> &stack, const std::vector<Action> &actionStack, const BattleContext &endState);
+        void doPlayout(Node& curNode, std::vector<Action> &actionStack);
+        double updateFromPlayout(const std::vector<Action> &actionStack, const BattleContext &endState);
         [[nodiscard]] bool isTerminalState(const BattleContext &bc) const;
 
         double evaluateEdge(const Node &parent, int edgeIdx);

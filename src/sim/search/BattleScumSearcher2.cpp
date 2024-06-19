@@ -41,60 +41,89 @@ void search::BattleScumSearcher2::search(int64_t simulations) {
 }
 
 void search::BattleScumSearcher2::step() {
-    searchStack = {&root};
     actionStack.clear();
-    BattleContext curState;
-    curState = root.state;
+    doPlayout(root, actionStack);
+}
 
-    while (true) {
-        auto &curNode = *searchStack.back();
+#define SEARCH_DEBUG 0
 
-        if (isTerminalState(curState)) {
-            updateFromPlayout(searchStack, actionStack, curState);
-            return;
-        }
-
-        const bool isLeaf = curNode.edges.empty();
-        if (isLeaf) {
-
-            ++simulationIdx;
-            enumerateActionsForNode(curNode, curState);
-            const auto selectIdx = selectFirstActionForLeafNode(curNode);
-            auto &edgeTaken = curNode.edges[selectIdx];
-
-//            edgeTaken.action.printDesc(std::cout, curState) << std::endl;
-            edgeTaken.action.execute(curState);
-
-            if (edgeTaken.node == nullptr) {
-                edgeTaken.node = std::make_shared<Node>();
-                edgeTaken.node->state = curState;
-            }
-            actionStack.push_back(edgeTaken.action);
-            searchStack.push_back(edgeTaken.node.get());
-
-            rolloutToEnd(curState, actionStack);
-            updateFromPlayout(searchStack, actionStack, curState);
-            return;
-
-        } else {
-            const auto selectIdx = selectBestEdgeToSearch(curNode);
-            auto &edgeTaken = curNode.edges[selectIdx];
-
-//            edgeTaken.action.printDesc(std::cout, curState) << std::endl;
-            edgeTaken.action.execute(curState);
-
-            if (edgeTaken.node == nullptr) {
-                edgeTaken.node = std::make_shared<Node>();
-                edgeTaken.node->state = curState;
-            }
-            actionStack.push_back(edgeTaken.action);
-            searchStack.push_back(edgeTaken.node.get());
-        }
+void indent(int n) {
+    for (int i = 0; i < n; ++i) {
+        std::cout << "  ";
     }
 }
 
-void search::BattleScumSearcher2::updateFromPlayout(const std::vector<Node *> &stack, const std::vector<Action> &actionStack, const BattleContext &endState) {
-    const auto evaluation = evaluateEndState(endState);
+void search::BattleScumSearcher2::doPlayout(Node& curNode, std::vector<Action> &actionStack) {
+    const BattleContext &curState = curNode.state;
+    if (isTerminalState(curState)) {
+        curNode.heuristic = updateFromPlayout(actionStack, curState);
+        return;
+    }
+    
+    int oldStackSize = actionStack.size();
+
+    const bool isLeaf = curNode.edges.empty();
+    if (isLeaf) {
+
+        ++simulationIdx;
+        enumerateActionsForNode(curNode, curState);
+        // TODO(dmz) get rid of single step here?
+        const auto selectIdx = selectFirstActionForLeafNode(curNode);
+        auto &edgeTaken = curNode.edges[selectIdx];
+
+#if SEARCH_DEBUG
+        indent(actionStack.size());
+        edgeTaken.action.printDesc(std::cout, curState) << std::endl;
+#endif
+
+        if (edgeTaken.node == nullptr) {
+            edgeTaken.node = std::make_shared<Node>();
+            edgeTaken.node->state = curState;
+            edgeTaken.action.execute(edgeTaken.node->state);
+        }
+        actionStack.push_back(edgeTaken.action);
+
+        BattleContext endState = edgeTaken.node->state;
+        rolloutToEnd(endState, actionStack);
+        edgeTaken.node->heuristic = updateFromPlayout(actionStack, endState);
+        edgeTaken.visitCount++;
+    } else {
+        const auto selectIdx = selectBestEdgeToSearch(curNode);
+        auto &edgeTaken = curNode.edges[selectIdx];
+
+#if SEARCH_DEBUG
+        indent(actionStack.size());
+        edgeTaken.action.printDesc(std::cout, curState) << std::endl;
+#endif
+        if (edgeTaken.node == nullptr) {
+            edgeTaken.node = std::make_shared<Node>();
+            edgeTaken.node->state = curState;
+            edgeTaken.action.execute(edgeTaken.node->state);
+        }
+        actionStack.push_back(edgeTaken.action);
+        
+        doPlayout(*edgeTaken.node, actionStack);
+        edgeTaken.visitCount++;
+    }
+    
+    actionStack.resize(oldStackSize);
+
+    curNode.simulationCount = 1;
+    for (const auto &edge : curNode.edges) {
+        curNode.simulationCount += edge.visitCount;
+    }
+    curNode.evaluationSum = curNode.heuristic;
+    for (const auto &edge : curNode.edges) {
+        curNode.evaluationSum += edge.node == nullptr ? 0.0 : edge.node->evaluationSum;
+    }
+#if SEARCH_DEBUG
+    indent(actionStack.size());
+    std::cout << "count: " << curNode.simulationCount << " eval: " << curNode.evaluationSum / curNode.simulationCount << std::endl;
+#endif
+}
+
+double search::BattleScumSearcher2::updateFromPlayout(const std::vector<Action> &actionStack, const BattleContext &endState) {
+    const double evaluation = evaluateEndState(endState);
 
     if (evaluation > bestActionValue) {
         bestActionSequence = actionStack;
@@ -105,12 +134,9 @@ void search::BattleScumSearcher2::updateFromPlayout(const std::vector<Node *> &s
     if (evaluation < minActionValue) {
         minActionValue = evaluation;
     }
-
-    for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
-        auto &node = *(*it);
-        ++node.simulationCount;
-        node.evaluationSum += evaluation;
-    }
+    
+    // TODO(dmz) refactor
+    return evaluation;
 }
 
 bool search::BattleScumSearcher2::isTerminalState(const BattleContext &bc) const { // maybe can optimize by making this evaluate directly if score cannot possibly be higher than best
