@@ -51,6 +51,7 @@ void search::ScumSearchAgent2::playout(GameContext &gc) {
 }
 
 static void printHelper(const BattleContext &bc, const search::Action &a) {
+    std::cout << bc << std::endl;
     a.printDesc(std::cout, bc) << " ";
     std::cout
             << " turn: " << bc.turn
@@ -58,7 +59,6 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
             << " cardsPlayedThisTurn: " << bc.player.cardsPlayedThisTurn
             << " state: " << (bc.inputState == InputState::PLAYER_NORMAL ? "normal" : " probably card select")
             << std::endl;
-    std::cout << bc << std::endl;
 }
 
 void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
