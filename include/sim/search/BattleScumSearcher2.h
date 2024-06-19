@@ -26,16 +26,16 @@ namespace sts::search {
             std::int64_t simulationCount = 0;
             double evaluationSum = 0;
             std::vector<Edge> edges;
+            BattleContext state;
         };
 
         struct Edge {
             Action action;
             std::shared_ptr<Node> node;
 
-            Edge(Action action) : action(action), node(new Node{}) {}
+            Edge(Action action) : action(action) {}
         };
 
-        std::unique_ptr<const BattleContext> rootState;
         Node root;
 
         EvalFnc evalFnc;

@@ -20,15 +20,15 @@ namespace sts::search {
 
 
 search::BattleScumSearcher2::BattleScumSearcher2(const BattleContext &bc, search::EvalFnc _evalFnc)
-    : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum) {
+    : root{.state=bc}, evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum) {
 }
 
 void search::BattleScumSearcher2::search(int64_t simulations) {
     g_debug_scum_search = this;
 
-    if (isTerminalState(*rootState)) {
-        auto evaluation = evaluateEndState(*rootState);
-        outcomePlayerHp = rootState->player.curHp;
+    if (isTerminalState(root.state)) {
+        auto evaluation = evaluateEndState(root.state);
+        outcomePlayerHp = root.state.player.curHp;
         bestActionSequence = {};
 
         root.evaluationSum = evaluation;
@@ -44,7 +44,7 @@ void search::BattleScumSearcher2::step() {
     searchStack = {&root};
     actionStack.clear();
     BattleContext curState;
-    curState = *rootState;
+    curState = root.state;
 
     while (true) {
         auto &curNode = *searchStack.back();
@@ -65,6 +65,10 @@ void search::BattleScumSearcher2::step() {
 //            edgeTaken.action.printDesc(std::cout, curState) << std::endl;
             edgeTaken.action.execute(curState);
 
+            if (edgeTaken.node == nullptr) {
+                edgeTaken.node = std::make_shared<Node>();
+                edgeTaken.node->state = curState;
+            }
             actionStack.push_back(edgeTaken.action);
             searchStack.push_back(edgeTaken.node.get());
 
@@ -79,6 +83,10 @@ void search::BattleScumSearcher2::step() {
 //            edgeTaken.action.printDesc(std::cout, curState) << std::endl;
             edgeTaken.action.execute(curState);
 
+            if (edgeTaken.node == nullptr) {
+                edgeTaken.node = std::make_shared<Node>();
+                edgeTaken.node->state = curState;
+            }
             actionStack.push_back(edgeTaken.action);
             searchStack.push_back(edgeTaken.node.get());
         }
@@ -115,13 +123,13 @@ double search::BattleScumSearcher2::evaluateEdge(const search::BattleScumSearche
 
     double qualityValue = 0;
     if (!bestActionSequence.empty()) {
-        auto avgEvaluation = edge.node->evaluationSum / (edge.node->simulationCount+1);
+        double avgEvaluation = edge.node == nullptr ? 0.0 : edge.node->evaluationSum / (edge.node->simulationCount+1);
         double evalRange = bestActionValue - minActionValue;
         qualityValue = avgEvaluation / evalRange;
     }
 
     double explorationValue = explorationParameter *
-            std::sqrt(std::log(parent.simulationCount+1) / (edge.node->simulationCount+1));
+            std::sqrt(std::log(parent.simulationCount+1) / (edge.node == nullptr ? 1 : edge.node->simulationCount+1));
 
     return qualityValue + explorationValue;
 }
@@ -440,7 +448,7 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleScumSearcher2 &s, int
 
     std::vector<EdgeInfo> layerEdges;
 
-    std::vector<LayerStruct> curStack { {&s.root, new BattleContext(*s.rootState), 0} };
+    std::vector<LayerStruct> curStack { {&s.root, new BattleContext(s.root.state), 0} };
 
     while (!curStack.empty()) {
         if (curStack.size() == layerNum) {
