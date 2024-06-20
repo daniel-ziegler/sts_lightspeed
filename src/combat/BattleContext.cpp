@@ -3143,7 +3143,6 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
         miscBits == rhs.miscBits
     );
 }
-
 namespace sts {
 
 

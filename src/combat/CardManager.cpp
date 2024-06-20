@@ -2,6 +2,8 @@
 // Created by gamerpuppy on 7/24/2021.
 //
 
+#include <set>
+
 #include "combat/CardManager.h"
 
 #include <set>
@@ -584,10 +586,9 @@ bool CardManager::operator==(const CardManager &rhs) const {
            hand == rhs.hand &&  // todo unordered
            limbo == rhs.limbo &&
            stasisCards == rhs.stasisCards &&
-           // TODO make unordered
-           drawPile == rhs.drawPile &&
-           discardPile == rhs.discardPile &&
-           exhaustPile == rhs.exhaustPile &&
+           unordered(drawPile) == unordered(rhs.drawPile) &&
+           unordered(discardPile) == unordered(rhs.discardPile) &&
+           unordered(exhaustPile) == unordered(rhs.exhaustPile) &&
            handNormalityCount == rhs.handNormalityCount &&
            handPainCount == rhs.handPainCount &&
            strikeCount == rhs.strikeCount &&

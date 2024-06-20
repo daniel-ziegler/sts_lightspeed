@@ -25,15 +25,17 @@ search::BattleScumSearcher2::BattleScumSearcher2(const BattleContext &bc, search
 
 void search::BattleScumSearcher2::search(int64_t simulations) {
     g_debug_scum_search = this;
-
+    
     if (isTerminalState(root.state)) {
         auto evaluation = evaluateEndState(root.state);
         outcomePlayerHp = root.state.player.curHp;
         bestActionSequence = {};
 
-        root.evaluationSum = evaluation;
+        root.heuristic = root.evaluationSum = evaluation;
         root.simulationCount = 1;
     }
+
+    allNodes.clear();
 
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
@@ -90,6 +92,17 @@ void search::BattleScumSearcher2::doPlayout(Node& curNode, std::vector<Action> &
             edgeTaken.node = std::make_shared<Node>();
             edgeTaken.node->state = curState;
             edgeTaken.action.execute(edgeTaken.node->state);
+            bool found = false;
+            for (auto &n : allNodes) {
+                if (n->state == edgeTaken.node->state) {
+                    found = true;
+                    edgeTaken.node = n;
+                    break;
+                }
+            }
+            if (!found) {
+                allNodes.push_back(edgeTaken.node);
+            }
         }
         actionStack.push_back(edgeTaken.action);
         

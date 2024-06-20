@@ -39,6 +39,7 @@ namespace sts::search {
         };
 
         Node root;
+        std::vector<std::shared_ptr<Node>> allNodes;
 
         EvalFnc evalFnc;
         double explorationParameter = 3*sqrt(2);

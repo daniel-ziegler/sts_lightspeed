@@ -62,9 +62,6 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
 }
 
 void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
-    std::vector<search::Action> bestActions;
-    int bestOutcomePlayerHp = -1;
-
     while (bc.outcome == Outcome::UNDECIDED) {
         const std::int64_t simulationCount = isBossEncounter(bc.encounter) ?
                                               (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
@@ -72,17 +69,13 @@ void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
         search::BattleScumSearcher2 searcher(bc);
         searcher.search(simulationCount);
 
-        if (searcher.outcomePlayerHp > bestOutcomePlayerHp)
-        {
-            bestActions = std::vector(
-                    searcher.bestActionSequence.rbegin(),
-                    searcher.bestActionSequence.rend());
-            bestOutcomePlayerHp = searcher.outcomePlayerHp;
-        }
+        std::vector<search::Action> bestActions = std::vector(
+                searcher.bestActionSequence.rbegin(),
+                searcher.bestActionSequence.rend());
 
         simulationCountTotal += searcher.root.simulationCount;
 
-        if (bestOutcomePlayerHp > 0) {
+        if (searcher.outcomePlayerHp > 0) {
             stepThroughSolution(bc, bestActions);
         } else {
             stepThroughSearchTree(bc, searcher);
