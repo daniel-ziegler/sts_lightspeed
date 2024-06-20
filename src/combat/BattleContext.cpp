@@ -3116,12 +3116,6 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
         ascension == rhs.ascension &&
         loopCount == rhs.loopCount &&
         sum == rhs.sum &&
-        aiRng == rhs.aiRng &&
-        cardRandomRng == rhs.cardRandomRng &&
-        miscRng == rhs.miscRng &&
-        monsterHpRng == rhs.monsterHpRng &&
-        potionRng == rhs.potionRng &&
-        shuffleRng == rhs.shuffleRng &&
         outcome == rhs.outcome &&
         inputState == rhs.inputState &&
         cardSelectInfo == rhs.cardSelectInfo &&
@@ -3135,7 +3129,6 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
         potionCount == rhs.potionCount &&
         potionCapacity == rhs.potionCapacity &&
         potions == rhs.potions &&
-        turn == rhs.turn &&
         player == rhs.player &&
         monsters == rhs.monsters &&
         cards == rhs.cards &&
