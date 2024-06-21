@@ -41,7 +41,7 @@ namespace sts {
 #else
         std::array<Action, capacity> arr;
 #endif
-
+        
         void clear();
         void pushFront(Action a);
         void pushBack(Action a);

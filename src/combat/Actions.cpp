@@ -1149,20 +1149,20 @@ void _AttackAllMonsterRecursive::operator()(BattleContext &bc) const {
 namespace sts {
 
     bool clearOnCombatVictory(const Action &action) {
-        return !(std::holds_alternative<_AttackPlayer>(action) ||
-            std::holds_alternative<_DamagePlayer>(action) ||
-            std::holds_alternative<_PlayerLoseHp>(action) ||
-            std::holds_alternative<_HealPlayer>(action) ||
-            std::holds_alternative<_GainBlock>(action) ||
-            std::holds_alternative<_OnAfterCardUsed>(action) ||
-            std::holds_alternative<_TimeEaterPlayCardQueueItem>(action) ||
-            std::holds_alternative<_OnAfterCardUsed>(action));
+        return !(action.type == ActionType_AttackPlayer ||
+            action.type == ActionType_DamagePlayer ||
+            action.type == ActionType_PlayerLoseHp ||
+            action.type == ActionType_HealPlayer ||
+            action.type == ActionType_GainBlock ||
+            action.type == ActionType_OnAfterCardUsed ||
+            action.type == ActionType_TimeEaterPlayCardQueueItem ||
+            action.type == ActionType_OnAfterCardUsed);
     }
 
     std::ostream& operator<<(std::ostream& os, const Action &action) {
-        os << action.index();
-        if (std::holds_alternative<_ExhaustSpecificCardInHand>(action)) {
-            os << "(" << std::get<_ExhaustSpecificCardInHand>(action).uniqueId << ")";
+        os << action.type;
+        if (action.type == ActionType_ExhaustSpecificCardInHand) {
+            os << "(" << action.variant_ExhaustSpecificCardInHand.uniqueId << ")";
         }
         return os;
     }
