@@ -206,6 +206,46 @@ struct Action {
     }
 
 FOREACH_ACTIONTYPE(ACTIONTYPE_MAKE)
+    
+        // some convenience overloads
+
+        static Action BuffPlayer(PlayerStatus status) {
+            return BuffPlayer(status, 1);
+        }
+        static Action DebuffPlayer(PlayerStatus status, int amount=1) {
+            return DebuffPlayer(status, amount, true);
+        }
+        static Action DecrementStatus(PlayerStatus status) {
+            return DecrementStatus(status, 1);
+        }
+        static Action BuffEnemy(MonsterStatus status, int idx) {
+            return BuffEnemy(status, idx, 1);
+        }
+        static Action DebuffEnemy(MonsterStatus status, int idx, int amount) {
+            return DebuffEnemy(status, idx, amount, true);
+        }
+        static Action DebuffAllEnemy(MonsterStatus status, int amount) {
+            return DebuffAllEnemy(status, amount, true);
+        }
+        static Action DamagePlayer(int damage) {
+            return DamagePlayer(damage, false);
+        }
+        static Action PlayerLoseHp(int hp) {
+            return PlayerLoseHp(hp, false);
+        }
+        static Action MakeTempCardInHand(CardInstance& card) {
+            return MakeTempCardInHand(card, 1);
+        }
+        static Action MakeTempCardInHand(CardId card, bool upgraded=false, int amount=1) {
+            return MakeTempCardInHand(CardInstance(card, upgraded), amount);
+        }
+        static Action MakeTempCardInDiscard(const CardInstance &c) {
+            return MakeTempCardInDiscard(c, 1);
+        }
+        static Action ShuffleTempCardIntoDrawPile(CardId id) {
+            return ShuffleTempCardIntoDrawPile(id, 1);
+        }
+        
     };
 
     bool clearOnCombatVictory(const Action &action);

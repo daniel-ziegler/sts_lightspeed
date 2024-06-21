@@ -1146,6 +1146,24 @@ void _AttackAllMonsterRecursive::operator()(BattleContext &bc) const {
     }
 }
 
+bool Action::operator==(const Action& rhs) const {
+    if (type != rhs.type) {
+        return false;
+    }
+    switch (type) {
+#define ACTIONTYPE_EQ(name, ...) case ActionType_##name: return std::memcmp(&variant_##name, &rhs.variant_##name, sizeof(_##name)) == 0;
+        FOREACH_ACTIONTYPE(ACTIONTYPE_EQ)
+        default:
+            assert(false);
+    }
+}
+
+void Action::operator()(BattleContext& bc) const {
+    switch (type) {
+#define ACTIONTYPE_CALL(name, ...) case ActionType_##name: variant_##name(bc); break;
+        FOREACH_ACTIONTYPE(ACTIONTYPE_CALL)
+    }
+}
 namespace sts {
 
     bool clearOnCombatVictory(const Action &action) {

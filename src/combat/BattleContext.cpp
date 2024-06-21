@@ -749,7 +749,7 @@ void BattleContext::executeActions() {
         if (!actionQueue.isEmpty()) {
             // do a action
             auto a = std::move(actionQueue.popFront());
-            std::visit([this](auto&& arg) { arg(*this); }, a);
+            a(*this);
             continue;
         }
 
