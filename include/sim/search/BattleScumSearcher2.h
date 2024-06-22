@@ -44,7 +44,7 @@ namespace sts::search {
         EvalFnc evalFnc;
         double explorationParameter = 3*sqrt(2);
 
-        double bestActionValue = std::numeric_limits<double>::min();
+        double bestActionValue = -std::numeric_limits<double>::max();;
         double minActionValue = std::numeric_limits<double>::max();
         int outcomePlayerHp = 0;
 

@@ -7,7 +7,7 @@
 #include <sim/search/ExpertKnowledge.h>
 #include <game/Game.h>
 #include "sim/PrintHelpers.h"
-#include "sim/search/BattleScumSearcher2.h"
+//#include "sim/search/BattleScumSearcher2.h"
 
 using namespace sts;
 
@@ -76,25 +76,45 @@ void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
         simulationCountTotal += searcher.root.simulationCount;
 
         if (searcher.outcomePlayerHp > 0) {
-            stepThroughSolution(bc, bestActions);
+            stepThroughSolution(bc, bestActions, &searcher.root);
         } else {
             stepThroughSearchTree(bc, searcher);
         }
     }
 }
 
-void search::ScumSearchAgent2::stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions) {
+void search::ScumSearchAgent2::stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions, search::BattleScumSearcher2::Node *node) {
     for (int i = 0; i < stepsWithSolution; ++i) {
         if (actions.empty()) {
             break;
         }
 
         auto &a = actions.back();
+        if(node != nullptr && !(bc == node->state)) {
+            std::cout << "BattleContext and Node state are not equal. WANTED:" << std::endl;
+            std::cout << bc << std::endl;
+            std::cout << "GOT\n";
+            std::cout << node->state << std::endl;
+            assert(false);
+        }
+
         if (printLogs) {
             printHelper(bc, a);
         }
-
         takeAction(bc, a);
+
+        if (node != nullptr) {
+            bool found = false;
+            for (auto &edge : node->edges) {
+                if (edge.action == a) {
+                    assert(!found);
+                    found = true;
+                    node = edge.node.get();
+                }
+            }
+            assert(found);
+        }
+
         actions.pop_back();
     }
 }

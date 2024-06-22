@@ -6,6 +6,7 @@
 #define STS_LIGHTSPEED_SCUMSEARCHAGENT2_H
 
 #include "game/GameContext.h"
+#include "sim/search/BattleScumSearcher2.h"
 #include "sim/search/Action.h"
 #include "game/GameAction.h"
 
@@ -43,7 +44,7 @@ namespace sts::search {
         void takeAction(GameContext &gc, GameAction a);
         void takeAction(BattleContext &bc, Action a);
 
-        void stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions);
+        void stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions, BattleScumSearcher2::Node *node);
         void stepThroughSearchTree(BattleContext &bc, const search::BattleScumSearcher2 &s);
 
         void stepOutOfCombatPolicy(GameContext &gc);
