@@ -3143,6 +3143,99 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
     );
 }
 namespace sts {
+    
+    void compareBC(const BattleContext &a, const BattleContext &b) {
+        if (a.seed != b.seed) {
+            std::cerr << "seed mismatch\n";
+        }
+        if (a.turn != b.turn) {
+            std::cerr << "turn mismatch\n";
+        }
+        if (a.ascension != b.ascension) {
+            std::cerr << "ascension mismatch\n";
+        }
+        if (a.loopCount != b.loopCount) {
+            std::cerr << "loopCount mismatch\n";
+        }
+        if (a.sum != b.sum) {
+            std::cerr << "sum mismatch\n";
+        }
+        if (a.aiRng != b.aiRng) {
+            std::cerr << "aiRng mismatch\n";
+        }
+        if (a.cardRandomRng != b.cardRandomRng) {
+            std::cerr << "cardRandomRng mismatch\n";
+        }
+        if (a.miscRng != b.miscRng) {
+            std::cerr << "miscRng mismatch\n";
+        }
+        if (a.monsterHpRng != b.monsterHpRng) {
+            std::cerr << "monsterHpRng mismatch\n";
+        }
+        if (a.potionRng != b.potionRng) {
+            std::cerr << "potionRng mismatch\n";
+        }
+        if (a.shuffleRng != b.shuffleRng) {
+            std::cerr << "shuffleRng mismatch\n";
+        }
+        if (a.outcome != b.outcome) {
+            std::cerr << "outcome mismatch\n";
+        }
+        if (a.inputState != b.inputState) {
+            std::cerr << "inputState mismatch\n";
+        }
+        if (a.cardSelectInfo != b.cardSelectInfo) {
+            std::cerr << "cardSelectInfo mismatch\n";
+        }
+        if (a.monsterTurnIdx != b.monsterTurnIdx) {
+            std::cerr << "monsterTurnIdx mismatch\n";
+        }
+        if (a.isBattleOver != b.isBattleOver) {
+            std::cerr << "isBattleOver mismatch\n";
+        }
+        if (a.endTurnQueued != b.endTurnQueued) {
+            std::cerr << "endTurnQueued mismatch\n";
+        }
+        if (a.turnHasEnded != b.turnHasEnded) {
+            std::cerr << "turnHasEnded mismatch\n";
+        }
+        if (a.skipMonsterTurn != b.skipMonsterTurn) {
+            std::cerr << "skipMonsterTurn mismatch\n";
+        }
+        if (a.actionQueue != b.actionQueue) {
+            std::cerr << "actionQueue mismatch\n";
+        }
+        if (a.cardQueue != b.cardQueue) {
+            std::cerr << "cardQueue mismatch\n";
+        }
+        if (a.potionCount != b.potionCount) {
+            std::cerr << "potionCount mismatch\n";
+        }
+        if (a.potionCapacity != b.potionCapacity) {
+            std::cerr << "potionCapacity mismatch\n";
+        }
+        if (a.potions != b.potions) {
+            std::cerr << "potions mismatch\n";
+        }
+        if (a.turn != b.turn) {
+            std::cerr << "turn mismatch\n";
+        }
+        if (a.player != b.player) {
+            std::cerr << "player mismatch\n";
+        }
+        if (a.monsters != b.monsters) {
+            std::cerr << "monsters mismatch\n";
+        }
+        if (a.cards != b.cards) {
+            std::cerr << "cards mismatch\n";
+        }
+        if (a.curCardQueueItem != b.curCardQueueItem) {
+            std::cerr << "curCardQueueItem mismatch\n";
+        }
+        if (a.miscBits != b.miscBits) {
+            std::cerr << "miscBits mismatch\n";
+        }
+    }
 
 
     void printRngCounters(std::ostream &os, const BattleContext &bc) {

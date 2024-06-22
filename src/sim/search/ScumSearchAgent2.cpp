@@ -95,6 +95,7 @@ void search::ScumSearchAgent2::stepThroughSolution(BattleContext &bc, std::vecto
             std::cout << bc << std::endl;
             std::cout << "GOT\n";
             std::cout << node->state << std::endl;
+            compareBC(bc, node->state);
             assert(false);
         }
 

@@ -220,6 +220,8 @@ namespace sts {
     };
 
     std::ostream& operator<<(std::ostream &os, const BattleContext &bc);
+    
+    void compareBC(const BattleContext &lhs, const BattleContext &rhs);
 }
 
 #endif //STS_LIGHTSPEED_BATTLECONTEXT_H

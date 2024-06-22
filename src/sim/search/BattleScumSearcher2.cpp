@@ -44,6 +44,8 @@ void search::BattleScumSearcher2::search(int64_t simulations) {
 
 void search::BattleScumSearcher2::step() {
     actionStack.clear();
+    searchStack.clear();
+    searchStack.push_back(&root);
     doPlayout(root, actionStack);
 }
 
@@ -84,10 +86,6 @@ void search::BattleScumSearcher2::doPlayout(Node& curNode, std::vector<Action> &
         const auto selectIdx = selectBestEdgeToSearch(curNode);
         auto &edgeTaken = curNode.edges[selectIdx];
 
-#if SEARCH_DEBUG
-        indent(actionStack.size());
-        edgeTaken.action.printDesc(std::cout, curState) << std::endl;
-#endif
         if (edgeTaken.node == nullptr) {
             edgeTaken.node = std::make_shared<Node>();
             edgeTaken.node->state = curState;
@@ -95,22 +93,36 @@ void search::BattleScumSearcher2::doPlayout(Node& curNode, std::vector<Action> &
             bool found = false;
             for (auto &n : allNodes) {
                 if (n->state == edgeTaken.node->state) {
+#if SEARCH_DEBUG
+                    indent(actionStack.size());
+                    std::cout << "FOUND " << n.get() << std::endl;
+#endif
                     found = true;
                     edgeTaken.node = n;
                     break;
                 }
             }
             if (!found) {
+#if SEARCH_DEBUG
+                indent(actionStack.size());
+                std::cout << "NEW " << edgeTaken.node.get() << std::endl;
+#endif
                 allNodes.push_back(edgeTaken.node);
             }
         }
+#if SEARCH_DEBUG
+        indent(actionStack.size());
+        edgeTaken.action.printDesc(std::cout, curState) << " -> " << edgeTaken.node.get() << std::endl;
+#endif
         actionStack.push_back(edgeTaken.action);
+        searchStack.push_back(edgeTaken.node.get());
         
         doPlayout(*edgeTaken.node, actionStack);
         edgeTaken.visitCount++;
     }
     
     actionStack.resize(oldStackSize);
+    searchStack.pop_back();
 
     curNode.simulationCount = 1;
     for (const auto &edge : curNode.edges) {
@@ -133,6 +145,13 @@ double search::BattleScumSearcher2::updateFromPlayout(const std::vector<Action> 
         bestActionSequence = actionStack;
         bestActionValue = evaluation;
         outcomePlayerHp = endState.player.curHp;
+#if SEARCH_DEBUG
+        std::cout << "NEW BEST\n";
+        for (const auto n : searchStack) {
+            std::cout << n << "\n";
+        }
+        std::cout << "bestActionValue: " << bestActionValue << std::endl;
+#endif
     }
 
     if (evaluation < minActionValue) {
