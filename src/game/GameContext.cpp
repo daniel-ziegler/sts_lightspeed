@@ -1096,8 +1096,8 @@ void GameContext::enterBossTreasureRoom() {
         info.bossRelics[i] = returnRandomRelic(RelicTier::BOSS);
     }
 
-    regainControlAction = [=](GameContext &gc) {
-        gc.transitionToAct(act+1);
+    regainControlAction = [=, this](GameContext &gc) {
+        gc.transitionToAct(this->act+1);
     };
 }
 
@@ -2616,7 +2616,7 @@ void GameContext::chooseEventOption(int idx) {
                         }
                     }
 
-                    regainControlAction = [=](GameContext &gc) {
+                    regainControlAction = [=, this](GameContext &gc) {
                         Rewards reward;
                         reward.addGold(goldAmt);
                         if (addRelic) {
@@ -2678,7 +2678,7 @@ void GameContext::chooseEventOption(int idx) {
 
                 case 4:
                     loseGold(unfavorable ? 110 : 90);
-                    regainControlAction = [=](GameContext &gc) {
+                    regainControlAction = [=, this](GameContext &gc) {
                         gc.deck.upgradeRandomCards(miscRng, 1);
                         returnToMapAction(gc);
                     };
@@ -3024,7 +3024,7 @@ void GameContext::chooseEventOption(int idx) {
 
                     const int goldAmt = unfavorable ? 25 : 50;
                     const RelicId rareRelic = returnRandomRelic(RelicTier::RARE);
-                    regainControlAction = [=](GameContext &gc) {
+                    regainControlAction = [=, this](GameContext &gc) {
                         Rewards reward;
                         reward.addGold(goldAmt);
                         reward.addRelic(rareRelic);
@@ -3069,7 +3069,7 @@ void GameContext::chooseEventOption(int idx) {
         case Event::HYPNOTIZING_COLORED_MUSHROOMS: {
             if (idx == 0) {
                 const int goldAmt = miscRng.random(20, 30);
-                regainControlAction = [=](GameContext &gc) {
+                regainControlAction = [=, this](GameContext &gc) {
                     Rewards reward;
                     reward.addGold(goldAmt);
                     reward.addRelic(RelicId::ODD_MUSHROOM);
