@@ -3,6 +3,9 @@
 //
 
 #include "combat/CardManager.h"
+
+#include <set>
+
 #include "combat/BattleContext.h"
 
 #include "game/GameContext.h"
@@ -571,6 +574,27 @@ void CardManager::onBuffCorruption() {
 
 // **************** END SPECIAL HELPERS ****************
 
+std::set<CardInstance> unordered(const std::vector<CardInstance> &v) {
+    return std::set<CardInstance>(v.begin(), v.end());
+}
+
+bool CardManager::operator==(const CardManager &rhs) const {
+    return nextUniqueCardId == rhs.nextUniqueCardId &&
+           cardsInHand == rhs.cardsInHand &&
+           hand == rhs.hand &&  // todo unordered
+           limbo == rhs.limbo &&
+           stasisCards == rhs.stasisCards &&
+           // TODO make unordered
+           drawPile == rhs.drawPile &&
+           discardPile == rhs.discardPile &&
+           exhaustPile == rhs.exhaustPile &&
+           handNormalityCount == rhs.handNormalityCount &&
+           handPainCount == rhs.handPainCount &&
+           strikeCount == rhs.strikeCount &&
+           handBloodCardCount == rhs.handBloodCardCount &&
+           drawPileBloodCardCount == rhs.drawPileBloodCardCount &&
+           discardPileBloodCardCount == rhs.discardPileBloodCardCount;
+}
 
 namespace sts {
 

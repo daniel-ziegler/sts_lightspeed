@@ -771,6 +771,37 @@ void Monster::setMove(MMID moveId) {
     moveHistory[0] = moveId;
 }
 
+bool Monster::operator==(const Monster &rhs) const {
+    return idx == rhs.idx &&
+           id == rhs.id &&
+           curHp == rhs.curHp &&
+           maxHp == rhs.maxHp &&
+           block == rhs.block &&
+           statusBits == rhs.statusBits &&
+           strength == rhs.strength &&
+           artifact == rhs.artifact &&
+           blockReturn == rhs.blockReturn &&
+           choked == rhs.choked &&
+           corpseExplosion == rhs.corpseExplosion &&
+           lockOn == rhs.lockOn &&
+           mark == rhs.mark &&
+           metallicize == rhs.metallicize &&
+           platedArmor == rhs.platedArmor &&
+           poison == rhs.poison &&
+           regen == rhs.regen &&
+           shackled == rhs.shackled &&
+           vulnerable == rhs.vulnerable &&
+           weak == rhs.weak &&
+           uniquePower0 == rhs.uniquePower0 &&
+           uniquePower1 == rhs.uniquePower1 &&
+           halfDead == rhs.halfDead &&
+           escapeNext == rhs.escapeNext &&
+           isEscapingB == rhs.isEscapingB &&
+           moveHistory[0] == rhs.moveHistory[0] &&
+           moveHistory[1] == rhs.moveHistory[1] &&
+           miscInfo == rhs.miscInfo;
+}
+
 namespace sts {
 
     std::ostream& printIfHaveStatus(std::ostream &os, const Monster &m, MonsterStatus s, bool &havePrint) {

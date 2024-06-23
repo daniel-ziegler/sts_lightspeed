@@ -50,6 +50,18 @@ namespace sts {
         [[nodiscard]] int getCapacity() const;
         Action& operator[](int index);
         const Action& operator[](int index) const;
+        
+        bool operator==(const ActionQueue &rhs) const {
+            if (size != rhs.size) {
+                return false;
+            }
+            for (int i = 0; i < size; i++) {
+                if (!(arr[(front + i) % capacity] == rhs.arr[(rhs.front + i) % capacity])) {
+                    return false;
+                }
+            }
+            return true;
+        }
     };
 
     template<int capacity>

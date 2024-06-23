@@ -657,6 +657,27 @@ void MonsterGroup::print(std::ostream &os, const BattleContext &bc) const {
     os << "\n}\n";
 }
 
+bool MonsterGroup::operator==(const MonsterGroup &rhs) const {
+    if (monstersAlive != rhs.monstersAlive) {
+        return false;
+    }
+    if (monsterCount != rhs.monsterCount) {
+        return false;
+    }
+    if (extraRollMoveOnTurn != rhs.extraRollMoveOnTurn) {
+        return false;
+    }
+    if (skipTurn != rhs.skipTurn) {
+        return false;
+    }
+    for (int i = 0; i < monsterCount; ++i) {
+        if (arr[i] != rhs.arr[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 namespace sts {
 
     std::ostream &operator<<(std::ostream &os, const MonsterGroup &g) {

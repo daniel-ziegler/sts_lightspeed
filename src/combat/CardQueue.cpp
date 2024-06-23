@@ -50,6 +50,18 @@ void CardQueue::pushBack(CardQueueItem item) {
     }
 }
 
+bool CardQueue::operator==(const CardQueue &rhs) const {
+    if (size != rhs.size) {
+        return false;
+    }
+    for (int i = 0; i < size; i++) {
+        if (arr[(frontIdx + i) % capacity] != rhs.arr[(rhs.frontIdx + i) % capacity]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 CardQueueItem CardQueue::popFront() {
     assert(size > 0);
     CardQueueItem &item = arr.at(frontIdx);
@@ -75,4 +87,21 @@ CardQueueItem CardQueue::popBack() {
 CardQueueItem &CardQueue::front() {
     assert(size > 0);
     return arr.at(frontIdx);
+}
+
+bool CardQueueItem::operator==(const CardQueueItem &rhs) const {
+    return (
+        card == rhs.card &&
+        target == rhs.target &&
+        isEndTurn == rhs.isEndTurn &&
+        triggerOnUse == rhs.triggerOnUse &&
+        ignoreEnergyTotal == rhs.ignoreEnergyTotal &&
+        energyOnUse == rhs.energyOnUse &&
+        freeToPlay == rhs.freeToPlay &&
+        randomTarget == rhs.randomTarget &&
+        autoplay == rhs.autoplay &&
+        regretCardCount == rhs.regretCardCount &&
+        purgeOnUse == rhs.purgeOnUse &&
+        exhaustOnUse == rhs.exhaustOnUse
+    );
 }

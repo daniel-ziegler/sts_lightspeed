@@ -201,6 +201,12 @@ namespace sts {
         std::int32_t nextInt(std::int32_t n) {
             return static_cast<std::int32_t>(nextLong(n));
         }
+        
+        bool operator==(const Random &rhs) const {
+            return counter == rhs.counter &&
+                   seed0 == rhs.seed0 &&
+                   seed1 == rhs.seed1;
+        }
     };
 
 }

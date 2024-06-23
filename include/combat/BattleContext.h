@@ -215,6 +215,7 @@ namespace sts {
         void chooseExhaustCards(const fixed_list<int,10> &idxs);
         void chooseGambleCards(const fixed_list<int,10> &idxs);
 
+        bool operator==(const BattleContext &rhs) const;
     };
 
     std::ostream& operator<<(std::ostream &os, const BattleContext &bc);

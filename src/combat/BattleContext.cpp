@@ -3099,6 +3099,41 @@ void BattleContext::chooseGambleCards(const fixed_list<int, 10> &idxs) {
 }
 
 
+bool BattleContext::operator==(const BattleContext &rhs) const {
+    return (
+        seed == rhs.seed &&
+        turn == rhs.turn &&
+        ascension == rhs.ascension &&
+        loopCount == rhs.loopCount &&
+        sum == rhs.sum &&
+        aiRng == rhs.aiRng &&
+        cardRandomRng == rhs.cardRandomRng &&
+        miscRng == rhs.miscRng &&
+        monsterHpRng == rhs.monsterHpRng &&
+        potionRng == rhs.potionRng &&
+        shuffleRng == rhs.shuffleRng &&
+        outcome == rhs.outcome &&
+        inputState == rhs.inputState &&
+        cardSelectInfo == rhs.cardSelectInfo &&
+        monsterTurnIdx == rhs.monsterTurnIdx &&
+        isBattleOver == rhs.isBattleOver &&
+        endTurnQueued == rhs.endTurnQueued &&
+        turnHasEnded == rhs.turnHasEnded &&
+        skipMonsterTurn == rhs.skipMonsterTurn &&
+        actionQueue == rhs.actionQueue &&
+        cardQueue == rhs.cardQueue &&
+        potionCount == rhs.potionCount &&
+        potionCapacity == rhs.potionCapacity &&
+        potions == rhs.potions &&
+        turn == rhs.turn &&
+        player == rhs.player &&
+        monsters == rhs.monsters &&
+        cards == rhs.cards &&
+        curCardQueueItem == rhs.curCardQueueItem &&
+        miscBits == rhs.miscBits
+    );
+}
+
 namespace sts {
 
 

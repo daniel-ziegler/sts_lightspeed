@@ -52,6 +52,8 @@ namespace sts {
         void applyEmeraldEliteBuff(BattleContext &bc, int buffType, int act);
         
         void print(std::ostream &os, const BattleContext &bc) const;
+        
+        bool operator==(const MonsterGroup &rhs) const;
     };
 
     std::ostream &operator<<(std::ostream &os, const MonsterGroup &g);

@@ -25,6 +25,7 @@
 #include "sim/search/SimpleAgent.h"
 
 #include "sim/search/BattleScumSearcher2.h"
+#include "combat/Actions.h"
 
 using namespace sts;
 
@@ -322,6 +323,11 @@ int main(int argc, const char* argv[]) {
 
     } else if (command == "mcts_save") {
         return mcts(argc, argv);
+    } else if (command == "playground") {
+        std::vector<CardInstance> cards;
+        cards.push_back(CardInstance(CardId::DEFEND_RED));
+        Action a = Actions::MakeTempCardsInHand(cards);
+        std::cout << a << '\n';
     }
 
     //    printSizes();

@@ -38,6 +38,9 @@ namespace sts {
             ret.isEndTurn = true;
             return ret;
         }
+        
+        bool operator==(const CardQueueItem &rhs) const;
+        bool operator!=(const CardQueueItem &rhs) const { return !(*this == rhs); }
     };
 
     struct CardQueue {
@@ -57,7 +60,7 @@ namespace sts {
         CardQueueItem popBack();
         CardQueueItem &front();
 
-
+        bool operator==(const CardQueue &rhs) const;
     };
 
 }

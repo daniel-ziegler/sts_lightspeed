@@ -808,6 +808,46 @@ std::ostream& printIfHaveStatus(const Player &p, std::ostream &os, PlayerStatus 
     return os << "(" << desc << "," << p.getStatusRuntime(s) << ")" << ", ";
 }
 
+bool Player::operator==(const Player &p) const {
+    return curHp == p.curHp &&
+           maxHp == p.maxHp &&
+           energy == p.energy &&
+           energyPerTurn == p.energyPerTurn &&
+           block == p.block &&
+           gold == p.gold &&
+           cardsPlayedThisTurn == p.cardsPlayedThisTurn &&
+           attacksPlayedThisTurn == p.attacksPlayedThisTurn &&
+           skillsPlayedThisTurn == p.skillsPlayedThisTurn &&
+           cardsDiscardedThisTurn == p.cardsDiscardedThisTurn &&
+           orangePelletsCardTypesPlayed == p.orangePelletsCardTypesPlayed &&
+           relicBits0 == p.relicBits0 &&
+           relicBits1 == p.relicBits1 &&
+           statusBits0 == p.statusBits0 &&
+           statusBits1 == p.statusBits1 &&
+           justAppliedBits == p.justAppliedBits &&
+           happyFlowerCounter == p.happyFlowerCounter &&
+           incenseBurnerCounter == p.incenseBurnerCounter &&
+           inkBottleCounter == p.inkBottleCounter &&
+           inserterCounter == p.inserterCounter &&
+           nunchakuCounter == p.nunchakuCounter &&
+           penNibCounter == p.penNibCounter &&
+           sundialCounter == p.sundialCounter &&
+           combustHpLoss == p.combustHpLoss &&
+           devaFormEnergyPerTurn == p.devaFormEnergyPerTurn &&
+           echoFormCardsDoubled == p.echoFormCardsDoubled &&
+           panacheCounter == p.panacheCounter &&
+           bomb1 == p.bomb1 &&
+           bomb2 == p.bomb2 &&
+           bomb3 == p.bomb3 &&
+           timesDamagedThisCombat == p.timesDamagedThisCombat &&
+           lastAttackUnblockedDamage == p.lastAttackUnblockedDamage &&
+           artifact == p.artifact &&
+           dexterity == p.dexterity &&
+           focus == p.focus &&
+           strength == p.strength &&
+           statusMap == p.statusMap;
+}
+
 namespace sts {
 
 //    void printRelicCounters(std::ostream &os, const Player &p) {

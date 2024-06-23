@@ -163,7 +163,8 @@ namespace sts {
 #define FOREACH2(F, F2, ...) CONCATENATE(FOREACH2_, PP_NARG(__VA_ARGS__))(F, F2, __VA_ARGS__)
 
 #define FIELD(fieldtype, name) fieldtype name;
-#define ACTIONDATA_STRUCT(type, ...) struct _##type { FOREACH2(FIELD, FIELD, __VA_ARGS__) void operator()(BattleContext& bc) const; };
+#define ACTIONDATA_STRUCT(type, ...) struct _##type { FOREACH2(FIELD, FIELD, __VA_ARGS__) \
+    void operator()(BattleContext& bc) const; bool operator==(const _##type& rhs) const = default; };
 FOREACH_ACTIONTYPE(ACTIONDATA_STRUCT)
     
 #define ACTIONTYPE_NAME(type, ...) ActionType_##type,
@@ -180,13 +181,44 @@ struct Action {
     };
     
     Action() {}
-    ~Action() {}
     
     Action(const Action& rhs) {
-        *this = rhs;
+        type = rhs.type;
+        switch (type) {
+#define COPY(type, ...) case ActionType_##type: new(&variant_##type) _##type(rhs.variant_##type); break;
+            FOREACH_ACTIONTYPE(COPY)
+        case ActionType_INVALID:
+            break;
+        default:
+            assert(false);
+        }
+    }
+    Action(const Action&& rhs) {
+        type = rhs.type;
+        switch (type) {
+#define MOVE(type, ...) case ActionType_##type: new(&variant_##type) _##type(std::move(rhs.variant_##type)); break;
+            FOREACH_ACTIONTYPE(MOVE)
+        case ActionType_INVALID:
+            break;
+        default:
+            assert(false);
+        }
+    }
+    ~Action() {
+        switch (type) {
+#define DESTRUCT(type, ...) case ActionType_##type: variant_##type.~_##type(); break;
+            FOREACH_ACTIONTYPE(DESTRUCT)
+        case ActionType_INVALID:
+            break;
+        default:
+            assert(false);
+        }
     }
     Action& operator=(const Action& rhs) {
-        std::memcpy(this, &rhs, sizeof(Action));
+        if (this != &rhs) {    
+            this->~Action();
+            new (this) Action(rhs);
+        }
         return *this;
     }
     
@@ -201,7 +233,7 @@ struct Action {
 #define ACTIONTYPE_MAKE(actiontype, ...) \
     static Action actiontype(FOREACH2(PARAM, LASTPARAM, __VA_ARGS__)) { \
         Action action; action.type=ActionType_##actiontype; \
-        action.variant_##actiontype=_##actiontype{FOREACH2(ARG, ARG, __VA_ARGS__)}; \
+        new (&action.variant_##actiontype) _##actiontype{FOREACH2(ARG, ARG, __VA_ARGS__)}; \
         return action; \
     }
 

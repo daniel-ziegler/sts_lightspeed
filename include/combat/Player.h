@@ -149,6 +149,8 @@ namespace sts {
 
         void rechargeEnergy(BattleContext &bc); // EnergyManager recharge - this is called by an effect in game...
 
+        bool operator==(const Player &rhs) const;
+
         friend std::ostream& operator<<(std::ostream &os, const Player &p);
     };
 

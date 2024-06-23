@@ -1151,7 +1151,7 @@ bool Action::operator==(const Action& rhs) const {
         return false;
     }
     switch (type) {
-#define ACTIONTYPE_EQ(name, ...) case ActionType_##name: return std::memcmp(&variant_##name, &rhs.variant_##name, sizeof(_##name)) == 0;
+#define ACTIONTYPE_EQ(name, ...) case ActionType_##name: return variant_##name == rhs.variant_##name;
         FOREACH_ACTIONTYPE(ACTIONTYPE_EQ)
         default:
             assert(false);

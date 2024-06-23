@@ -177,6 +177,8 @@ namespace sts {
 
         [[nodiscard]] static int getAliveGremlinCount(const BattleContext &bc);
 
+        bool operator==(const Monster &rhs) const;
+        bool operator!=(const Monster &rhs) const { return !(*this == rhs); }
     };
 
     std::ostream& operator<<(std::ostream &os, const sts::Monster &m);

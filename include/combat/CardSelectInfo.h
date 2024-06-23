@@ -72,6 +72,15 @@ namespace sts {
         int& discovery_CopyCount() { return data0; }
         int& dualWield_CopyCount() { return data0; }
         std::array<CardId, 3>& codexCards() { return cards; }
+        
+        bool operator==(const CardSelectInfo &rhs) const {
+            return cards == rhs.cards &&
+                   canPickZero == rhs.canPickZero &&
+                   canPickAnyNumber == rhs.canPickAnyNumber &&
+                   pickCount == rhs.pickCount &&
+                   data0 == rhs.data0 &&
+                   cardSelectTask == rhs.cardSelectTask;
+        }
     };
 
 }

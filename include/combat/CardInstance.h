@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <compare>
 
 #include "constants/Cards.h"
 
@@ -78,6 +79,9 @@ namespace sts {
 
         [[nodiscard]] bool canUseOnAnyTarget(const BattleContext &bc) const; // not for use in critical path
         [[nodiscard]] bool canUse(const BattleContext &bc, int target, bool inAutoplay) const;
+        
+        std::weak_ordering operator<=>(const CardInstance &rhs) const = default;
+        bool operator==(const CardInstance &rhs) const { return (*this <=> rhs) == 0; }
     };
 
     std::ostream& operator <<(std::ostream &os, const CardInstance &c);

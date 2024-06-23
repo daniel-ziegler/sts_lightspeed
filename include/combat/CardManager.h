@@ -95,6 +95,8 @@ namespace sts {
         void onTookDamage(); // update blood for blood, masterful stab
         void findAndUpgradeSpecialData(std::int16_t uniqueId, int amount);
         void onBuffCorruption();
+        
+        bool operator==(const CardManager &rhs) const;
     };
 
     std::ostream &operator <<(std::ostream &os, const CardManager &c);
