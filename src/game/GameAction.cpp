@@ -53,7 +53,105 @@ int GameAction::getIdx3() const {
 }
 
 std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) const {
-    return os;
+    if (isPotionAction()) {
+        if (isPotionDiscard()) {
+            return os << "discard potion " << getIdx1();
+        } else {
+            return os << "drink potion " << getIdx1();
+        }
+    }
+    
+    switch (gc.screenState) {
+        case ScreenState::EVENT_SCREEN:
+            if (gc.curEvent == sts::Event::MATCH_AND_KEEP) {
+                return os << "match and keep " << getIdx1() << " " << getIdx2();
+            } else {
+                return os << "event option " << getIdx1();
+            }
+
+        case ScreenState::REWARDS:
+            switch (getRewardsActionType()) {
+                case GameAction::RewardsActionType::CARD:
+                    return os << "card reward " << getIdx1() << " " << getIdx2();
+
+                case GameAction::RewardsActionType::GOLD:
+                    return os << "gold reward " << getIdx1();
+
+                case GameAction::RewardsActionType::KEY:
+                    return os << "key reward";
+
+                case GameAction::RewardsActionType::POTION:
+                    return os << "potion reward " << getIdx1();
+
+                case GameAction::RewardsActionType::RELIC:
+                    return os << "relic reward " << getIdx1();
+
+                case GameAction::RewardsActionType::SKIP:
+                    return os << "skip reward";
+
+                default:
+                    return os << "invalid reward action";
+            }
+
+        case ScreenState::BOSS_RELIC_REWARDS:
+            return os << "boss relic reward " << getIdx1();
+
+        case ScreenState::CARD_SELECT:
+            return os << "card select " << getIdx1();
+
+        case ScreenState::MAP_SCREEN:
+            return os << "map node " << getIdx1();
+
+        case ScreenState::TREASURE_ROOM:
+            if (getIdx1() == 0) {
+                return os << "open treasure room chest";
+            } else {
+                return os << "skip treasure room";
+            }
+
+        case ScreenState::REST_ROOM:
+            switch (getIdx1()) {
+                case 0:
+                    return os << "coffee dripper";
+                case 1:
+                    return os << "fusion hammer";
+                case 2:
+                    return os << "ruby key";
+                case 3:
+                    return os << "girya";
+                case 4:
+                    return os << "peace pipe";
+                case 5:
+                    return os << "shovel";
+                case 6:
+                    return os << "skip rest";
+                default:
+                    return os << "invalid rest action";
+            }
+
+        case ScreenState::SHOP_ROOM:
+            switch (getRewardsActionType()) {
+                case GameAction::RewardsActionType::CARD:
+                    return os << "buy card " << getIdx1();
+                case GameAction::RewardsActionType::POTION:
+                    return os << "buy potion " << getIdx1();
+                case GameAction::RewardsActionType::RELIC:
+                    return os << "buy relic " << getIdx1();
+                case GameAction::RewardsActionType::CARD_REMOVE:
+                    return os << "buy card remove";
+                case GameAction::RewardsActionType::SKIP:
+                    return os << "skip shop";
+                default:
+                    return os << "invalid shop action";
+            }
+
+        case ScreenState::BATTLE:
+            return os << "battle action";
+        case ScreenState::INVALID:
+        default:
+            return os << "invalid action";
+    }
+
 }
 
 bool isValidMatchAndKeepEventAction(const GameContext &gc, const GameAction a) {
