@@ -5,48 +5,48 @@
 #include <cassert>
 #include <bitset>
 
-#include "sim/search/GameAction.h"
+#include "game/GameAction.h"
 
 #include "game/GameContext.h"
 #include "sim/PrintHelpers.h"
 
 using namespace sts;
 
-search::GameAction::GameAction(std::uint32_t bits) : bits(bits) {}
-search::GameAction::GameAction(int idx1, int idx2) : bits( (idx2 & 0xFF) << 8 | (idx1 & 0xFF) ) {}
+GameAction::GameAction(std::uint32_t bits) : bits(bits) {}
+GameAction::GameAction(int idx1, int idx2) : bits( (idx2 & 0xFF) << 8 | (idx1 & 0xFF) ) {}
 
-search::GameAction::GameAction(search::GameAction::RewardsActionType type, int idx1, int idx2)
+GameAction::GameAction(GameAction::RewardsActionType type, int idx1, int idx2)
     : bits( static_cast<int>(type) <<  27 | (idx2 & 0xFF) << 8 | (idx1 & 0xFF) ) {}
 
-bool search::GameAction::isPotionAction() const {
+bool GameAction::isPotionAction() const {
     return bits & 0x80000000U;
 }
 
-bool search::GameAction::isPotionDiscard() const {
+bool GameAction::isPotionDiscard() const {
     return bits & 0x40000000U;
 }
 
-search::GameAction::RewardsActionType search::GameAction::getRewardsActionType() const {
+GameAction::RewardsActionType GameAction::getRewardsActionType() const {
     return static_cast<RewardsActionType>((bits >> 27) & 0x7);
 }
 
-int search::GameAction::getIdx1() const {
+int GameAction::getIdx1() const {
     return static_cast<int>(bits & 0xFF);
 }
 
-int search::GameAction::getIdx2() const {
+int GameAction::getIdx2() const {
     return static_cast<int>((bits >> 8) & 0xFF);
 }
 
-int search::GameAction::getIdx3() const {
+int GameAction::getIdx3() const {
     return static_cast<int>((bits >> 16) & 0xFF);
 }
 
-std::ostream &search::GameAction::printDesc(std::ostream &os, const GameContext &gc) const {
+std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) const {
     return os;
 }
 
-bool isValidMatchAndKeepEventAction(const GameContext &gc, const search::GameAction a) {
+bool isValidMatchAndKeepEventAction(const GameContext &gc, const GameAction a) {
 //    const auto &m = matchAndKeepCardMap;
 //    const int idx1 = option / m.size();
 //    int idx2 = option % m.size();
@@ -56,7 +56,7 @@ bool isValidMatchAndKeepEventAction(const GameContext &gc, const search::GameAct
     return true;
 }
 
-bool isValidDesignerInSpireEventAction(const GameContext &gc, const search::GameAction a) {
+bool isValidDesignerInSpireEventAction(const GameContext &gc, const GameAction a) {
     const bool unfavorable = gc.ascension >= 15;
     const bool upgradeOne = gc.info.upgradeOne;
     const bool cleanUpIsRemoveCard = gc.info.cleanUpIsRemoveCard;
@@ -103,7 +103,7 @@ bool isValidDesignerInSpireEventAction(const GameContext &gc, const search::Game
     return select == 5;
 }
 
-bool isValidRestAction(const GameContext &gc, const search::GameAction a) {
+bool isValidRestAction(const GameContext &gc, const GameAction a) {
     if (a.getIdx1() < 0 || a.getIdx1() > 6) {
         return false;
     }
@@ -140,10 +140,10 @@ bool isValidRestAction(const GameContext &gc, const search::GameAction a) {
     return bits.test(a.getIdx1());
 }
 
-bool isValidEventScreenAction(const GameContext &gc, const search::GameAction a) {
+bool isValidEventScreenAction(const GameContext &gc, const GameAction a) {
     // do not handle match and keep
 
-    auto bits = search::GameAction::getValidEventSelectBits(gc);
+    auto bits = GameAction::getValidEventSelectBits(gc);
     int curIdx = 0;
 
     while (bits) {
@@ -156,7 +156,7 @@ bool isValidEventScreenAction(const GameContext &gc, const search::GameAction a)
     return false;
 }
 
-bool isValidMapAction(const GameContext &gc, const search::GameAction a) {
+bool isValidMapAction(const GameContext &gc, const GameAction a) {
     const auto select = a.getIdx1();
     if (select > 6) {
         return false;
@@ -179,11 +179,11 @@ bool isValidMapAction(const GameContext &gc, const search::GameAction a) {
     return false;
 }
 
-bool isValidRewardsAction(const GameContext &gc, const search::GameAction a) {
+bool isValidRewardsAction(const GameContext &gc, const GameAction a) {
     const auto &r = gc.info.rewardsContainer;
     switch (a.getRewardsActionType()) {
 
-        case search::GameAction::RewardsActionType::CARD: {
+        case GameAction::RewardsActionType::CARD: {
             if (a.getIdx1() >= r.cardRewardCount) {
                 return false;
             }
@@ -194,19 +194,19 @@ bool isValidRewardsAction(const GameContext &gc, const search::GameAction a) {
             return a.getIdx2() < r.cardRewards[a.getIdx1()].size();
         }
 
-        case search::GameAction::RewardsActionType::KEY:
+        case GameAction::RewardsActionType::KEY:
             return r.sapphireKey || r.emeraldKey;
 
-        case search::GameAction::RewardsActionType::POTION:
+        case GameAction::RewardsActionType::POTION:
             return a.getIdx1() < r.potionCount;
 
-        case search::GameAction::RewardsActionType::GOLD:
+        case GameAction::RewardsActionType::GOLD:
             return a.getIdx1() < r.goldRewardCount;
 
-        case search::GameAction::RewardsActionType::RELIC:
+        case GameAction::RewardsActionType::RELIC:
             return a.getIdx1() < r.relicCount;
 
-        case search::GameAction::RewardsActionType::SKIP:
+        case GameAction::RewardsActionType::SKIP:
             return true;
 
         default:
@@ -214,34 +214,34 @@ bool isValidRewardsAction(const GameContext &gc, const search::GameAction a) {
     }
 }
 
-bool isValidShopAction(const GameContext &gc, const search::GameAction a) {
+bool isValidShopAction(const GameContext &gc, const GameAction a) {
     const auto &s = gc.info.shop;
 
     const auto select = a.getIdx1();
     switch (a.getRewardsActionType()) {
-        case search::GameAction::RewardsActionType::CARD:
+        case GameAction::RewardsActionType::CARD:
             if (select > 6) {
                 return false;
             }
             return s.cardPrice(select) != -1 && gc.gold >= s.cardPrice(select);
 
-        case search::GameAction::RewardsActionType::POTION:
+        case GameAction::RewardsActionType::POTION:
             if (select > 2) {
                 return false;
             }
             return s.potionPrice(select) != -1 && gc.gold >= s.potionPrice(select);
 
 
-        case search::GameAction::RewardsActionType::RELIC:
+        case GameAction::RewardsActionType::RELIC:
             if (select > 2) {
                 return false;
             }
             return s.relicPrice(select) != -1 && gc.gold >= s.relicPrice(select);
 
-        case search::GameAction::RewardsActionType::CARD_REMOVE:
+        case GameAction::RewardsActionType::CARD_REMOVE:
             return s.removeCost != -1 && gc.gold >= s.removeCost;
 
-        case search::GameAction::RewardsActionType::SKIP:
+        case GameAction::RewardsActionType::SKIP:
             return true;
 
         default:
@@ -250,7 +250,7 @@ bool isValidShopAction(const GameContext &gc, const search::GameAction a) {
 
 }
 
-bool isValidPotionAction(const GameContext &gc, const search::GameAction a) {
+bool isValidPotionAction(const GameContext &gc, const GameAction a) {
     if (gc.curEvent == Event::WE_MEET_AGAIN && gc.screenState == ScreenState::EVENT_SCREEN) {
         return false;
     }
@@ -275,11 +275,11 @@ bool isValidPotionAction(const GameContext &gc, const search::GameAction a) {
     }
 }
 
-bool isValidCardSelectScreenAction(const GameContext &gc, const search::GameAction a) {
+bool isValidCardSelectScreenAction(const GameContext &gc, const GameAction a) {
     return a.getIdx1() >= 0 && a.getIdx1() < gc.info.toSelectCards.size();
 }
 
-bool search::GameAction::isValidAction(const sts::GameContext &gc) const {
+bool GameAction::isValidAction(const sts::GameContext &gc) const {
     if (gc.outcome != GameOutcome::UNDECIDED) {
         return false;
     }
@@ -324,11 +324,11 @@ bool search::GameAction::isValidAction(const sts::GameContext &gc) const {
     }
 }
 
-void executeRewardsAction(GameContext &gc, const search::GameAction a) {
+void executeRewardsAction(GameContext &gc, const GameAction a) {
     auto &r = gc.info.rewardsContainer;
     switch (a.getRewardsActionType()) {
 
-        case search::GameAction::RewardsActionType::CARD:
+        case GameAction::RewardsActionType::CARD:
             if (a.getIdx2() == 5) { // singing bowl
                 if (gc.hasRelic(sts::RelicId::SINGING_BOWL)) {
                     gc.playerIncreaseMaxHp(2);
@@ -339,12 +339,12 @@ void executeRewardsAction(GameContext &gc, const search::GameAction a) {
             r.removeCardReward(a.getIdx1());
             break;
 
-        case search::GameAction::RewardsActionType::GOLD:
+        case GameAction::RewardsActionType::GOLD:
             gc.obtainGold(r.gold[a.getIdx1()]);
             r.removeGoldReward(a.getIdx1());
             break;
 
-        case search::GameAction::RewardsActionType::KEY:
+        case GameAction::RewardsActionType::KEY:
             if (r.sapphireKey) {
                 assert(!r.emeraldKey);
                 gc.obtainKey(Key::SAPPHIRE_KEY);
@@ -359,12 +359,12 @@ void executeRewardsAction(GameContext &gc, const search::GameAction a) {
             }
             break;
 
-        case search::GameAction::RewardsActionType::POTION:
+        case GameAction::RewardsActionType::POTION:
             gc.obtainPotion(r.potions[a.getIdx1()]);
             r.removePotionReward(a.getIdx1());
             break;
 
-        case search::GameAction::RewardsActionType::RELIC:
+        case GameAction::RewardsActionType::RELIC:
             gc.obtainRelic(r.relics[a.getIdx1()]);
             r.removeRelicReward(a.getIdx1());
             if (a.getIdx1() == r.relicCount-1) {
@@ -372,7 +372,7 @@ void executeRewardsAction(GameContext &gc, const search::GameAction a) {
             }
             break;
 
-        case search::GameAction::RewardsActionType::SKIP:
+        case GameAction::RewardsActionType::SKIP:
             gc.regainControl();
             break;
 
@@ -381,27 +381,27 @@ void executeRewardsAction(GameContext &gc, const search::GameAction a) {
     }
 }
 
-void executeShopAction(GameContext &gc, const search::GameAction a) {
+void executeShopAction(GameContext &gc, const GameAction a) {
     auto &s = gc.info.shop;
 
     switch (a.getRewardsActionType()) {
-        case search::GameAction::RewardsActionType::CARD:
+        case GameAction::RewardsActionType::CARD:
             s.buyCard(gc, a.getIdx1());
             break;
 
-        case search::GameAction::RewardsActionType::POTION:
+        case GameAction::RewardsActionType::POTION:
             s.buyPotion(gc, a.getIdx1());
             break;
 
-        case search::GameAction::RewardsActionType::RELIC:
+        case GameAction::RewardsActionType::RELIC:
             s.buyRelic(gc, a.getIdx1());
             break;
 
-        case search::GameAction::RewardsActionType::CARD_REMOVE:
+        case GameAction::RewardsActionType::CARD_REMOVE:
             s.buyCardRemove(gc);
             break;
 
-        case search::GameAction::RewardsActionType::SKIP:
+        case GameAction::RewardsActionType::SKIP:
             gc.regainControl();
             break;
 
@@ -413,7 +413,7 @@ void executeShopAction(GameContext &gc, const search::GameAction a) {
     }
 }
 
-void search::GameAction::execute(GameContext &gc) const {
+void GameAction::execute(GameContext &gc) const {
 #ifdef sts_asserts
     if (!isValidAction(gc)) {
         std::cerr << "invalid game action taken: " << bits
@@ -477,11 +477,11 @@ void search::GameAction::execute(GameContext &gc) const {
     }
 }
 
-std::vector<search::GameAction> getAllActionsInEventState(const sts::GameContext &gc) {
+std::vector<GameAction> getAllActionsInEventState(const sts::GameContext &gc) {
     // given that gc is in event screen state
-    std::vector<search::GameAction> actions;
+    std::vector<GameAction> actions;
 
-    auto bits = search::GameAction::getValidEventSelectBits(gc);
+    auto bits = GameAction::getValidEventSelectBits(gc);
     int curIdx = 0;
     while (bits) {
         if (bits & 0x1) {
@@ -495,41 +495,41 @@ std::vector<search::GameAction> getAllActionsInEventState(const sts::GameContext
     return actions;
 }
 
-std::vector<search::GameAction> getAllShopActions(const sts::GameContext &gc) {
-    std::vector<search::GameAction> actions;
+std::vector<GameAction> getAllShopActions(const sts::GameContext &gc) {
+    std::vector<GameAction> actions;
 
     const auto &s = gc.info.shop;
     for (int i = 0; i < 7; ++i) {
         auto price = s.cardPrice(i);
         if (price != -1 && gc.gold >= price) {
-            actions.emplace_back(search::GameAction::RewardsActionType::CARD, i);
+            actions.emplace_back(GameAction::RewardsActionType::CARD, i);
         }
     }
 
     for (int i = 0; i < 3; ++i) {
         auto price = s.relicPrice(i);
         if (price != -1 && gc.gold >= price) {
-            actions.emplace_back(search::GameAction::RewardsActionType::RELIC, i);
+            actions.emplace_back(GameAction::RewardsActionType::RELIC, i);
         }
     }
 
     for (int i = 0; i < 3; ++i) {
         auto price = s.potionPrice(i);
         if (price != -1 && gc.gold >= price) {
-            actions.emplace_back(search::GameAction::RewardsActionType::POTION, i);
+            actions.emplace_back(GameAction::RewardsActionType::POTION, i);
         }
     }
 
     if (s.removeCost != -1 && gc.gold >= s.removeCost) {
-        actions.emplace_back(search::GameAction::RewardsActionType::CARD_REMOVE);
+        actions.emplace_back(GameAction::RewardsActionType::CARD_REMOVE);
     }
 
-    actions.emplace_back(search::GameAction::RewardsActionType::SKIP);
+    actions.emplace_back(GameAction::RewardsActionType::SKIP);
     return actions;
 }
 
-std::vector<search::GameAction> getAllRestActions(const sts::GameContext &gc) {
-    std::vector<search::GameAction> actions;
+std::vector<GameAction> getAllRestActions(const sts::GameContext &gc) {
+    std::vector<GameAction> actions;
 
     if (!gc.relics.has(RelicId::COFFEE_DRIPPER)) {
         actions.emplace_back(0);
@@ -562,38 +562,38 @@ std::vector<search::GameAction> getAllRestActions(const sts::GameContext &gc) {
     return actions;
 }
 
-std::vector<search::GameAction> getAllRewardActions(const sts::GameContext &gc) {
-    std::vector<search::GameAction> actions;
+std::vector<GameAction> getAllRewardActions(const sts::GameContext &gc) {
+    std::vector<GameAction> actions;
 
     const auto &r = gc.info.rewardsContainer;
     for (int i = 0; i < r.goldRewardCount; ++i) {
-        actions.emplace_back(search::GameAction::RewardsActionType::GOLD);
+        actions.emplace_back(GameAction::RewardsActionType::GOLD);
     }
 
     for (int i = 0; i < r.cardRewardCount; ++i) {
         for (int x = 0; x < r.cardRewards[i].size(); ++x) {
-            actions.emplace_back(search::GameAction::RewardsActionType::CARD, i, x);
+            actions.emplace_back(GameAction::RewardsActionType::CARD, i, x);
         }
     }
 
     for (int i = 0; i < r.relicCount; ++i) {
-        actions.emplace_back(search::GameAction::RewardsActionType::RELIC, i);
+        actions.emplace_back(GameAction::RewardsActionType::RELIC, i);
     }
 
     if (r.emeraldKey || r.sapphireKey) {
-        actions.emplace_back(search::GameAction::RewardsActionType::KEY);
+        actions.emplace_back(GameAction::RewardsActionType::KEY);
     }
 
     for (int i = 0; i < r.potionCount; ++i) {
-        actions.emplace_back(search::GameAction::RewardsActionType::POTION, i);
+        actions.emplace_back(GameAction::RewardsActionType::POTION, i);
     }
-    actions.emplace_back(search::GameAction::RewardsActionType::SKIP);
+    actions.emplace_back(GameAction::RewardsActionType::SKIP);
 
     return actions;
 }
 
-std::vector<search::GameAction> getAllMapActions(const sts::GameContext &gc) {
-    std::vector<search::GameAction> actions;
+std::vector<GameAction> getAllMapActions(const sts::GameContext &gc) {
+    std::vector<GameAction> actions;
 
     if (gc.curMapNodeY == 14) {
         actions.emplace_back(0);
@@ -615,7 +615,7 @@ std::vector<search::GameAction> getAllMapActions(const sts::GameContext &gc) {
     return actions;
 }
 
-std::vector<search::GameAction> search::GameAction::getAllActionsInState(const sts::GameContext &gc) {
+std::vector<GameAction> GameAction::getAllActionsInState(const sts::GameContext &gc) {
     if (gc.outcome != GameOutcome::UNDECIDED) {
         return {};
     }
@@ -636,7 +636,7 @@ std::vector<search::GameAction> search::GameAction::getAllActionsInState(const s
             return {0,1,2,3};
 
         case ScreenState::CARD_SELECT: {
-            std::vector<search::GameAction> actions;
+            std::vector<GameAction> actions;
             actions.reserve(gc.info.toSelectCards.size());
             for (int i = 0; i < gc.info.toSelectCards.size(); ++i) {
                 actions.emplace_back(i);
@@ -663,7 +663,7 @@ std::vector<search::GameAction> search::GameAction::getAllActionsInState(const s
     }
 }
 
-int search::GameAction::getValidEventSelectBits(const GameContext &gc) {
+int GameAction::getValidEventSelectBits(const GameContext &gc) {
     // given that game outcome is not undecided and screen state is event
     switch (gc.curEvent) {
         case Event::MATCH_AND_KEEP:

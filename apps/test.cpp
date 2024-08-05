@@ -110,7 +110,7 @@ void replayActionFile(const GameContext &startState, const std::string &fname) {
             } else {
                 ++lineNum;
                 ifs >> std::hex >> actionBits;
-                search::GameAction a(actionBits);
+                GameAction a(actionBits);
                 a.printDesc(std::cout, gc) << std::endl;
                 a.execute(gc);
             }

@@ -247,7 +247,7 @@ search::SimpleAgent::SimpleAgent() {
     initMaps();
 }
 
-void search::SimpleAgent::takeAction(GameContext &gc, search::GameAction a) {
+void search::SimpleAgent::takeAction(GameContext &gc, GameAction a) {
     actionHistory.emplace_back(a.bits);
     if (print) {
         std::cout << gc << '\n';

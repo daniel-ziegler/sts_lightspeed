@@ -7,7 +7,7 @@
 
 #include "game/GameContext.h"
 #include "sim/search/Action.h"
-#include "sim/search/GameAction.h"
+#include "game/GameAction.h"
 
 #include <memory>
 #include <random>

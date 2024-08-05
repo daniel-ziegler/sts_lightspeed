@@ -11,7 +11,7 @@
 
 using namespace sts;
 
-void search::ScumSearchAgent2::takeAction(GameContext &gc, search::GameAction a) {
+void search::ScumSearchAgent2::takeAction(GameContext &gc, GameAction a) {
     if (printActions) {
         gameActionHistory.emplace_back(a.bits);
         std::cout << std::hex << a.bits << std::endl;
@@ -137,7 +137,7 @@ void search::ScumSearchAgent2::stepThroughSearchTree(BattleContext &bc, const se
 }
 
 void search::ScumSearchAgent2::stepRandom(GameContext &gc) {
-    std::vector<search::GameAction> possibleActions(search::GameAction::getAllActionsInState(gc));
+    std::vector<GameAction> possibleActions(GameAction::getAllActionsInState(gc));
     std::uniform_int_distribution<int> distr(0, static_cast<int>(possibleActions.size())-1);
     const int randomChoice = distr(rng);
     auto a = possibleActions[randomChoice];

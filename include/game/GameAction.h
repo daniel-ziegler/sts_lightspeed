@@ -12,9 +12,6 @@
 
 namespace sts {
     class GameContext;
-}
-
-namespace sts::search {
 
     struct GameAction {
 
@@ -27,6 +24,8 @@ namespace sts::search {
             CARD_REMOVE, // 5
             SKIP,       // 6
         };
+        
+        static constexpr int SINGING_BOWL_CARD_IDX = 5;
 
         std::uint32_t bits = -1;
         GameAction() = default;
@@ -51,10 +50,9 @@ namespace sts::search {
         void execute(GameContext &gc) const;
         static std::vector<GameAction> getAllActionsInState(const sts::GameContext &gc);
         static int getValidEventSelectBits(const sts::GameContext &gc);
-
+        static GameAction drinkPotion(int idx);
+        static GameAction discardPotion(int idx);
     };
-
-
 
 
 
