@@ -10,6 +10,7 @@
 
 #include "constants/CharacterClasses.h"
 #include "game/GameContext.h"
+#include "game/GameAction.h"
 
 #include "sim/BattleSimulator.h"
 
@@ -54,31 +55,31 @@ namespace sts {
         void doSetCommand(const std::string &cmd);
 
         void printActions(std::ostream &os) const;
-        void takeAction(const std::string &action);
+        GameAction parseAction(const std::string &action);
 
         void printBossRelicRewardsActions(std::ostream &os) const;
-        void takeBossRelicRewardsAction(const std::string &action);
+        GameAction parseBossRelicRewardsAction(const std::string &action);
 
         void printRestRoomActions(std::ostream &os) const;
-        void takeRestRoomAction(const std::string &action);
+        GameAction parseRestRoomAction(const std::string &action);
 
         void printShopRoomActions(std::ostream &os) const;
-        void takeShopRoomAction(const std::string &action);
+        GameAction parseShopRoomAction(const std::string &action);
 
         void printTreasureRoomActions(std::ostream &os) const;
-        void takeTreasureRoomAction(const std::string &action);
+        GameAction parseTreasureRoomAction(const std::string &action);
 
         void printMapScreenActions(std::ostream &os) const;
-        void takeMapScreenAction(const std::string &action);
+        GameAction parseMapScreenAction(const std::string &action);
 
         void printRewardsScreenActions(std::ostream &os) const;
-        void takeRewardScreenAction(const std::string &action);
+        GameAction parseRewardScreenAction(const std::string &action);
 
         void printCardSelectScreenActions(std::ostream &os) const;
-        void takeCardSelectScreenAction(const std::string &action);
+        GameAction parseCardSelectScreenAction(const std::string &action);
 
         void printEventActions(std::ostream &) const;
-        void takeEventAction(const std::string &action);
+        GameAction parseEventAction(const std::string &action);
     };
 
 }

@@ -22,8 +22,18 @@ bool GameAction::isPotionAction() const {
     return bits & 0x80000000U;
 }
 
+GameAction GameAction::drinkPotion(int idx) {
+    assert(idx >= 0 && idx < 5);
+    return GameAction(0x80000000U | idx);
+}
+
 bool GameAction::isPotionDiscard() const {
     return bits & 0x40000000U;
+}
+
+GameAction GameAction::discardPotion(int idx) {
+    assert(idx >= 0 && idx < 5);
+    return GameAction(0xC0000000U | idx);
 }
 
 GameAction::RewardsActionType GameAction::getRewardsActionType() const {
@@ -187,7 +197,7 @@ bool isValidRewardsAction(const GameContext &gc, const GameAction a) {
             if (a.getIdx1() >= r.cardRewardCount) {
                 return false;
             }
-            if (a.getIdx2() == 5) {
+            if (a.getIdx2() == GameAction::SINGING_BOWL_CARD_IDX) {
                 // singing bowl if exists
                 return true;
             }
@@ -329,7 +339,7 @@ void executeRewardsAction(GameContext &gc, const GameAction a) {
     switch (a.getRewardsActionType()) {
 
         case GameAction::RewardsActionType::CARD:
-            if (a.getIdx2() == 5) { // singing bowl
+            if (a.getIdx2() == GameAction::SINGING_BOWL_CARD_IDX) {
                 if (gc.hasRelic(sts::RelicId::SINGING_BOWL)) {
                     gc.playerIncreaseMaxHp(2);
                 }
@@ -432,7 +442,11 @@ void GameAction::execute(GameContext &gc) const {
 
     switch (gc.screenState) {
         case ScreenState::EVENT_SCREEN:
-            gc.chooseEventOption(getIdx1());
+            if (gc.curEvent == Event::MATCH_AND_KEEP) {
+                gc.chooseMatchAndKeepCards(getIdx1(), getIdx2());
+            } else {
+                gc.chooseEventOption(getIdx1());
+            }
             break;
 
         case ScreenState::REWARDS:

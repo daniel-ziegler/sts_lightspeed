@@ -138,7 +138,12 @@ void ConsoleSimulator::handleInputLine(const std::string &line, std::ostream &os
 
     } else {
         c.tookAction = true;
-        takeAction(line);
+        GameAction ga = parseAction(line);
+        assert(ga.isValidAction(*gc));
+        ga.execute(*gc);
+        if (gc->screenState == ScreenState::BATTLE && !battleSim.isInitialized()) {
+            battleSim.initBattle(*gc);
+        }
     }
 }
 
@@ -242,60 +247,45 @@ void ConsoleSimulator::printActions(std::ostream &os) const {
     os.flush();
 }
 
-void ConsoleSimulator::takeAction(const std::string &action) {
+GameAction ConsoleSimulator::parseAction(const std::string &action) {
 
     if (action.length() >= 14 && action.substr(0, 12) == "drink potion") {
         int idx = action[13]-'0';
-        gc->drinkPotionAtIdx(idx);
-        return;
-
+        return GameAction::drinkPotion(idx);
     } else if (action.length() >= 16 && action.substr(0,14) == "discard potion") {
         int idx = action[15]-'0';
-        gc->discardPotionAtIdx(idx);
-        return;
+        return GameAction::discardPotion(idx);
     }
 
     switch (gc->screenState) {
 
         case ScreenState::BOSS_RELIC_REWARDS:
-            takeBossRelicRewardsAction(action);
-            break;
+            return parseBossRelicRewardsAction(action);
 
         case ScreenState::EVENT_SCREEN:
-            takeEventAction(action);
-            break;
+            return parseEventAction(action);
 
         case ScreenState::CARD_SELECT:
-            takeCardSelectScreenAction(action);
-            break;
+            return parseCardSelectScreenAction(action);
 
         case ScreenState::SHOP_ROOM:
-            takeShopRoomAction(action);
-            break;
+            return parseShopRoomAction(action);
 
         case ScreenState::REST_ROOM:
-            takeRestRoomAction(action);
-            break;
+            return parseRestRoomAction(action);
 
         case ScreenState::TREASURE_ROOM:
-            takeTreasureRoomAction(action);
-            break;
+            return parseTreasureRoomAction(action);
 
         case ScreenState::REWARDS:
-            takeRewardScreenAction(action);
-            break;
+            return parseRewardScreenAction(action);
 
         case ScreenState::MAP_SCREEN:
-            takeMapScreenAction(action);
-            break;
+            return parseMapScreenAction(action);
 
         case ScreenState::INVALID:
         default:
             assert(false);
-    }
-
-    if (gc->screenState == ScreenState::BATTLE && !battleSim.isInitialized()) {
-        battleSim.initBattle(*gc);
     }
 
 }
@@ -308,9 +298,9 @@ void ConsoleSimulator::printBossRelicRewardsActions(std::ostream &os) const {
     os << "3: Skip Reward\n";
 }
 
-void ConsoleSimulator::takeBossRelicRewardsAction(const std::string &action) {
+GameAction ConsoleSimulator::parseBossRelicRewardsAction(const std::string &action) {
     int idx = std::stoi(action);
-    gc->chooseBossRelic(idx);
+    return GameAction(idx);
 }
 
 void ConsoleSimulator::printRestRoomActions(std::ostream &os) const {
@@ -353,9 +343,9 @@ void ConsoleSimulator::printRestRoomActions(std::ostream &os) const {
 
 }
 
-void ConsoleSimulator::takeRestRoomAction(const std::string &action) {
+GameAction ConsoleSimulator::parseRestRoomAction(const std::string &action) {
     int idx = std::stoi(action);
-    gc->chooseCampfireOption(idx);
+    return GameAction(idx);
 }
 
 void ConsoleSimulator::printShopRoomActions(std::ostream &os) const {
@@ -390,31 +380,29 @@ void ConsoleSimulator::printShopRoomActions(std::ostream &os) const {
     os << "proceed:\n";
 }
 
-void ConsoleSimulator::takeShopRoomAction(const std::string &action) {
+GameAction ConsoleSimulator::parseShopRoomAction(const std::string &action) {
     std::istringstream ss(action);
     std::string actionType;
     ss >> actionType;
 
     auto &shop = gc->info.shop;
     if (actionType == "proceed") {
-        gc->screenState = ScreenState::MAP_SCREEN;
-        return;
+        return GameAction(GameAction::RewardsActionType::SKIP);
     } else if (actionType == "remove") {
-        shop.buyCardRemove(*gc);
-        return;
+        return GameAction(GameAction::RewardsActionType::CARD_REMOVE);
     }
 
     int purchaseIdx;
     ss >> purchaseIdx;
 
     if (actionType[0] == 'c') {
-        shop.buyCard(*gc, purchaseIdx);
-
+        return GameAction(GameAction::RewardsActionType::CARD, purchaseIdx);
     } else if (actionType[0] == 'r') {
-        shop.buyRelic(*gc, purchaseIdx);
-
+        return GameAction(GameAction::RewardsActionType::RELIC, purchaseIdx);
     } else if (actionType[0] == 'p') {
-        shop.buyPotion(*gc, purchaseIdx);
+        return GameAction(GameAction::RewardsActionType::POTION, purchaseIdx);
+    } else {
+        assert(false);
     }
 }
 
@@ -424,9 +412,9 @@ void ConsoleSimulator::printTreasureRoomActions(std::ostream &os) const {
     os << "1: Skip Reward\n";
 }
 
-void ConsoleSimulator::takeTreasureRoomAction(const std::string &action) {
+GameAction ConsoleSimulator::parseTreasureRoomAction(const std::string &action) {
     const int idx = std::stoi(action);
-    gc->chooseTreasureRoomOption(idx == 0);
+    return GameAction(idx);
 }
 
 void ConsoleSimulator::printMapScreenActions(std::ostream &os) const {
@@ -456,9 +444,9 @@ void ConsoleSimulator::printMapScreenActions(std::ostream &os) const {
     }
 }
 
-void ConsoleSimulator::takeMapScreenAction(const std::string &action) {
+GameAction ConsoleSimulator::parseMapScreenAction(const std::string &action) {
     int x = std::stoi(action);
-    gc->transitionToMapNode(x);
+    return GameAction(x);
 }
 
 void ConsoleSimulator::printRewardsScreenActions(std::ostream &os) const {
@@ -514,7 +502,7 @@ void ConsoleSimulator::printRewardsScreenActions(std::ostream &os) const {
 
 }
 
-void ConsoleSimulator::takeRewardScreenAction(const std::string &action) {
+GameAction ConsoleSimulator::parseRewardScreenAction(const std::string &action) {
     std::istringstream ss(action);
 
     std::string takeType;
@@ -526,44 +514,26 @@ void ConsoleSimulator::takeRewardScreenAction(const std::string &action) {
     auto &r = gc->info.rewardsContainer;
 
     if (takeType == "gold") {
-        gc->obtainGold(r.gold[takeIdx]);
-        r.removeGoldReward(takeIdx);
-
+        return GameAction(GameAction::RewardsActionType::GOLD, takeIdx);
     } else if (takeType == "card") {
         int takeCardIdx;
         ss >> takeCardIdx;
 
-        gc->deck.obtain(*gc, r.cardRewards[takeIdx][takeCardIdx]);
-        r.removeCardReward(takeIdx);
-        
+        return GameAction(GameAction::RewardsActionType::CARD, takeIdx, takeCardIdx);
     } else if (takeType == "maxhp") {
-        // singing bowl
-        gc->playerIncreaseMaxHp(2);
-        r.removeCardReward(takeIdx);
+        return GameAction(GameAction::RewardsActionType::CARD, takeIdx, GameAction::SINGING_BOWL_CARD_IDX);
     } else if (takeType == "relic") {
-        gc->obtainRelic(r.relics[takeIdx]);
-        if (r.sapphireKey && takeIdx == r.relicCount-1) {
-            r.sapphireKey = false;
-        }
-        r.removeRelicReward(takeIdx);
-
+        return GameAction(GameAction::RewardsActionType::RELIC, takeIdx);
     } else if (takeType == "emeraldKey") {
-        gc->obtainKey(Key::EMERALD_KEY);
-        r.emeraldKey = false;
-
+        return GameAction(GameAction::RewardsActionType::KEY);
     } else if (takeType == "sapphireKey") {
-        if (r.relicCount > 0) {
-            r.removeRelicReward(r.relicCount-1);
-        }
-        gc->obtainKey(Key::SAPPHIRE_KEY);
-        r.sapphireKey = false;
-
+        return GameAction(GameAction::RewardsActionType::KEY);
     } else if (takeType == "potion") {
-        gc->obtainPotion(r.potions[takeIdx]);
-        r.removePotionReward(takeIdx);
-
+        return GameAction(GameAction::RewardsActionType::POTION, takeIdx);
     } else if (takeType == "skip" || takeType == "proceed") {
-        gc->regainControl();
+        return GameAction(GameAction::RewardsActionType::SKIP);
+    } else {
+        assert(false);
     }
 }
 
@@ -610,9 +580,9 @@ void ConsoleSimulator::printCardSelectScreenActions(std::ostream &os) const {
     }
 }
 
-void ConsoleSimulator::takeCardSelectScreenAction(const std::string &action) {
+GameAction ConsoleSimulator::parseCardSelectScreenAction(const std::string &action) {
     int idx = std::stoi(action);
-    gc->chooseSelectCardScreenOption(idx);
+    return GameAction(idx);
 }
 
 void ConsoleSimulator::printEventActions(std::ostream &os) const {
@@ -1122,16 +1092,15 @@ void ConsoleSimulator::printEventActions(std::ostream &os) const {
     }
 }
 
-void ConsoleSimulator::takeEventAction(const std::string &action) {
+GameAction ConsoleSimulator::parseEventAction(const std::string &action) {
 
     if (gc->curEvent == Event::MATCH_AND_KEEP) {
         int idx1 = std::stoi(action.substr(0, action.find(' ')));
         int idx2 = std::stoi(action.substr(action.find(' ')+1));
-        gc->chooseMatchAndKeepCards(idx1, idx2);
-
+        return GameAction(idx1, idx2);
     } else {
         int idx = std::stoi(action);
-        gc->chooseEventOption(idx);
+        return GameAction(idx);
     }
 
 }
