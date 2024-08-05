@@ -15,6 +15,7 @@
 #include "sim/SimHelpers.h"
 #include "sim/PrintHelpers.h"
 #include "game/Game.h"
+#include "game/GameAction.h"
 
 #include "slaythespire.h"
 
@@ -39,6 +40,13 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("boss_simulation_multiplier", &search::ScumSearchAgent2::bossSimulationMultiplier, "bonus multiplier to the simulation count for boss fights")
         .def_readwrite("pause_on_card_reward", &search::ScumSearchAgent2::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
         .def_readwrite("print_logs", &search::ScumSearchAgent2::printLogs, "when set to true, the agent prints state information as it makes actions")
+        .def("playout_battle", [](search::ScumSearchAgent2 &agent, GameContext &gc) {
+            BattleContext bc;
+            bc.init(gc);
+
+            agent.playoutBattle(bc);
+            bc.exitBattle(gc);
+        }, "playout a battle")
         .def("playout", &search::ScumSearchAgent2::playout);
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
@@ -81,6 +89,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("screen_state", &GameContext::screenState)
 
         .def_readwrite("seed", &GameContext::seed)
+        .def_readwrite("map", &GameContext::map)
         .def_readwrite("cur_map_node_x", &GameContext::curMapNodeX)
         .def_readwrite("cur_map_node_y", &GameContext::curMapNodeY)
         .def_readwrite("cur_room", &GameContext::curRoom)
@@ -105,11 +114,25 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("speedrun_pace", &GameContext::speedrunPace)
         .def_readwrite("note_for_yourself_card", &GameContext::noteForYourselfCard);
 
+    pybind11::class_<GameAction> gameAction(m, "GameAction");
+    gameAction.def("getAllActionsInState", &GameAction::getAllActionsInState);
+    gameAction.def("execute", &GameAction::execute);
+    gameAction.def("getDesc", [](const GameAction &ga, const GameContext &gc) {
+        std::ostringstream oss;
+        ga.printDesc(oss, gc);
+        return oss.str();
+    });
+    gameAction.def("__repr__", [](const GameAction &ga) {
+        std::ostringstream oss;
+        oss << "<GameAction " << ga.bits << ">";
+        return oss.str();
+    });
+
     pybind11::class_<RelicInstance> relic(m, "Relic");
     relic.def_readwrite("id", &RelicInstance::id)
         .def_readwrite("data", &RelicInstance::data);
 
-    pybind11::class_<Map> map(m, "SpireMap");
+    pybind11::class_<Map, std::shared_ptr<Map>> map(m, "SpireMap");
     map.def(pybind11::init<std::uint64_t, int,int,bool>());
     map.def("get_room_type", &sts::py::getRoomType);
     map.def("has_edge", &sts::py::hasEdge);
