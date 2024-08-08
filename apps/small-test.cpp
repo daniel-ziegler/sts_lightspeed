@@ -185,10 +185,10 @@ int main(int argc, const char *argv[]) {
 //    GameContext gc(sts::CharacterClass::IRONCLAD, 10000, 0);
 //
 //
-//    const auto maximums = NNInterface::getInstance()->getObservationMaximums();
+//    const auto maximums = NNInterface::getInstance()->getFixedObservationMaximums();
 //    printVec("maximums", std::cout, maximums.begin(), maximums.end());
 //
-//    const auto observation = NNInterface::getInstance()->getObservation(gc);
+//    const auto observation = NNInterface::getInstance()->getFixedObservation(gc);
 //    printVec("observation", std::cout, observation.begin(), observation.end());
 
 

@@ -27,12 +27,10 @@ PYBIND11_MODULE(slaythespire, m) {
     m.def("play", &sts::py::play, "play Slay the Spire Console");
     m.def("get_seed_str", &SeedHelper::getString, "gets the integral representation of seed string used in the game ui");
     m.def("get_seed_long", &SeedHelper::getLong, "gets the seed string representation of an integral seed");
-    m.def("getNNInterface", &sts::NNInterface::getInstance, "gets the NNInterface object");
 
-    pybind11::class_<NNInterface> nnInterface(m, "NNInterface");
-    nnInterface.def("getObservation", &NNInterface::getObservation, "get observation array given a GameContext")
-        .def("getObservationMaximums", &NNInterface::getObservationMaximums, "get the defined maximum values of the observation space")
-        .def_property_readonly("observation_space_size", []() { return NNInterface::observation_space_size; });
+    m.def("getFixedObservation", &py::getFixedObservation, "get observation array given a GameContext");
+    m.def("getFixedObservationMaximums", &py::getFixedObservationMaximums, "get the defined maximum values of the observation space");
+    m.def("getNNRepresentation", &py::getNNRepresentation, "get the neural network representation of a GameContext");
 
     pybind11::class_<search::ScumSearchAgent2> agent(m, "Agent");
     agent.def(pybind11::init<>());
@@ -51,8 +49,6 @@ PYBIND11_MODULE(slaythespire, m) {
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
     gameContext.def(pybind11::init<CharacterClass, std::uint64_t, int>())
-        .def("pick_reward_card", &sts::py::pickRewardCard, "choose to obtain the card at the specified index in the card reward list")
-        .def("skip_reward_cards", &sts::py::skipRewardCards, "choose to skip the card reward (increases max_hp by 2 with singing bowl)")
         .def("get_card_reward", &sts::py::getCardReward, "return the current card reward list")
         .def_property_readonly("encounter", [](const GameContext &gc) { return gc.info.encounter; })
         .def_property_readonly("deck",
@@ -136,10 +132,42 @@ PYBIND11_MODULE(slaythespire, m) {
     map.def(pybind11::init<std::uint64_t, int,int,bool>());
     map.def("get_room_type", &sts::py::getRoomType);
     map.def("has_edge", &sts::py::hasEdge);
+    map.def("edges", [](const Map &m, int x, int y) {
+        std::vector<int> ret;
+        for (int i = 0; i < m.getNode(x,y).edgeCount; ++i) {
+            ret.push_back(m.getNode(x,y).edges[i]);
+        }
+        return ret;
+    });
     map.def("get_nn_rep", &sts::py::getNNMapRepresentation);
     map.def("__repr__", [](const Map &m) {
         return m.toString(true);
     });
+
+    pybind11::class_<sts::py::NNCardsRepresentation> nn_cards_rep(m, "NNCardRepresentation");
+    nn_cards_rep
+        .def_readwrite("cards", &sts::py::NNCardsRepresentation::cards)
+        .def_readwrite("upgrades", &sts::py::NNCardsRepresentation::upgrades);
+    
+    pybind11::class_<sts::py::NNRelicsRepresentation> nn_relics_rep(m, "NNRelicRepresentation");
+    nn_relics_rep
+        .def_readwrite("relics", &sts::py::NNRelicsRepresentation::relics)
+        .def_readwrite("relic_counters", &sts::py::NNRelicsRepresentation::relicCounters);
+
+    pybind11::class_<sts::py::NNMapRepresentation> nn_map_rep(m, "NNMapRepresentation");
+    nn_map_rep
+        .def_readwrite("xs", &sts::py::NNMapRepresentation::xs)
+        .def_readwrite("ys", &sts::py::NNMapRepresentation::ys)
+        .def_readwrite("room_types", &sts::py::NNMapRepresentation::roomTypes)
+        .def_readwrite("edge_starts", &sts::py::NNMapRepresentation::edgeStarts)
+        .def_readwrite("edge_ends", &sts::py::NNMapRepresentation::edgeEnds);
+    
+    pybind11::class_<sts::py::NNRepresentation> nn_rep(m, "NNRepresentation");
+    nn_rep
+        .def_readwrite("fixed_observation", &sts::py::NNRepresentation::fixedObservation)
+        .def_readwrite("deck", &sts::py::NNRepresentation::deck)
+        .def_readwrite("relics", &sts::py::NNRepresentation::relics)
+        .def_readwrite("map", &sts::py::NNRepresentation::map);
 
     pybind11::class_<Card> card(m, "Card");
     card.def(pybind11::init<CardId>())

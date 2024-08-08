@@ -112,17 +112,17 @@ std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) con
         case ScreenState::REST_ROOM:
             switch (getIdx1()) {
                 case 0:
-                    return os << "coffee dripper";
+                    return os << "rest";
                 case 1:
-                    return os << "fusion hammer";
+                    return os << "smith";
                 case 2:
-                    return os << "ruby key";
+                    return os << "recall";
                 case 3:
-                    return os << "girya";
+                    return os << "lift";
                 case 4:
-                    return os << "peace pipe";
+                    return os << "toke";
                 case 5:
-                    return os << "shovel";
+                    return os << "dig";
                 case 6:
                     return os << "skip rest";
                 default:
