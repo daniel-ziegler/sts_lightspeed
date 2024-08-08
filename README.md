@@ -1,4 +1,4 @@
-# sts_lightspeed
+G# sts_lightspeed
 
 For tree search and simulation of the popular rogue-like deckbuilder game Slay The Spire
 

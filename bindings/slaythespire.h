@@ -12,31 +12,7 @@
 #include "constants/Rooms.h"
 
 namespace sts {
-
-    struct NNInterface {
-        static constexpr int observation_space_size = 412;
-        static constexpr int playerHpMax = 200;
-        static constexpr int playerGoldMax = 1800;
-        static constexpr int cardCountMax = 7;
-
-        const std::vector<int> cardEncodeMap;
-        const std::unordered_map<MonsterEncounter, int> bossEncodeMap;
-
-        static inline NNInterface *theInstance = nullptr;
-
-        NNInterface();
-
-        int getCardIdx(Card c) const;
-        std::array<int,observation_space_size> getObservationMaximums() const;
-        std::array<int,observation_space_size> getObservation(const GameContext &gc) const;
-
-
-        static std::vector<int> createOneHotCardEncodingMap();
-        static std::unordered_map<MonsterEncounter, int> createBossEncodingMap();
-        static NNInterface* getInstance();
-
-    };
-
+    
     namespace search {
         class ScumSearchAgent2;
     }
@@ -46,6 +22,39 @@ namespace sts {
     class Map;
 
     namespace py {
+        static constexpr int fixed_observation_space_size = 5;
+        static constexpr int playerHpMax = 200;
+        static constexpr int playerGoldMax = 1800;
+        static constexpr int cardCountMax = 7;
+        static constexpr int numBosses = 10;
+
+        struct NNCardsRepresentation {
+            std::vector<CardId> cards;
+            std::vector<int> upgrades;
+        };
+        
+        struct NNRelicsRepresentation {
+            std::vector<RelicId> relics;
+            std::vector<int> relicCounters;
+        };
+        
+        struct NNMapRepresentation {
+            std::vector<int> xs;
+            std::vector<int> ys;
+            std::vector<Room> roomTypes;
+            std::vector<int> edgeStarts;
+            std::vector<int> edgeEnds;
+            // todo current pos, burning elite pos
+        };
+        
+        
+        struct NNRepresentation {
+            std::array<int, fixed_observation_space_size> fixedObservation;
+            NNCardsRepresentation deck;
+            NNRelicsRepresentation relics;
+            NNMapRepresentation map;
+            // todo history
+        };
 
         void play();
 
@@ -58,10 +67,22 @@ namespace sts {
         void pickRewardCard(GameContext &gc, Card card);
         void skipRewardCards(GameContext &gc);
 
-        std::vector<int> getNNMapRepresentation(const Map &map);
+        NNMapRepresentation getNNMapRepresentation(const Map &map);
         Room getRoomType(const Map &map, int x, int y);
         bool hasEdge(const Map &map, int x, int y, int x2);
-    }
+        
+        int getBossEncoding(MonsterEncounter boss);
+
+        std::array<int,py::fixed_observation_space_size> getFixedObservationMaximums();
+        std::array<int,py::fixed_observation_space_size> getFixedObservation(const GameContext &gc);
+        py::NNCardsRepresentation getCardRepresentation(const Deck &deck);
+        py::NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics);
+
+        
+        py::NNRepresentation getNNRepresentation(const GameContext &gc);
+
+
+    };
 
 
 }
