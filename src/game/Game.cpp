@@ -292,6 +292,8 @@ RelicTier sts::returnRandomRelicTierElite(Random &relicRng) {
 }
 
 Potion sts::returnRandomPotion(Random &potionRng, CharacterClass cc, bool limited) {
+    assert (CharacterClass::IRONCLAD <= cc && cc <= CharacterClass::WATCHER);
+
     PotionRarity rarity;
 
     int roll = potionRng.random(0,99);

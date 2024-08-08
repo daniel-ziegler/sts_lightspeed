@@ -52,6 +52,7 @@ void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit
     potionCapacity = gc.potionCapacity;
     potions = gc.potions;
 
+    player.cc = gc.cc;
     player.curHp = gc.curHp;
     player.maxHp = gc.maxHp;
     player.gold = gc.gold;
