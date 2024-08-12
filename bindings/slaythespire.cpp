@@ -73,6 +73,7 @@ PYBIND11_MODULE(slaythespire, m) {
                [] (const GameContext &gc) { return std::vector(gc.relics.relics); },
                "returns a copy of the list of relics"
         )
+        .def_readwrite("screen_state_info", &GameContext::info)
         .def("__repr__", [](const GameContext &gc) {
             std::ostringstream oss;
             oss << "<" << gc << ">";
@@ -118,11 +119,52 @@ PYBIND11_MODULE(slaythespire, m) {
         ga.printDesc(oss, gc);
         return oss.str();
     });
+    gameAction.def_property_readonly("rewards_action_type", [](const GameAction &ga) {
+        return ga.getRewardsActionType();
+    });
     gameAction.def("__repr__", [](const GameAction &ga) {
         std::ostringstream oss;
         oss << "<GameAction " << ga.bits << ">";
         return oss.str();
     });
+    
+    pybind11::class_<Rewards> rewards(m, "Rewards");
+    rewards.def_property_readonly("gold", [](const Rewards &r) {
+        return std::vector<int>(r.gold.begin(), r.gold.begin() + r.goldRewardCount);
+    });
+    rewards.def_property_readonly("cards", [](const Rewards &r) {
+        // filter out invalid
+        std::vector<sts::py::NNCardsRepresentation> ret;
+        for (int i = 0; i < r.cardRewardCount; ++i) {
+            const auto &cardReward = r.cardRewards[i];
+            std::vector<CardId> cards;
+            std::vector<int> upgrades;
+            for (int j = 0; j < cardReward.size(); ++j) {
+                if (cardReward[j] != CardId::INVALID) {
+                    cards.push_back(cardReward[j].id);
+                    upgrades.push_back(cardReward[j].getUpgraded());
+                }
+            }
+            ret.push_back({cards, upgrades});
+        }
+        return ret;
+    });
+    rewards.def_property_readonly("relics", [](const Rewards &r) {
+        return std::vector<RelicId>(r.relics.begin(), r.relics.begin() + r.relicCount);
+    });
+    rewards.def_property_readonly("potions", [](const Rewards &r) {
+        return std::vector<Potion>(r.potions.begin(), r.potions.begin() + r.potionCount);
+    });
+    rewards.def_readwrite("emerald_key", &Rewards::emeraldKey);
+    rewards.def_readwrite("sapphire_key", &Rewards::sapphireKey);
+    
+    pybind11::class_<ScreenStateInfo> screenStateInfo(m, "ScreenStateInfo");
+        screenStateInfo
+        //.def_readwrite("encounter", &ScreenStateInfo::encounter)
+        .def_readwrite("select_screen_type", &ScreenStateInfo::selectScreenType)
+        // .def_property_readonly("to_select_cards", )
+        // .def_property_readonly("have_selected_cards", )
+        .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer);
 
     pybind11::class_<RelicInstance> relic(m, "Relic");
     relic.def_readwrite("id", &RelicInstance::id)
@@ -212,6 +254,26 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("REST_ROOM", ScreenState::REST_ROOM)
         .value("SHOP_ROOM", ScreenState::SHOP_ROOM)
         .value("BATTLE", ScreenState::BATTLE);
+
+    pybind11::enum_<CardSelectScreenType> cardSelectScreenType(m, "CardSelectScreenType");
+    cardSelectScreenType.value("INVALID", CardSelectScreenType::INVALID)
+        .value("TRANSFORM", CardSelectScreenType::TRANSFORM)
+        .value("TRANSFORM_UPGRADE", CardSelectScreenType::TRANSFORM_UPGRADE)
+        .value("UPGRADE", CardSelectScreenType::UPGRADE)
+        .value("REMOVE", CardSelectScreenType::REMOVE)
+        .value("DUPLICATE", CardSelectScreenType::DUPLICATE)
+        .value("OBTAIN", CardSelectScreenType::OBTAIN)
+        .value("BOTTLE", CardSelectScreenType::BOTTLE)
+        .value("BONFIRE_SPIRITS", CardSelectScreenType::BONFIRE_SPIRITS);
+        
+    pybind11::enum_<GameAction::RewardsActionType> rewardsActionType(m, "RewardsActionType");
+    rewardsActionType.value("CARD", GameAction::RewardsActionType::CARD)
+        .value("GOLD", GameAction::RewardsActionType::GOLD)
+        .value("KEY", GameAction::RewardsActionType::KEY)
+        .value("POTION", GameAction::RewardsActionType::POTION)
+        .value("RELIC", GameAction::RewardsActionType::RELIC)
+        .value("CARD_REMOVE", GameAction::RewardsActionType::CARD_REMOVE)
+        .value("SKIP", GameAction::RewardsActionType::SKIP);
 
     pybind11::enum_<CharacterClass> characterClass(m, "CharacterClass");
     characterClass.value("IRONCLAD", CharacterClass::IRONCLAD)
