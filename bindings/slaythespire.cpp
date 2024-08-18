@@ -6,6 +6,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <pybind11/functional.h>
+#include <pybind11/detail/internals.h>
 
 #include <sstream>
 #include <algorithm>
@@ -113,6 +114,11 @@ PYBIND11_MODULE(slaythespire, m) {
 
     pybind11::class_<GameAction> gameAction(m, "GameAction");
     gameAction.def("getAllActionsInState", &GameAction::getAllActionsInState);
+    gameAction.def(pybind11::init<std::uint32_t>());  // from bits
+    gameAction.def_readonly("bits", &GameAction::bits);
+    gameAction.def_property_readonly("idx1", &GameAction::getIdx1);
+    gameAction.def_property_readonly("idx2", &GameAction::getIdx2);
+    gameAction.def_property_readonly("idx3", &GameAction::getIdx3);
     gameAction.def("execute", &GameAction::execute);
     gameAction.def("getDesc", [](const GameAction &ga, const GameContext &gc) {
         std::ostringstream oss;
@@ -127,7 +133,7 @@ PYBIND11_MODULE(slaythespire, m) {
         oss << "<GameAction " << ga.bits << ">";
         return oss.str();
     });
-    
+
     pybind11::class_<Rewards> rewards(m, "Rewards");
     rewards.def_property_readonly("gold", [](const Rewards &r) {
         return std::vector<int>(r.gold.begin(), r.gold.begin() + r.goldRewardCount);
@@ -157,7 +163,7 @@ PYBIND11_MODULE(slaythespire, m) {
     });
     rewards.def_readwrite("emerald_key", &Rewards::emeraldKey);
     rewards.def_readwrite("sapphire_key", &Rewards::sapphireKey);
-    
+
     pybind11::class_<ScreenStateInfo> screenStateInfo(m, "ScreenStateInfo");
         screenStateInfo
         //.def_readwrite("encounter", &ScreenStateInfo::encounter)
@@ -190,7 +196,7 @@ PYBIND11_MODULE(slaythespire, m) {
     nn_cards_rep
         .def_readwrite("cards", &sts::py::NNCardsRepresentation::cards)
         .def_readwrite("upgrades", &sts::py::NNCardsRepresentation::upgrades);
-    
+
     pybind11::class_<sts::py::NNRelicsRepresentation> nn_relics_rep(m, "NNRelicRepresentation");
     nn_relics_rep
         .def_readwrite("relics", &sts::py::NNRelicsRepresentation::relics)
@@ -203,7 +209,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("room_types", &sts::py::NNMapRepresentation::roomTypes)
         .def_readwrite("edge_starts", &sts::py::NNMapRepresentation::edgeStarts)
         .def_readwrite("edge_ends", &sts::py::NNMapRepresentation::edgeEnds);
-    
+
     pybind11::class_<sts::py::NNRepresentation> nn_rep(m, "NNRepresentation");
     nn_rep
         .def_readwrite("fixed_observation", &sts::py::NNRepresentation::fixedObservation)
@@ -238,12 +244,27 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_property_readonly("rarity", &Card::getRarity)
         .def_property_readonly("type", &Card::getType);
 
-    pybind11::enum_<GameOutcome> gameOutcome(m, "GameOutcome");
+    auto &internals = pybind11::detail::get_internals();
+    auto pybind11_metaclass = pybind11::reinterpret_borrow<pybind11::object>((PyObject*)internals.default_metaclass);
+    auto standard_metaclass = pybind11::reinterpret_borrow<pybind11::object>((PyObject *)&PyType_Type);
+    pybind11::dict attributes;
+    attributes["__len__"] = pybind11::cpp_function(
+        [](pybind11::object cls) {
+            return pybind11::len(cls.attr("__entries"));
+        }
+        , pybind11::is_method(pybind11::none())
+        );
+    auto enum_metaclass = standard_metaclass(std::string("pybind11_ext_enum")
+        , pybind11::make_tuple(pybind11_metaclass)
+        , attributes);
+
+
+    pybind11::enum_<GameOutcome> gameOutcome(m, "GameOutcome", pybind11::metaclass(enum_metaclass));
     gameOutcome.value("UNDECIDED", GameOutcome::UNDECIDED)
         .value("PLAYER_VICTORY", GameOutcome::PLAYER_VICTORY)
         .value("PLAYER_LOSS", GameOutcome::PLAYER_LOSS);
 
-    pybind11::enum_<ScreenState> screenState(m, "ScreenState");
+    pybind11::enum_<ScreenState> screenState(m, "ScreenState", pybind11::metaclass(enum_metaclass));
     screenState.value("INVALID", ScreenState::INVALID)
         .value("EVENT_SCREEN", ScreenState::EVENT_SCREEN)
         .value("REWARDS", ScreenState::REWARDS)
@@ -255,7 +276,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("SHOP_ROOM", ScreenState::SHOP_ROOM)
         .value("BATTLE", ScreenState::BATTLE);
 
-    pybind11::enum_<CardSelectScreenType> cardSelectScreenType(m, "CardSelectScreenType");
+    pybind11::enum_<CardSelectScreenType> cardSelectScreenType(m, "CardSelectScreenType", pybind11::metaclass(enum_metaclass));
     cardSelectScreenType.value("INVALID", CardSelectScreenType::INVALID)
         .value("TRANSFORM", CardSelectScreenType::TRANSFORM)
         .value("TRANSFORM_UPGRADE", CardSelectScreenType::TRANSFORM_UPGRADE)
@@ -265,7 +286,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("OBTAIN", CardSelectScreenType::OBTAIN)
         .value("BOTTLE", CardSelectScreenType::BOTTLE)
         .value("BONFIRE_SPIRITS", CardSelectScreenType::BONFIRE_SPIRITS);
-        
+
     pybind11::enum_<GameAction::RewardsActionType> rewardsActionType(m, "RewardsActionType");
     rewardsActionType.value("CARD", GameAction::RewardsActionType::CARD)
         .value("GOLD", GameAction::RewardsActionType::GOLD)
@@ -275,14 +296,14 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("CARD_REMOVE", GameAction::RewardsActionType::CARD_REMOVE)
         .value("SKIP", GameAction::RewardsActionType::SKIP);
 
-    pybind11::enum_<CharacterClass> characterClass(m, "CharacterClass");
+    pybind11::enum_<CharacterClass> characterClass(m, "CharacterClass", pybind11::metaclass(enum_metaclass));
     characterClass.value("IRONCLAD", CharacterClass::IRONCLAD)
             .value("SILENT", CharacterClass::SILENT)
             .value("DEFECT", CharacterClass::DEFECT)
             .value("WATCHER", CharacterClass::WATCHER)
             .value("INVALID", CharacterClass::INVALID);
 
-    pybind11::enum_<Room> roomEnum(m, "Room");
+    pybind11::enum_<Room> roomEnum(m, "Room", pybind11::metaclass(enum_metaclass));
     roomEnum.value("SHOP", Room::SHOP)
         .value("REST", Room::REST)
         .value("EVENT", Room::EVENT)
@@ -294,7 +315,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("NONE", Room::NONE)
         .value("INVALID", Room::INVALID);
 
-    pybind11::enum_<CardRarity>(m, "CardRarity")
+    pybind11::enum_<CardRarity>(m, "CardRarity", pybind11::metaclass(enum_metaclass))
         .value("COMMON", CardRarity::COMMON)
         .value("UNCOMMON", CardRarity::UNCOMMON)
         .value("RARE", CardRarity::RARE)
@@ -303,7 +324,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("CURSE", CardRarity::CURSE)
         .value("INVALID", CardRarity::INVALID);
 
-    pybind11::enum_<CardColor>(m, "CardColor")
+    pybind11::enum_<CardColor>(m, "CardColor", pybind11::metaclass(enum_metaclass))
         .value("RED", CardColor::RED)
         .value("GREEN", CardColor::GREEN)
         .value("PURPLE", CardColor::PURPLE)
@@ -311,7 +332,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("CURSE", CardColor::CURSE)
         .value("INVALID", CardColor::INVALID);
 
-    pybind11::enum_<CardType>(m, "CardType")
+    pybind11::enum_<CardType>(m, "CardType", pybind11::metaclass(enum_metaclass))
         .value("ATTACK", CardType::ATTACK)
         .value("SKILL", CardType::SKILL)
         .value("POWER", CardType::POWER)
@@ -319,7 +340,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("STATUS", CardType::STATUS)
         .value("INVALID", CardType::INVALID);
 
-    pybind11::enum_<CardId>(m, "CardId")
+    pybind11::enum_<CardId>(m, "CardId", pybind11::metaclass(enum_metaclass))
         .value("INVALID", CardId::INVALID)
         .value("ACCURACY", CardId::ACCURACY)
         .value("ACROBATICS", CardId::ACROBATICS)
@@ -692,7 +713,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("WRITHE", CardId::WRITHE)
         .value("ZAP", CardId::ZAP);
 
-    pybind11::enum_<MonsterEncounter> meEnum(m, "MonsterEncounter");
+    pybind11::enum_<MonsterEncounter> meEnum(m, "MonsterEncounter", pybind11::metaclass(enum_metaclass));
     meEnum.value("INVALID", ME::INVALID)
         .value("CULTIST", ME::CULTIST)
         .value("JAW_WORM", ME::JAW_WORM)
@@ -758,7 +779,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("MUSHROOMS_EVENT", ME::MUSHROOMS_EVENT)
         .value("MYSTERIOUS_SPHERE_EVENT", ME::MYSTERIOUS_SPHERE_EVENT);
 
-    pybind11::enum_<RelicId> relicEnum(m, "RelicId");
+    pybind11::enum_<RelicId> relicEnum(m, "RelicId", pybind11::metaclass(enum_metaclass));
     relicEnum.value("AKABEKO", RelicId::AKABEKO)
         .value("ART_OF_WAR", RelicId::ART_OF_WAR)
         .value("BIRD_FACED_URN", RelicId::BIRD_FACED_URN)
@@ -949,5 +970,3 @@ PYBIND11_MODULE(slaythespire, m) {
 }
 
 // os.add_dll_directory("C:\\Program Files\\mingw-w64\\x86_64-8.1.0-posix-seh-rt_v6-rev0\\mingw64\\bin")
-
-

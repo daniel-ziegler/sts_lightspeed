@@ -13,7 +13,7 @@ set(CMAKE_CXX_FLAGS  "-Wno-shift-count-overflow -O1")
 add_subdirectory(json)
 add_subdirectory(pybind11)
 
-pybind11_add_module(slaythespire bindings/slaythespire.cpp bindings/bindings-util.cpp bindings/slaythespire.pyi bindings/py.typed ${sts_lightspeed_SOURCES})
+pybind11_add_module(slaythespire bindings/slaythespire.cpp bindings/bindings-util.cpp ${sts_lightspeed_SOURCES})
 target_include_directories(slaythespire PUBLIC include)
 target_include_directories(slaythespire PUBLIC json/single_include)
 target_include_directories(slaythespire PUBLIC bindings)
