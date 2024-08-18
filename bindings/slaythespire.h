@@ -12,7 +12,7 @@
 #include "constants/Rooms.h"
 
 namespace sts {
-    
+
     namespace search {
         class ScumSearchAgent2;
     }
@@ -32,27 +32,28 @@ namespace sts {
             std::vector<CardId> cards;
             std::vector<int> upgrades;
         };
-        
+
         struct NNRelicsRepresentation {
             std::vector<RelicId> relics;
             std::vector<int> relicCounters;
         };
-        
+
         struct NNMapRepresentation {
             std::vector<int> xs;
             std::vector<int> ys;
             std::vector<Room> roomTypes;
             std::vector<int> edgeStarts;
             std::vector<int> edgeEnds;
-            // todo current pos, burning elite pos
+            // todo burning elite pos
         };
-        
-        
+
+
         struct NNRepresentation {
             std::array<int, fixed_observation_space_size> fixedObservation;
             NNCardsRepresentation deck;
             NNRelicsRepresentation relics;
             NNMapRepresentation map;
+            int mapX, mapY;
             // todo history
         };
 
@@ -70,7 +71,7 @@ namespace sts {
         NNMapRepresentation getNNMapRepresentation(const Map &map);
         Room getRoomType(const Map &map, int x, int y);
         bool hasEdge(const Map &map, int x, int y, int x2);
-        
+
         int getBossEncoding(MonsterEncounter boss);
 
         std::array<int,py::fixed_observation_space_size> getFixedObservationMaximums();
@@ -78,7 +79,7 @@ namespace sts {
         py::NNCardsRepresentation getCardRepresentation(const Deck &deck);
         py::NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics);
 
-        
+
         py::NNRepresentation getNNRepresentation(const GameContext &gc);
 
 

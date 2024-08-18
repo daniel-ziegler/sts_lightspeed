@@ -41,7 +41,7 @@ namespace sts::py {
 
         return ret;
     }
-    
+
     NNCardsRepresentation getCardRepresentation(const Deck &deck) {
         NNCardsRepresentation rep;
         for (int i = 0; i < deck.size(); ++i) {
@@ -50,7 +50,7 @@ namespace sts::py {
         }
         return rep;
     }
-    
+
     NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics) {
         NNRelicsRepresentation rep;
         for (int i = 0; i < relics.size(); ++i) {
@@ -59,17 +59,19 @@ namespace sts::py {
         }
         return rep;
     }
-    
-    
+
+
     NNRepresentation getNNRepresentation(const GameContext &gc) {
         NNRepresentation rep;
         rep.fixedObservation = getFixedObservation(gc);
         rep.deck = getCardRepresentation(gc.deck);
         rep.relics = getRelicRepresentation(gc.relics);
         rep.map = getNNMapRepresentation(*gc.map);
+        rep.mapX = gc.curMapNodeX;
+        rep.mapY = gc.curMapNodeY;
         return rep;
     }
-    
+
     int getBossEncoding(MonsterEncounter boss) {
         switch (boss) {
             case ME::SLIME_BOSS:
