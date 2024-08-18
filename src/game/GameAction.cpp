@@ -376,10 +376,10 @@ void executeRewardsAction(GameContext &gc, const GameAction a) {
 
         case GameAction::RewardsActionType::RELIC:
             gc.obtainRelic(r.relics[a.getIdx1()]);
-            r.removeRelicReward(a.getIdx1());
             if (a.getIdx1() == r.relicCount-1) {
                 r.sapphireKey = false;
             }
+            r.removeRelicReward(a.getIdx1());
             break;
 
         case GameAction::RewardsActionType::SKIP:
