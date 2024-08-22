@@ -48,11 +48,15 @@ namespace sts {
         struct NNCardsRepresentation {
             pybind11::array_t<CardId> cards;
             pybind11::array_t<int> upgrades;
+
+            pybind11::dict as_dict() const;
         };
 
         struct NNRelicsRepresentation {
             pybind11::array_t<RelicId> relics;
             pybind11::array_t<int> relicCounters;
+
+            pybind11::dict as_dict() const;
         };
 
         struct NNMapRepresentation {
@@ -62,6 +66,8 @@ namespace sts {
             pybind11::array_t<int> edgeStarts;
             pybind11::array_t<int> edgeEnds;
             // todo burning elite pos
+
+            pybind11::dict as_dict() const;
         };
 
 
@@ -72,6 +78,8 @@ namespace sts {
             NNMapRepresentation map;
             int mapX, mapY;
             // todo history
+
+            pybind11::dict as_dict() const;
         };
 
         void play();

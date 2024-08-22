@@ -22,6 +22,32 @@
 
 
 using namespace sts;
+using namespace pybind11::literals;
+
+pybind11::dict py::NNCardsRepresentation::as_dict() const {
+    return pybind11::dict("cards"_a=cards,
+                          "upgrades"_a=upgrades);
+}
+
+pybind11::dict py::NNRelicsRepresentation::as_dict() const {
+    return pybind11::dict("relics"_a=relics,
+                          "relic_counters"_a=relicCounters);
+}
+
+pybind11::dict py::NNMapRepresentation::as_dict() const {
+    return pybind11::dict("xs"_a=xs,
+                          "ys"_a=ys,
+                          "room_types"_a=roomTypes,
+                          "edge_starts"_a=edgeStarts,
+                          "edge_ends"_a=edgeEnds);
+}
+
+pybind11::dict py::NNRepresentation::as_dict() const {
+    return pybind11::dict("fixed_observation"_a=fixedObservation,
+                        "deck"_a=deck.as_dict(),
+                        "relics"_a=relics.as_dict(),
+                        "map"_a=map.as_dict());
+}
 
 PYBIND11_MODULE(slaythespire, m) {
     m.doc() = "pybind11 example plugin"; // optional module docstring
@@ -40,6 +66,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("pause_on_card_reward", &search::ScumSearchAgent2::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
         .def_readwrite("print_logs", &search::ScumSearchAgent2::printLogs, "when set to true, the agent prints state information as it makes actions")
         .def("playout_battle", [](search::ScumSearchAgent2 &agent, GameContext &gc) {
+            pybind11::gil_scoped_release release;
             BattleContext bc;
             bc.init(gc);
 
@@ -195,12 +222,14 @@ PYBIND11_MODULE(slaythespire, m) {
     pybind11::class_<sts::py::NNCardsRepresentation> nn_cards_rep(m, "NNCardRepresentation");
     nn_cards_rep
         .def_readwrite("cards", &sts::py::NNCardsRepresentation::cards)
-        .def_readwrite("upgrades", &sts::py::NNCardsRepresentation::upgrades);
+        .def_readwrite("upgrades", &sts::py::NNCardsRepresentation::upgrades)
+        .def("as_dict", &sts::py::NNCardsRepresentation::as_dict);
 
     pybind11::class_<sts::py::NNRelicsRepresentation> nn_relics_rep(m, "NNRelicRepresentation");
     nn_relics_rep
         .def_readwrite("relics", &sts::py::NNRelicsRepresentation::relics)
-        .def_readwrite("relic_counters", &sts::py::NNRelicsRepresentation::relicCounters);
+        .def_readwrite("relic_counters", &sts::py::NNRelicsRepresentation::relicCounters)
+        .def("as_dict", &sts::py::NNRelicsRepresentation::as_dict);
 
     pybind11::class_<sts::py::NNMapRepresentation> nn_map_rep(m, "NNMapRepresentation");
     nn_map_rep
@@ -208,14 +237,16 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("ys", &sts::py::NNMapRepresentation::ys)
         .def_readwrite("room_types", &sts::py::NNMapRepresentation::roomTypes)
         .def_readwrite("edge_starts", &sts::py::NNMapRepresentation::edgeStarts)
-        .def_readwrite("edge_ends", &sts::py::NNMapRepresentation::edgeEnds);
+        .def_readwrite("edge_ends", &sts::py::NNMapRepresentation::edgeEnds)
+        .def("as_dict", &sts::py::NNMapRepresentation::as_dict);
 
     pybind11::class_<sts::py::NNRepresentation> nn_rep(m, "NNRepresentation");
     nn_rep
         .def_readwrite("fixed_observation", &sts::py::NNRepresentation::fixedObservation)
         .def_readwrite("deck", &sts::py::NNRepresentation::deck)
         .def_readwrite("relics", &sts::py::NNRepresentation::relics)
-        .def_readwrite("map", &sts::py::NNRepresentation::map);
+        .def_readwrite("map", &sts::py::NNRepresentation::map)
+        .def("as_dict", &sts::py::NNRepresentation::as_dict);
 
     pybind11::class_<Card> card(m, "Card");
     card.def(pybind11::init<CardId>())
