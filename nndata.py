@@ -12,13 +12,13 @@ import torch.nn.functional as F
 import slaythespire as sts
 
 # %%
-# todo pyarrow everything
 @dataclass
 class Choice:
     obs: sts.NNRepresentation
     actions: list[sts.GameAction]
     cards_offered: list[sts.NNCardRepresentation]
     paths_offered: list[int]  # room ids (indices in NNMapRepresentation vectors)
+
 
 # %%
 
@@ -195,3 +195,7 @@ out = net(cards, card_choices)
 torch.softmax(out["card_choice_logits"], dim=-1)
 
 # %%
+import pandas as pd
+df = pd.read_parquet("rollouts.parquet")
+# %%
+df["outcome"].sum()
