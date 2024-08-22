@@ -33,7 +33,7 @@ namespace sts::search {
         int stepsWithSolution = 15;
 
         std::default_random_engine rng;
-        
+
         // public interface
         void playout(GameContext &gc);
 
@@ -47,11 +47,12 @@ namespace sts::search {
         void stepThroughSearchTree(BattleContext &bc, const search::BattleScumSearcher2 &s);
 
         void stepOutOfCombatPolicy(GameContext &gc);
-        void cardSelectPolicy(GameContext &gc);
-        void stepEventPolicy(GameContext &gc);
-        void stepRandom(GameContext &gc);
-        void stepRewardsPolicy(GameContext &gc);
-        void weightedCardRewardPolicy(GameContext &gc);
+        GameAction pickOutOfCombatAction(const GameContext &gc);
+        GameAction pickCardSelectAction(const GameContext &gc);
+        GameAction pickEventAction(const GameContext &gc);
+        GameAction pickRandomAction(const GameContext &gc);
+        GameAction pickRewardsAction(const GameContext &gc);
+        GameAction pickWeightedCardRewardAction(const GameContext &gc);
     };
 
 }
