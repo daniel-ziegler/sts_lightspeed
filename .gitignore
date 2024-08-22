@@ -1,6 +1,8 @@
 /cmake-build-*/
 /files/
+/build/
 /.idea/
+/.cache/
 /CMakeFiles/
 /CMakeCache.txt
 /Makefile
@@ -8,3 +10,7 @@
 .vscode
 /playground
 /cmake_install.cmake
+/test
+/small-test
+/main
+/slaythespire.cpython-310-x86_64-linux-gnu.so
