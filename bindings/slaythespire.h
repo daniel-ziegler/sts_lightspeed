@@ -8,8 +8,16 @@
 #include <vector>
 #include <unordered_map>
 #include <array>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 
+#include "constants/Cards.h"
+#include "constants/MonsterEncounters.h"
+#include "constants/Relics.h"
 #include "constants/Rooms.h"
+#include "game/Card.h"
+#include "game/Deck.h"
+#include "game/RelicContainer.h"
 
 namespace sts {
 
@@ -22,6 +30,15 @@ namespace sts {
     class Map;
 
     namespace py {
+        template<typename T> pybind11::array_t<T> to_numpy(const std::vector<T>& vec) {
+            auto result = pybind11::array_t<T>(vec.size());
+            auto r = result.template mutable_unchecked<1>();
+            for (pybind11::ssize_t i = 0; i < vec.size(); ++i) {
+                r(i) = vec[i];
+            }
+            return result;
+        }
+
         static constexpr int fixed_observation_space_size = 5;
         static constexpr int playerHpMax = 200;
         static constexpr int playerGoldMax = 1800;
@@ -29,27 +46,27 @@ namespace sts {
         static constexpr int numBosses = 10;
 
         struct NNCardsRepresentation {
-            std::vector<CardId> cards;
-            std::vector<int> upgrades;
+            pybind11::array_t<CardId> cards;
+            pybind11::array_t<int> upgrades;
         };
 
         struct NNRelicsRepresentation {
-            std::vector<RelicId> relics;
-            std::vector<int> relicCounters;
+            pybind11::array_t<RelicId> relics;
+            pybind11::array_t<int> relicCounters;
         };
 
         struct NNMapRepresentation {
-            std::vector<int> xs;
-            std::vector<int> ys;
-            std::vector<Room> roomTypes;
-            std::vector<int> edgeStarts;
-            std::vector<int> edgeEnds;
+            pybind11::array_t<int> xs;
+            pybind11::array_t<int> ys;
+            pybind11::array_t<Room> roomTypes;
+            pybind11::array_t<int> edgeStarts;
+            pybind11::array_t<int> edgeEnds;
             // todo burning elite pos
         };
 
 
         struct NNRepresentation {
-            std::array<int, fixed_observation_space_size> fixedObservation;
+            pybind11::array_t<int> fixedObservation;
             NNCardsRepresentation deck;
             NNRelicsRepresentation relics;
             NNMapRepresentation map;
@@ -74,8 +91,8 @@ namespace sts {
 
         int getBossEncoding(MonsterEncounter boss);
 
-        std::array<int,py::fixed_observation_space_size> getFixedObservationMaximums();
-        std::array<int,py::fixed_observation_space_size> getFixedObservation(const GameContext &gc);
+        pybind11::array_t<int> getFixedObservationMaximums();
+        pybind11::array_t<int> getFixedObservation(const GameContext &gc);
         py::NNCardsRepresentation getCardRepresentation(const Deck &deck);
         py::NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics);
 

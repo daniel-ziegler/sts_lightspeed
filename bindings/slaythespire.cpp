@@ -151,7 +151,7 @@ PYBIND11_MODULE(slaythespire, m) {
                     upgrades.push_back(cardReward[j].getUpgraded());
                 }
             }
-            ret.push_back({cards, upgrades});
+            ret.push_back({sts::py::to_numpy(cards), sts::py::to_numpy(upgrades)});
         }
         return ret;
     });

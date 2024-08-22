@@ -4,6 +4,7 @@
 #include <sstream>
 #include <algorithm>
 
+#include "constants/Rooms.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/ScumSearchAgent2.h"
 #include "sim/SimHelpers.h"
@@ -15,8 +16,8 @@
 
 namespace sts::py {
 
-    std::array<int,fixed_observation_space_size> getFixedObservation(const GameContext &gc) {
-        std::array<int,fixed_observation_space_size> ret {};
+    pybind11::array_t<int> getFixedObservation(const GameContext &gc) {
+        std::vector<int> ret(fixed_observation_space_size);
 
         int offset = 0;
 
@@ -26,11 +27,11 @@ namespace sts::py {
         ret[offset++] = gc.floorNum;
         ret[offset++] = getBossEncoding(gc.boss);
 
-        return ret;
+        return to_numpy(ret);
     }
 
-    std::array<int,fixed_observation_space_size> getFixedObservationMaximums() {
-        std::array<int,fixed_observation_space_size> ret {};
+    pybind11::array_t<int> getFixedObservationMaximums() {
+        std::vector<int> ret(fixed_observation_space_size);
         int spaceOffset = 0;
 
         ret[0] = playerHpMax;
@@ -39,25 +40,33 @@ namespace sts::py {
         ret[3] = 60;
         ret[4] = numBosses;
 
-        return ret;
+        return to_numpy(ret);
     }
 
     NNCardsRepresentation getCardRepresentation(const Deck &deck) {
-        NNCardsRepresentation rep;
+        std::vector<CardId> cards;
+        std::vector<int> upgrades;
         for (int i = 0; i < deck.size(); ++i) {
-            rep.cards.push_back(deck.cards[i].id);
-            rep.upgrades.push_back(deck.cards[i].getUpgraded());
+            cards.push_back(deck.cards[i].id);
+            upgrades.push_back(deck.cards[i].getUpgraded());
         }
-        return rep;
+        return NNCardsRepresentation {
+            .cards = to_numpy(cards),
+            .upgrades = to_numpy(upgrades)
+        };
     }
 
     NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics) {
-        NNRelicsRepresentation rep;
+        std::vector<RelicId> relicIds;
+        std::vector<int> relicCounters;
         for (int i = 0; i < relics.size(); ++i) {
-            rep.relics.push_back(relics.relics[i].id);
-            rep.relicCounters.push_back(relics.relics[i].data);
+            relicIds.push_back(relics.relics[i].id);
+            relicCounters.push_back(relics.relics[i].data);
         }
-        return rep;
+        return NNRelicsRepresentation {
+            .relics = to_numpy(relicIds),
+            .relicCounters = to_numpy(relicCounters)
+        };
     }
 
 
@@ -138,17 +147,20 @@ namespace sts::py {
 
     NNMapRepresentation getNNMapRepresentation(const Map &map) {
         std::array<std::array<int, 7>, 16> ids;
-        NNMapRepresentation nnMap;
         int id = 0;
         bool haveLastRow = false;
+        std::vector<int> xs, ys, edgeStarts, edgeEnds;
+        std::vector<Room> roomTypes;
+
+        // First pass: collect data
         for (int y = 0; y < 15; ++y) {
             for (int x = 0; x < 7; ++x) {
                 const MapNode& node = map.getNode(x,y);
                 if (node.room != Room::NONE) {
                     ids[y][x] = id++;
-                    nnMap.roomTypes.push_back(node.room);
-                    nnMap.xs.push_back(x);
-                    nnMap.ys.push_back(y);
+                    roomTypes.push_back(node.room);
+                    xs.push_back(x);
+                    ys.push_back(y);
                     if (y == 14) {
                         haveLastRow = true;
                     }
@@ -157,20 +169,31 @@ namespace sts::py {
         }
         if (haveLastRow) {
             ids[15][3] = id++; // boss
-            nnMap.roomTypes.push_back(Room::BOSS);
+            roomTypes.push_back(Room::BOSS);
+            xs.push_back(3);
+            ys.push_back(15);
         }
+
         for (int y = 0; y < 15; ++y) {
             for (int x = 0; x < 7; ++x) {
                 const MapNode& node = map.getNode(x,y);
-                if (node.room!= Room::NONE) {
+                if (node.room != Room::NONE) {
                     for (int k = 0; k < node.edgeCount; ++k) {
-                        nnMap.edgeStarts.push_back(ids[y][x]);
-                        nnMap.edgeEnds.push_back(ids[y+1][node.edges[k]]);
+                        edgeStarts.push_back(ids[y][x]);
+                        edgeEnds.push_back(ids[y+1][node.edges[k]]);
                     }
                 }
             }
         }
-        return nnMap;
+
+        // Create numpy arrays from collected data
+        return NNMapRepresentation {
+            .xs = to_numpy(xs),
+            .ys = to_numpy(ys),
+            .roomTypes = to_numpy(roomTypes),
+            .edgeStarts = to_numpy(edgeStarts),
+            .edgeEnds = to_numpy(edgeEnds)
+        };
     }
 
     Room getRoomType(const Map &map, int x, int y) {
