@@ -25,7 +25,6 @@ class Choice:
 seed = 777
 gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
 print(gc.map)
-nnmap = gc.map.get_nn_rep()
 
 agent = sts.Agent()
 agent.simulation_count_base = 5000
@@ -92,11 +91,9 @@ list(zip(deck.cards, deck.upgrades))
 gc.screen_state_info.rewards_container.relics
 
 # %%
+nnrep = sts.getNNRepresentation(gc)
+nnrep.map.room_types
 
-gc.screen_state_info.rewards_container.cards[0].cards
-
-# %%
-# actions[0].execute(gc)
 # %%
 
 @dataclass

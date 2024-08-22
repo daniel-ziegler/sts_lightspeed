@@ -7,7 +7,6 @@
 #include "game/Game.h"
 #include "game/Map.h"
 #include "constants/Cards.h"
-#include "slaythespire.h"
 #include "sim/SimHelpers.h"
 #include "sim/search/SimpleAgent.h"
 
