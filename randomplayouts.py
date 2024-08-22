@@ -98,7 +98,7 @@ def random_playout(seed: int, verbose: bool = False):
     return (choices, gc.outcome)
 # %%
 def random_playout_data(seed: int):
-    choices, outcome = random_playout(777)
+    choices, outcome = random_playout(seed)
     df = pd.DataFrame([flatten_dict(c.as_dict()) for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
