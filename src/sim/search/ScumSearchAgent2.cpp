@@ -335,7 +335,11 @@ GameAction search::ScumSearchAgent2::pickWeightedCardRewardAction(const GameCont
         }
 
         if (skipCard) {
-            return GameAction(GameAction::RewardsActionType::CARD, rIdx, 5);
+            if (gc.hasRelic(RelicId::SINGING_BOWL)) {
+                return GameAction(GameAction::RewardsActionType::CARD, rIdx, 5);
+            } else {
+                return GameAction(GameAction::RewardsActionType::SKIP);
+            }
 
         } else {
             return GameAction(GameAction::RewardsActionType::CARD, rIdx, weights[selection].first);
