@@ -65,6 +65,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("boss_simulation_multiplier", &search::ScumSearchAgent2::bossSimulationMultiplier, "bonus multiplier to the simulation count for boss fights")
         .def_readwrite("pause_on_card_reward", &search::ScumSearchAgent2::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
         .def_readwrite("print_logs", &search::ScumSearchAgent2::printLogs, "when set to true, the agent prints state information as it makes actions")
+        .def("pick_gameaction", &search::ScumSearchAgent2::pickOutOfCombatAction)
         .def("playout_battle", [](search::ScumSearchAgent2 &agent, GameContext &gc) {
             pybind11::gil_scoped_release release;
             BattleContext bc;
@@ -159,6 +160,12 @@ PYBIND11_MODULE(slaythespire, m) {
         std::ostringstream oss;
         oss << "<GameAction " << ga.bits << ">";
         return oss.str();
+    });
+    gameAction.def("__eq__", [](const GameAction &self, const GameAction &other) {
+        return self.bits == other.bits;
+    })
+    .def("__hash__", [](const GameAction &ga) {
+        return std::hash<std::uint32_t>{}(ga.bits);
     });
 
     pybind11::class_<Rewards> rewards(m, "Rewards");

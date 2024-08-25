@@ -728,9 +728,9 @@ void BattleContext::executeActions() {
 
     while (true)
     {
-        if (++loopCount > 1000000 || monsters.monstersAlive < 0 || turn > 500) {
+        if (++loopCount > 1000000 || monsters.monstersAlive < 0 || turn > 200) {
             // something went wrong
-            if (turn > 500) {
+            if (turn > 100) {
                 outcome = Outcome::PLAYER_LOSS;
                 break;
             }

@@ -60,7 +60,7 @@ std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) con
             return os << "drink potion " << getIdx1();
         }
     }
-    
+
     switch (gc.screenState) {
         case ScreenState::EVENT_SCREEN:
             if (gc.curEvent == sts::Event::MATCH_AND_KEEP) {
@@ -686,6 +686,10 @@ std::vector<GameAction> getAllRewardActions(const sts::GameContext &gc) {
         for (int x = 0; x < r.cardRewards[i].size(); ++x) {
             actions.emplace_back(GameAction::RewardsActionType::CARD, i, x);
         }
+    }
+
+    if (r.cardRewardCount > 0 && gc.hasRelic(RelicId::SINGING_BOWL)) {
+        actions.emplace_back(GameAction::RewardsActionType::CARD, r.cardRewardCount - 1, 5);
     }
 
     for (int i = 0; i < r.relicCount; ++i) {
