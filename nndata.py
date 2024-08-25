@@ -5,94 +5,12 @@ from enum import IntEnum, auto
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 import torch
 from torch import nn
 import torch.nn.functional as F
 
 import slaythespire as sts
-
-# %%
-@dataclass
-class Choice:
-    obs: sts.NNRepresentation
-    actions: list[sts.GameAction]
-    cards_offered: list[sts.NNCardRepresentation]
-    paths_offered: list[int]  # room ids (indices in NNMapRepresentation vectors)
-
-
-# %%
-
-seed = 777
-gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
-print(gc.map)
-
-agent = sts.Agent()
-agent.simulation_count_base = 5000
-
-# %%
-choices: list[Choice] = []
-
-# %%
-
-while gc.outcome == sts.GameOutcome.UNDECIDED:
-    if gc.screen_state == sts.ScreenState.BATTLE:
-        # print(gc)
-        agent.playout_battle(gc)
-        obs = sts.getNNRepresentation(gc)
-        # print(gc)
-    else:
-        chosen = None
-        actions = sts.GameAction.getAllActionsInState(gc)
-        obs = sts.getNNRepresentation(gc)
-        cards_offered: list[sts.NNCardRepresentation] = []
-        paths_offered: list[int] = []
-        if len(actions) == 1:
-            chosen, = actions
-        elif gc.screen_state == sts.ScreenState.REWARDS:
-            cards_offered = gc.screen_state_info.rewards_container.cards
-            for a in actions:
-                if a.rewards_action_type in (
-                    sts.RewardsActionType.GOLD, sts.RewardsActionType.POTION, sts.RewardsActionType.RELIC,
-                ):
-                    chosen = a
-                    break
-        elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
-            # TODO neow, events
-            chosen = random.choice(actions)
-        elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
-            def xy_to_roomid(x, y):
-                roomid, = [i for i in range(len(obs.map.xs)) if obs.map.xs[i] == x and obs.map.ys[i] == y]
-                return roomid
-            paths_offered = [xy_to_roomid(a.idx1, gc.cur_map_node_y+1) for a in actions]
-        if chosen is None:
-            choices.append(Choice(obs, actions, cards_offered=cards_offered, paths_offered=paths_offered))
-            chosen = random.choice(actions)
-        if chosen is not None:
-            print(chosen.getDesc(gc))
-            chosen.execute(gc)
-        else:
-            break
-
-print(gc.outcome)
-
-# %%
-for c in choices:
-    if c.paths_offered:
-        print(c.paths_offered)
-    if c.cards_offered:
-        for cp in c.cards_offered:
-            print(cp.cards)
-
-# %%
-deck = choices[-1].obs.deck
-list(zip(deck.cards, deck.upgrades))
-
-# %%
-gc.screen_state_info.rewards_container.relics
-
-# %%
-nnrep = sts.getNNRepresentation(gc)
-nnrep.map.room_types
 
 # %%
 
@@ -140,16 +58,23 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.H = H
         self.norm1 = RMSNorm(H.dim, eps=H.norm_eps)
-        self.attn = nn.MultiheadAttention(H.dim, H.n_heads)
+        self.attn = nn.MultiheadAttention(H.dim, H.n_heads, batch_first=True)
         self.norm2 = RMSNorm(H.dim, eps=H.norm_eps)
         self.ffn = FFN(H.dim, H.dim * H.ffn_dim_mult)
 
-    def forward(self, x):
+    def forward(self, x, mask):
         xn = self.norm1(x)
-        xatt, _ = self.attn(xn, xn, xn)
+        xatt, _ = self.attn(xn, xn, xn, key_padding_mask=mask)
         x1 = x + xatt
         x2 = x1 + self.ffn(self.norm2(x1))
         return x2
+
+def pad_sequence(sequences, max_len):
+    return torch.nn.utils.rnn.pad_sequence(
+        [torch.tensor(s) for s in sequences],
+        batch_first=True,
+        padding_value=sts.CardId.INVALID.value
+    )[:, :max_len]
 
 class NN(nn.Module):
     def __init__(self, H: ModelHP):
@@ -157,7 +82,7 @@ class NN(nn.Module):
         self.H = H
 
         self.input_type_embed = nn.Embedding(len(InputType), H.dim)
-        self.card_embed = nn.Embedding(len(sts.CardId), H.dim)
+        self.card_embed = nn.Embedding(len(sts.CardId), H.dim, padding_idx=sts.CardId.INVALID.value)
 
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
@@ -167,17 +92,22 @@ class NN(nn.Module):
         nn.init.zeros_(self.card_out.bias)
 
     def forward(self, deck, card_choices):
-        cards = torch.cat((deck, card_choices), dim=-1)
+        max_deck_len = deck.size(1)
+        max_choices_len = card_choices.size(1)
+
+        cards = torch.cat((deck, card_choices), dim=1)
+        mask = cards == sts.CardId.INVALID.value
         card_x = self.card_embed(cards) + self.input_type_embed(torch.tensor([int(InputType.Card)]))
-        card_x[..., len(deck):, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)]))
+        card_x[:, max_deck_len:, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)]))
 
         x = card_x
         for l in self.layers:
-            x = l(x)
+            x = l(x, mask)
         xn = self.norm(x)
-        card_choice_logits = self.card_out(xn[..., len(deck):, :]).squeeze(-1).float()
+        card_choice_logits = self.card_out(xn[:, max_deck_len:, :]).squeeze(-1).float()
+        card_choice_logits = card_choice_logits.masked_fill(mask[:, max_deck_len:], float('-inf'))
         return dict(
-            card_choice_logits=card_choice_logits
+            card_choice_logits=card_choice_logits,
         )
 
 # %%
@@ -185,17 +115,42 @@ H = ModelHP()
 
 net = NN(H)
 # %%
-rep = sts.getNNRepresentation(gc)
-cards = torch.tensor([int(c) for c in rep.deck.cards], dtype=torch.int32)
-card_choices = torch.tensor([int(c) for c in gc.screen_state_info.rewards_container.cards[0].cards], dtype=torch.int32)
+df = pd.read_parquet("rollouts1.parquet")
 # %%
-out = net(cards, card_choices)
+data_df = df[df["cards_offered.cards"].apply(lambda c: len(c) > 0)]
+len(data_df)
+# %%
+# Split into train and validation sets, ensuring rows with the same seed stay together
+valid_seeds = data_df['seed'].drop_duplicates().sample(frac=0.1, random_state=42)
+valid_df = data_df[data_df['seed'].isin(valid_seeds)]
+train_df = data_df[~data_df['seed'].isin(valid_seeds)]
+print(len(train_df), len(valid_df))
+# %%
+batch = train_df.sample(16)[["obs.deck.cards", "cards_offered.cards"]]
+# %%
+max_deck_len = max(len(d) for d in batch["obs.deck.cards"])
+max_choices_len = max(len(c) for c in batch["cards_offered.cards"])
+
+deck = pad_sequence(batch["obs.deck.cards"].apply(lambda x: x.astype(np.int32)), max_deck_len)
+choices = pad_sequence(batch["cards_offered.cards"].apply(lambda x: x.astype(np.int32)), max_choices_len)
+
+output = net(deck, choices)
+print(output['card_choice_logits'])
 
 # %%
-torch.softmax(out["card_choice_logits"], dim=-1)
+# Test padding with longer batch element
+long_batch = batch.copy()
+long_batch.loc[long_batch.index[0], "obs.deck.cards"] = np.array([7] * 100)  # Big deck
+long_batch.loc[long_batch.index[0], "cards_offered.cards"] = np.array([1, 2, 3, 4, 5])  # More card choices
 
-# %%
-import pandas as pd
-df = pd.read_parquet("rollouts.parquet")
-# %%
-df["outcome"].sum()
+max_deck_len = max(len(d) for d in long_batch["obs.deck.cards"])
+max_choices_len = max(len(c) for c in long_batch["cards_offered.cards"])
+
+long_deck = pad_sequence(long_batch["obs.deck.cards"].apply(lambda x: x.astype(np.int32)), max_deck_len)
+long_choices = pad_sequence(long_batch["cards_offered.cards"].apply(lambda x: x.astype(np.int32)), max_choices_len)
+
+long_output = net(long_deck, long_choices)
+
+# Verify that outputs for unchanged elements are the same
+assert torch.allclose(output['card_choice_logits'][1:], long_output['card_choice_logits'][1:,:3], rtol=1e-4, atol=1e-6)
+print("Padding test passed: outputs for unchanged elements are the same.")

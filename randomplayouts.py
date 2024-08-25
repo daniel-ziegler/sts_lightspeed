@@ -40,11 +40,16 @@ class Choice:
             actions=np.array([a.bits for a in self.actions], dtype=np.int32),
             cards_offered=dict(
                 # TODO preserve 2d structure, doesn't work for pyarrow
-                cards=np.concatenate([o.cards for o in self.cards_offered], axis=0) if self.cards_offered else np.array([], dtype=np.uint16),
-                upgrades=np.concatenate([o.upgrades for o in self.cards_offered], axis=0) if self.cards_offered else np.array([], dtype=np.int32),
+                cards=np.concatenate([o.cards for o in self.cards_offered], axis=0, dtype=np.int32) if self.cards_offered else np.array([], dtype=np.int32),
+                upgrades=np.concatenate([o.upgrades for o in self.cards_offered], axis=0, dtype=np.int32) if self.cards_offered else np.array([], dtype=np.int32),
             ),
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
+            choice=self.choice,
         )
+
+# %%
+seed = 777
+verbose = True
 
 # %%
 
@@ -56,43 +61,43 @@ def random_playout(seed: int, verbose: bool = False):
     choices: list[Choice] = []
 
     while gc.outcome == sts.GameOutcome.UNDECIDED:
-        if gc.screen_state == sts.ScreenState.BATTLE:
-            agent.playout_battle(gc)
-            obs = sts.getNNRepresentation(gc)
-        else:
-            chosen = None
-            actions = sts.GameAction.getAllActionsInState(gc)
-            obs = sts.getNNRepresentation(gc)
-            cards_offered: list[sts.NNCardRepresentation] = []
-            paths_offered: list[int] = []
-            if len(actions) == 1:
-                chosen, = actions
-            elif gc.screen_state == sts.ScreenState.REWARDS:
-                cards_offered = gc.screen_state_info.rewards_container.cards
-                for a in actions:
-                    if a.rewards_action_type in (
-                        sts.RewardsActionType.GOLD, sts.RewardsActionType.POTION, sts.RewardsActionType.RELIC,
-                    ):
-                        chosen = a
-                        break
-            elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
-                # TODO neow, events
-                chosen = random.choice(actions)
-            elif gc.screen_state == sts.ScreenState.REST_ROOM:
-                if gc.cur_hp < 30:
-                    chosen = actions[0]
-            elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
-                def xy_to_roomid(x, y):
-                    roomid, = [i for i in range(len(obs.map.xs)) if obs.map.xs[i] == x and obs.map.ys[i] == y]
-                    return roomid
-                paths_offered = [xy_to_roomid(a.idx1, gc.cur_map_node_y+1) for a in actions]
-            if chosen is None:
-                choice = random.randrange(len(actions))
+        try:
+            if gc.screen_state == sts.ScreenState.BATTLE:
+                agent.playout_battle(gc)
+                obs = sts.getNNRepresentation(gc)
+            else:
+                obs = sts.getNNRepresentation(gc)
+                cards_offered: list[sts.NNCardRepresentation] = []
+                paths_offered: list[int] = []
+                actions = sts.GameAction.getAllActionsInState(gc)
+                if gc.screen_state == sts.ScreenState.REWARDS:
+                    cards_offered = gc.screen_state_info.rewards_container.cards
+                elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
+                    def xy_to_roomid(x, y):
+                        roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
+                        try:
+                            roomid, = roomids
+                        except ValueError:
+                            print(x, y, obs.map.xs, obs.map.ys)
+                            raise
+                        return roomid
+                    paths_offered = [xy_to_roomid(a.idx1, gc.cur_map_node_y+1) for a in actions]
+                chosen = agent.pick_gameaction(gc)
+                try:
+                    choice = actions.index(chosen)
+                except ValueError:
+                    print(gc)
+                    print("chose", chosen.getDesc(gc))
+                    print("options:")
+                    for a in actions:
+                        print(a.getDesc(gc))
+                    raise
                 choices.append(Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, actions=actions, choice=choice))
-                chosen = actions[choice]
-            if verbose:
-                print(chosen.getDesc(gc))
-            chosen.execute(gc)
+                if verbose:
+                    print(chosen.getDesc(gc))
+                chosen.execute(gc)
+        except Exception:
+            break
 
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome)
@@ -108,12 +113,14 @@ def random_playout_data(seed: int):
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-num_threads = 8
-num_playouts = 320
+num_threads = 4
+start_seed = 6400
+num_playouts = 3200
 
 with ThreadPoolExecutor(max_workers=num_threads) as executor:
-    futures = [executor.submit(random_playout_data, s) for s in range(num_playouts)]
+    futures = [executor.submit(random_playout_data, s) for s in range(start_seed, start_seed+num_playouts)]
     df = pd.concat([future.result() for future in tqdm(as_completed(futures), total=num_playouts)])
 
 df.to_parquet("rollouts.parquet", engine="pyarrow")
-# %%
+## %%
+#
