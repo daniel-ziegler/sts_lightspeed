@@ -1362,7 +1362,7 @@ bool GameContext::obtainRelic(RelicId r) {
             openCardSelectScreen(CardSelectScreenType::REMOVE, 2);
             opensScreen = true;
             break;
-        }                                    
+        }
 
         case RelicId::LEES_WAFFLE: {
             playerIncreaseMaxHp(7);
@@ -3732,7 +3732,6 @@ void GameContext::chooseCampfireOption(int idx) {
 
         case 4: { // TOKE
             openCardSelectScreen(CardSelectScreenType::REMOVE, 1);
-            regainControl();
             break;
         }
 
@@ -3832,4 +3831,3 @@ void GameContext::regainControl() {
     }
     regainControlAction(*this);
 }
-
