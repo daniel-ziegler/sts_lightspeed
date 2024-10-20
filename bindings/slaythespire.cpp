@@ -11,6 +11,7 @@
 #include <sstream>
 #include <algorithm>
 
+#include "constants/MonsterEncounters.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/ScumSearchAgent2.h"
 #include "sim/SimHelpers.h"
@@ -223,7 +224,7 @@ PYBIND11_MODULE(slaythespire, m) {
     });
     map.def("get_nn_rep", &sts::py::getNNMapRepresentation);
     map.def("__repr__", [](const Map &m) {
-        return m.toString(true);
+        return m.toString(MonsterEncounter::INVALID);
     });
 
     pybind11::class_<sts::py::NNCardsRepresentation> nn_cards_rep(m, "NNCardRepresentation");

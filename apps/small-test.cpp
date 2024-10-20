@@ -2,6 +2,7 @@
 // Created by keega on 9/9/2021.
 //
 
+#include "constants/MonsterEncounters.h"
 #include "game/SaveFile.h"
 #include "game/GameContext.h"
 #include "game/Game.h"
@@ -169,7 +170,7 @@ int main(int argc, const char *argv[]) {
 //    printAllRelicForBinding();
 
     Map map(sts::Map::fromSeed(1));
-    std::cout << map.toString() << std::endl;
+    std::cout << map.toString(MonsterEncounter::HEXAGHOST) << std::endl;
 
 
     int weights[] = {100,1000,100,10,1,0};

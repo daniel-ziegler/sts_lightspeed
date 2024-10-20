@@ -8,6 +8,7 @@
 #include <array>
 #include <string>
 
+#include "constants/MonsterEncounters.h"
 #include "constants/Rooms.h"
 
 namespace sts {
@@ -44,7 +45,7 @@ namespace sts {
 
         MapNode &getNode(int x, int y);
         [[nodiscard]] const MapNode &getNode(int x, int y) const;
-        [[nodiscard]] std::string toString(bool showRoomSymbols=true) const;
+        [[nodiscard]] std::string toString(MonsterEncounter boss) const;
         static Map fromSeed(std::uint64_t seed, int ascension= 0, int act= 1, bool assignBurningElite=false);
         static Map act4Map();
 
