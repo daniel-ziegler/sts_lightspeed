@@ -6,6 +6,7 @@
 #include <cassert>
 
 #include "game/Map.h"
+#include "constants/MonsterEncounters.h"
 #include "game/Random.h"
 
 using namespace sts;
@@ -362,8 +363,10 @@ std::string paddingGenerator(int length) {
     return ret;
 }
 
-std::string Map::toString(bool showRoomSymbols) const {
+std::string Map::toString(MonsterEncounter boss) const {
     std::string str;
+
+    str.append("           ").append(monsterEncounterStrings[static_cast<int>(boss)]);
 
     int lastRow = 14;
     int left_padding_size = 5;
@@ -419,20 +422,27 @@ std::string Map::toString(bool showRoomSymbols) const {
             auto node = getNode(x, y);
             std::string node_symbol = " ";
 
+            bool isBurningElite = x == burningEliteX && y == burningEliteY;
+
             if (y == lastRow) {
                 for (auto &lower_node : nodes.at(y - 1)) {
                     for (int i = 0; i < lower_node.edgeCount; i++) {
                         if (lower_node.edges[i] == x) {
-                            node_symbol = showRoomSymbols ? node.getRoomSymbol() : '*';
+                            node_symbol = node.getRoomSymbol();
                         }
                     }
                 }
             } else {
                 if (node.edgeCount > 0 || node.room == Room::BOSS) {
-                    node_symbol = showRoomSymbols ? node.getRoomSymbol() : '*';
+                    node_symbol = node.getRoomSymbol();
                 }
             }
-            str.append(" ").append(node_symbol).append(" ");
+            str.append(" ").append(node_symbol);
+            if (isBurningElite) {
+                str.append("+");
+            } else {
+                str.append(" ");
+            }
         }
     }
 
@@ -757,4 +767,3 @@ void assignBurningElite(Map &map, Random &mapRng) {
     map.burningEliteX = eliteRooms.at(idx).x;
     map.burningEliteY = eliteRooms.at(idx).y;
 }
-

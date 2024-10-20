@@ -422,7 +422,7 @@ void ConsoleSimulator::printMapScreenActions(std::ostream &os) const {
     os << "Money: " << gc->gold << "g\n";
     os << "Relics: " << gc->relics << "\n";
     os << "Map Screen: Select Next Map Node.\n";
-    os << gc->map->toString(true) << '\n';
+    os << gc->map->toString(gc->boss) << '\n';
 
     if (gc->curMapNodeY == 14) {
         os << "0 : Advance to Boss" << '\n';
@@ -498,7 +498,7 @@ void ConsoleSimulator::printRewardsScreenActions(std::ostream &os) const {
     } else {
         os << "proceed:\n";
     }
-    
+
 
 }
 
