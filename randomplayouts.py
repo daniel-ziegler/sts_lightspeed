@@ -8,6 +8,7 @@ from tqdm.auto import tqdm
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -114,8 +115,8 @@ def random_playout_data(seed: int):
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 num_threads = 4
-start_seed = 6400
-num_playouts = 3200
+start_seed = 0
+num_playouts = 200
 
 with ThreadPoolExecutor(max_workers=num_threads) as executor:
     futures = [executor.submit(random_playout_data, s) for s in range(start_seed, start_seed+num_playouts)]

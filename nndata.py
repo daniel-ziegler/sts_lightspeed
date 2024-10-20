@@ -69,13 +69,6 @@ class TransformerBlock(nn.Module):
         x2 = x1 + self.ffn(self.norm2(x1))
         return x2
 
-def pad_sequence(sequences, max_len):
-    return torch.nn.utils.rnn.pad_sequence(
-        [torch.tensor(s) for s in sequences],
-        batch_first=True,
-        padding_value=sts.CardId.INVALID.value
-    )[:, :max_len]
-
 class NN(nn.Module):
     def __init__(self, H: ModelHP):
         super().__init__()
@@ -110,14 +103,26 @@ class NN(nn.Module):
             card_choice_logits=card_choice_logits,
         )
 
+def pad_sequence(sequences, max_len, device):
+    return torch.nn.utils.rnn.pad_sequence(
+        [torch.tensor(s, device=device) for s in sequences],
+        batch_first=True,
+        padding_value=sts.CardId.INVALID.value
+    )[:, :max_len]
+
+# %%
+device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
 # %%
 H = ModelHP()
 
 net = NN(H)
+net = net.to(device)
 # %%
-df = pd.read_parquet("rollouts1.parquet")
+df = pd.read_parquet("rollouts.parquet")
+
 # %%
-data_df = df[df["cards_offered.cards"].apply(lambda c: len(c) > 0)]
+data_df: pd.DataFrame = df[df["cards_offered.cards"].apply(lambda c: len(c) > 0)]
 len(data_df)
 # %%
 # Split into train and validation sets, ensuring rows with the same seed stay together
@@ -126,31 +131,39 @@ valid_df = data_df[data_df['seed'].isin(valid_seeds)]
 train_df = data_df[~data_df['seed'].isin(valid_seeds)]
 print(len(train_df), len(valid_df))
 # %%
-batch = train_df.sample(16)[["obs.deck.cards", "cards_offered.cards"]]
+np.random.seed(3)
+
+batch = train_df.sample(16)[["obs.deck.cards", "cards_offered.cards", "choice"]]
+
+
 # %%
-max_deck_len = max(len(d) for d in batch["obs.deck.cards"])
-max_choices_len = max(len(c) for c in batch["cards_offered.cards"])
+def feed_to_net(df):
+    max_deck_len = max(len(d) for d in batch["obs.deck.cards"])
+    max_choices_len = max(len(c) for c in batch["cards_offered.cards"])
 
-deck = pad_sequence(batch["obs.deck.cards"].apply(lambda x: x.astype(np.int32)), max_deck_len)
-choices = pad_sequence(batch["cards_offered.cards"].apply(lambda x: x.astype(np.int32)), max_choices_len)
+    deck = pad_sequence(batch["obs.deck.cards"].apply(lambda x: x.astype(np.int32)), max_deck_len, device=device)
+    choices = pad_sequence(batch["cards_offered.cards"].apply(lambda x: x.astype(np.int32)), max_choices_len, device=device)
 
-output = net(deck, choices)
+    return net(deck, choices)
+# %%
+output = feed_to_net(batch)
 print(output['card_choice_logits'])
 
 # %%
 # Test padding with longer batch element
 long_batch = batch.copy()
-long_batch.loc[long_batch.index[0], "obs.deck.cards"] = np.array([7] * 100)  # Big deck
-long_batch.loc[long_batch.index[0], "cards_offered.cards"] = np.array([1, 2, 3, 4, 5])  # More card choices
-
-max_deck_len = max(len(d) for d in long_batch["obs.deck.cards"])
-max_choices_len = max(len(c) for c in long_batch["cards_offered.cards"])
-
-long_deck = pad_sequence(long_batch["obs.deck.cards"].apply(lambda x: x.astype(np.int32)), max_deck_len)
-long_choices = pad_sequence(long_batch["cards_offered.cards"].apply(lambda x: x.astype(np.int32)), max_choices_len)
-
-long_output = net(long_deck, long_choices)
+long_batch.at[long_batch.index[0], "obs.deck.cards"] #  = np.array([7] * 100)  # Big deck
+# long_batch.at[long_batch.index[0], "cards_offered.cards"] = np.array([1, 2, 3, 4, 5])  # More card choices
+# %%
+long_output = feed_to_net(long_batch)
 
 # Verify that outputs for unchanged elements are the same
-assert torch.allclose(output['card_choice_logits'][1:], long_output['card_choice_logits'][1:,:3], rtol=1e-4, atol=1e-6)
+assert torch.allclose(output['card_choice_logits'][1:], long_output['card_choice_logits'][1:,:output['card_choice_logits'].size(1)], rtol=1e-4, atol=1e-6)
 print("Padding test passed: outputs for unchanged elements are the same.")
+# %%
+loss = F.nll_loss(F.log_softmax(output['card_choice_logits'], dim=1), torch.tensor(batch['choice'].to_numpy(), device=device))
+
+# %%
+batch['choice'].to_numpy()
+# %%
+output['card_choice_logits'].shape
