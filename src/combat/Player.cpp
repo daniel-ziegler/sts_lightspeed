@@ -126,11 +126,11 @@ int Player::getStatusRuntime(PlayerStatus s) const {
 }
 
 void Player::gainBlock(BattleContext &bc, int amount) {
-    if (amount <= 0) {
+    if (amount <= 0 || block >= 999) {
         return;
     }
 
-    block += amount;
+    block = std::min(999, block + amount);
 
     if (hasStatus<PS::JUGGERNAUT>()) {
         bc.addToBot(Actions::DamageRandomEnemy(getStatus<PS::JUGGERNAUT>()));
@@ -987,15 +987,3 @@ namespace sts {
 
 
 }
-
-
-
-
-
-
-
-
-
-
-
-
