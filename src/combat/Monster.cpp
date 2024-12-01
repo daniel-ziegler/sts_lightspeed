@@ -732,6 +732,11 @@ int Monster::calculateDamageToPlayer(const BattleContext &bc, int baseDamage) co
 void Monster::attackPlayerHelper(BattleContext &bc, int baseDamage, int times) {
     const int damage = calculateDamageToPlayer(bc, baseDamage);
 
+    if (times > 30) {
+        std::cout << "attack times was " << times << ", limiting to 30\n";
+        times = 30;
+    }
+
     for (int i = 0; i < times; i++) {
         bc.addToBot(Actions::AttackPlayer(idx, damage));
     }
