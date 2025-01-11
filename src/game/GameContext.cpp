@@ -1427,6 +1427,16 @@ bool GameContext::obtainRelic(RelicId r) {
             break;
         }
 
+        case RelicId::ORRERY: {
+            Rewards reward;
+            for (int i = 0; i < 5; ++i) {
+                reward.addCardReward(createCardReward(curRoom));
+            }
+            openCombatRewardScreen(reward);
+            opensScreen = true;
+            break;
+        }
+
         case RelicId::STRAWBERRY: {
             playerIncreaseMaxHp(7);
             break;
