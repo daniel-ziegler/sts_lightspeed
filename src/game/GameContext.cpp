@@ -3339,7 +3339,11 @@ void GameContext::chooseEventOption(int idx) {
                 if (result || unfavorable) {
                     deck.obtain(*this, CardId::WRITHE);
                 }
-                regainControl();
+                auto relic = returnRandomRelic(returnRandomRelicTier(relicRng, 1));
+                bool screenUp = obtainRelic(relic);
+                if (!screenUp) {
+                    regainControl();
+                }
 
             } else if (idx == 1) {
                 regainControl();
