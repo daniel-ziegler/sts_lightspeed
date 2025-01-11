@@ -5,7 +5,7 @@
 * at each choice, append all reprs (efficiently?) into dataframe
 * record game outcome (win/loss, score, final floor) next to each datapoint in dataframe for game
 * concat a bunch of games, dump into parquet
-- change randomplayouts.Choice into uniform representation, list of actions with associated data for each
+- follow through on randomplayouts.Choice change into set of action types with associated data
 
 
 ## reprs

@@ -8,7 +8,7 @@ project(
 file (GLOB_RECURSE sts_lightspeed_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_FLAGS  "-Wno-shift-count-overflow -O1")
+set(CMAKE_CXX_FLAGS  "-Wno-shift-count-overflow -O3")
 
 add_subdirectory(json)
 add_subdirectory(pybind11)

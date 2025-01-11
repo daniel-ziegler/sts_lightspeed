@@ -41,7 +41,7 @@ namespace sts {
 #else
         std::array<Action, capacity> arr;
 #endif
-        
+
         void clear();
         void pushFront(Action a);
         void pushBack(Action a);
@@ -50,7 +50,7 @@ namespace sts {
         [[nodiscard]] int getCapacity() const;
         Action& operator[](int index);
         const Action& operator[](int index) const;
-        
+
         bool operator==(const ActionQueue &rhs) const {
             if (size != rhs.size) {
                 return false;
@@ -138,7 +138,7 @@ namespace sts {
 #endif
         return arr[(front + index) % capacity];
     }
-    
+
     template<int capacity> std::ostream& operator<<(std::ostream &os, const ActionQueue<capacity> &queue) {
         os << "[";
         for (int i = 0; i < queue.size; i++) {
