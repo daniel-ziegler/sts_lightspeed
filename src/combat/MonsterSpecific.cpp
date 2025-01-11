@@ -1463,10 +1463,12 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
 
         case MMID::DARKLING_REINCARNATE:
             // revive with 50% hp
-            // todo does it heep its buffs and debuffs?
             curHp = maxHp / 2;
             halfDead = false;
             ++bc.monsters.monstersAlive;
+
+            removeDebuffs();
+            resetAllStatusEffects();
 
             buff<MS::REGROW>();
             if (bc.player.hasRelic<R::PHILOSOPHERS_STONE>()) {

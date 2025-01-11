@@ -3,6 +3,7 @@
 //
 
 #include "combat/BattleContext.h"
+#include "constants/Cards.h"
 #include "game/GameContext.h"
 #include "game/Game.h"
 
@@ -909,7 +910,7 @@ void BattleContext::useCard() {
     addToBot(Actions::OnAfterCardUsed());
     triggerOnOtherCardPlayed(c);
 
-    if (!item.purgeOnUse) { // todo change to checking the card queue item
+    if (!item.purgeOnUse) {
         cards.removeFromHandById(c.uniqueId);
         if (c.costForTurn > 0 && !c.isFreeToPlay(*this) && !item.autoplay && !(player.hasStatus<PS::CORRUPTION>() && c.getType() == CardType::SKILL)) {
             player.useEnergy(c.costForTurn);
@@ -1344,7 +1345,7 @@ void BattleContext::useSkillCard() {
             bool hasAttack = false;
             for (int i = 0; i < cards.cardsInHand; ++i) {
                 if (cards.hand[i].getType() == CardType::ATTACK) {
-                    hasAttack = false;
+                    hasAttack = true;
                     break;
                 }
             }
@@ -1877,10 +1878,10 @@ void BattleContext::onUsePowerCard() {
         mummifiedHandOnUsePower();
     }
 
-//    auto &m = monsters.optionMap[2];
-//    if (m.hasStatusInternal<MS::CURIOSITY>()) {
-//        m.buff<MS::STRENGTH>(m.getStatus<MS::CURIOSITY>());
-//    }
+    auto &m = monsters.arr[2];
+    if (m.isAlive() && m.hasStatus<MS::CURIOSITY>()) {
+        m.buff<MS::STRENGTH>(m.getStatus<MS::CURIOSITY>());
+    }
 }
 
 void BattleContext::onUseStatusOrCurseCard() {
