@@ -14,6 +14,10 @@ import slaythespire as sts
 from randomplayouts import ActionType
 from slaythespire import getFixedObservationMaximums
 
+# Constants for data processing
+MAX_DECK_SIZE = 60  # Should be enough for most decks
+MAX_CHOICES = 10    # Usually 3-4, but can be more in edge cases
+
 # %%
 torch.set_float32_matmul_precision('high')
 
@@ -92,9 +96,9 @@ class TransformerBlock(nn.Module):
         self.norm2 = RMSNorm(H.dim, eps=H.norm_eps)
         self.ffn = FFN(H.dim, H.dim * H.ffn_dim_mult)
 
-    def forward(self, x, attn_mask):
+    def forward(self, x, pos_mask):
         xn = self.norm1(x)
-        xatt, _ = self.attn(xn, xn, xn, attn_mask=None, key_padding_mask=attn_mask)
+        xatt, _ = self.attn(xn, xn, xn, attn_mask=None, key_padding_mask=pos_mask)
         x1 = x + xatt
         x2 = x1 + self.ffn(self.norm2(x1))
         return x2
@@ -144,13 +148,13 @@ class NN(nn.Module):
         ], dim=1)
         
         # Add fixed obs token to mask (False = don't mask)
-        attn_mask = torch.cat([
+        pos_mask = torch.cat([
             torch.zeros(mask.size(0), 1, device=mask.device, dtype=mask.dtype),
             mask
         ], dim=1)
 
         for l in self.layers:
-            x = l(x, attn_mask)
+            x = l(x, pos_mask)
         xn = self.norm(x)
         
         card_x = xn[:, 1+max_deck_len:, :]
@@ -176,9 +180,15 @@ net = torch.compile(net, mode="reduce-overhead")
 df = pd.read_parquet("rollouts0_6000.parquet")
 
 # %%
-data_df: pd.DataFrame = df[df.apply(lambda r: r["chosen_idx"] < len(r["cards_offered.cards"]), axis=1)]
+data_df: pd.DataFrame = df[
+    df.apply(lambda r: (
+        r["chosen_idx"] < len(r["cards_offered.cards"]) and  # Original check
+        r["chosen_idx"] < MAX_CHOICES  # Use constant
+    ), axis=1)
+]
 assert (data_df["chosen_type"] == ActionType.CARD).all()
-len(data_df)
+print(f"Filtered out {len(df) - len(data_df)} rows with chosen_idx >= {MAX_CHOICES}")
+print(f"Remaining rows: {len(data_df)}")
 
 # %%
 # Split into train and validation sets, ensuring rows with the same seed stay together
@@ -224,25 +234,30 @@ class SlayDataset(torch.utils.data.Dataset):
         }
 
 def collate_fn(batch):
-    # Get max lengths
-    max_deck_len = max(len(x['deck']) for x in batch)
-    max_choices_len = max(len(x['choices']) for x in batch)
+    # Use fixed maximum sizes
+    # MAX_DECK_SIZE defined at top of file
+    # MAX_CHOICES defined at top of file
+    
+    # Validate chosen_idx
+    for x in batch:
+        assert x['chosen_idx'] < MAX_CHOICES, f"chosen_idx {x['chosen_idx']} >= MAX_CHOICES {MAX_CHOICES}"
+        assert x['chosen_idx'] < len(x['choices']), f"chosen_idx {x['chosen_idx']} >= choices length {len(x['choices'])}"
     
     # Prepare arrays
-    deck = torch.full((len(batch), max_deck_len), sts.CardId.INVALID.value, dtype=torch.int32)
-    deck_upgrades = torch.zeros((len(batch), max_deck_len), dtype=torch.int32)
-    choices = torch.full((len(batch), max_choices_len), sts.CardId.INVALID.value, dtype=torch.int32)
-    choice_upgrades = torch.zeros((len(batch), max_choices_len), dtype=torch.int32)
+    deck = torch.full((len(batch), MAX_DECK_SIZE), sts.CardId.INVALID.value, dtype=torch.int32)
+    deck_upgrades = torch.zeros((len(batch), MAX_DECK_SIZE), dtype=torch.int32)
+    choices = torch.full((len(batch), MAX_CHOICES), sts.CardId.INVALID.value, dtype=torch.int32)
+    choice_upgrades = torch.zeros((len(batch), MAX_CHOICES), dtype=torch.int32)
     fixed_obs = torch.zeros((len(batch), len(getFixedObservationMaximums())), dtype=torch.int32)
     chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
     outcome = torch.zeros(len(batch), dtype=torch.float32)
     
     # Fill arrays
     for i, x in enumerate(batch):
-        deck[i, :len(x['deck'])] = torch.from_numpy(x['deck'])
-        deck_upgrades[i, :len(x['deck_upgrades'])] = torch.from_numpy(x['deck_upgrades'])
-        choices[i, :len(x['choices'])] = torch.from_numpy(x['choices'])
-        choice_upgrades[i, :len(x['choice_upgrades'])] = torch.from_numpy(x['choice_upgrades'])
+        deck[i, :min(len(x['deck']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck'])[:MAX_DECK_SIZE]
+        deck_upgrades[i, :min(len(x['deck_upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck_upgrades'])[:MAX_DECK_SIZE]
+        choices[i, :min(len(x['choices']), MAX_CHOICES)] = torch.from_numpy(x['choices'])[:MAX_CHOICES]
+        choice_upgrades[i, :min(len(x['choice_upgrades']), MAX_CHOICES)] = torch.from_numpy(x['choice_upgrades'])[:MAX_CHOICES]
         fixed_obs[i] = torch.from_numpy(x['fixed_obs'])
         chosen_idx[i] = x['chosen_idx']
         outcome[i] = x['outcome']
