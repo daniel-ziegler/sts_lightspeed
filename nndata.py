@@ -40,8 +40,8 @@ class SinusoidalEmbedding(nn.Module):
         assert dim % 2 == 0, "Embedding dimension must be even"
         self.dim = dim
         half_dim = dim // 2
-        emb = torch.log(torch.tensor(1000.0)) / (half_dim - 1)
-        self.register_buffer('inv_freq', torch.exp(torch.arange(half_dim) * -emb))
+        emb = torch.log(torch.tensor(10000.0)) / (half_dim - 1)
+        self.register_buffer('inv_freq', torch.exp(torch.arange(half_dim) * -emb) * 10)
         self.out_dim = dim * n_features
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -168,16 +168,13 @@ H = ModelHP()
 
 net = NN(H)
 net = net.to(device)
-net.fixed_obs_embed = torch.compile(net.fixed_obs_embed)
-net.fixed_obs_proj = torch.compile(net.fixed_obs_proj)
-for i, l in enumerate(net.layers):
-    net.layers[i] = torch.compile(l)
+net = torch.compile(net, mode="reduce-overhead")
 
 # %%
 print(net.fixed_obs_embed.inv_freq)
 # %%
-# df = pd.read_parquet("rollouts0_100000.parquet")
-df = pd.read_parquet("rollouts0_6000.parquet")
+df = pd.read_parquet("rollouts0_100000.parquet")
+# df = pd.read_parquet("rollouts0_6000.parquet")
 
 # %%
 data_df: pd.DataFrame = df[df.apply(lambda r: r["chosen_idx"] < len(r["cards_offered.cards"]), axis=1)]
@@ -208,7 +205,7 @@ np.random.seed(3)
 
 
 # %%
-def feed_to_net(df):
+def feed_to_net(batch):
     max_deck_len = max(len(d) for d in batch["obs.deck.cards"])
     max_choices_len = max(len(c) for c in batch["cards_offered.cards"])
 
@@ -243,6 +240,30 @@ save_path = f"net.outcome.lr{lr:.1e}.wd{weight_decay:.1e}.pt"
 
 # %%
 do_training = True
+
+def train(batch, opt, device):
+    """
+    Perform one training step.
+    Returns (loss, accuracy) tuple
+    """
+    output = feed_to_net(batch)
+    
+    chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
+    batch_indices = torch.arange(len(batch), device=device)
+    chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
+    
+    targets = torch.tensor(batch['outcome'].to_numpy(), device=device, dtype=torch.float32)
+    loss = F.binary_cross_entropy_with_logits(chosen_logits, targets)
+    
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+
+    with torch.no_grad():
+        accuracy = ((chosen_logits >= 0) == targets).float().mean()
+    
+    return loss.item(), accuracy.item()
+
 # %%
 if do_training:
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
@@ -251,21 +272,10 @@ if do_training:
         print(f"Epoch {epoch}")
         for i in range(len(train_df_shuffled) // batch_size):
             batch = train_df_shuffled.iloc[i*batch_size:(i+1)*batch_size]
-            output = feed_to_net(batch)
-            
-            chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
-            batch_indices = torch.arange(len(batch), device=device)
-            chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
-            
-            targets = torch.tensor(batch['outcome'].to_numpy(), device=device, dtype=torch.float32)
-            loss = F.binary_cross_entropy_with_logits(chosen_logits, targets)
-            
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+            loss, acc = train(batch, opt, device)
 
             if i % 20 == 0:
-                print(f"{i}: {loss.item():.4f}")
+                print(f"{i}: loss={loss:.4f}, acc={acc:.3f}")
             if i % 1000 == 0 or i == len(train_df_shuffled) // batch_size - 1:
                 torch.save(net.state_dict(), f"net.{i}.pt")
                 print(f"{i}: Validating")
@@ -289,8 +299,6 @@ if do_training:
                     print(f"Valid loss: {np.mean(valid_losses)}")
                     acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
                     print(f"Valid acc: {acc}")
-
-
 
     torch.save(net.state_dict(), save_path)
 
