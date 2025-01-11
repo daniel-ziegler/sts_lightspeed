@@ -203,60 +203,62 @@ batch_size = 128
 # %%
 lr = 5e-5
 weight_decay = 1e-3
-opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
 
 # %%
 save_path = f"net.outcome.lr{lr:.1e}.wd{weight_decay:.1e}.pt"
 
 # %%
-for epoch in range(2):
-    train_df_shuffled = train_df.sample(frac=1)
-    print(f"Epoch {epoch}")
-    for i in range(len(train_df_shuffled) // batch_size):
-        batch = train_df_shuffled.iloc[i*batch_size:(i+1)*batch_size]
-        output = feed_to_net(batch)
-        
-        chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
-        batch_indices = torch.arange(len(batch), device=device)
-        chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
-        
-        targets = torch.tensor(batch['outcome'].to_numpy(), device=device, dtype=torch.float32)
-        loss = F.binary_cross_entropy_with_logits(chosen_logits, targets)
-        
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-
-        if i % 20 == 0:
-            print(f"{i}: {loss.item():.4f}")
-        if i % 1000 == 0 or i == len(train_df_shuffled) // batch_size - 1:
-            torch.save(net.state_dict(), f"net.{i}.pt")
-            print(f"{i}: Validating")
-            valid_losses = []
-            valid_preds = []
-            valid_targets = []
-            with torch.no_grad():
-                for j in range(len(valid_df) // batch_size):
-                    batch = valid_df.iloc[j*batch_size:(j+1)*batch_size]
-                    output = feed_to_net(batch)
-                    chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
-                    batch_indices = torch.arange(len(batch), device=device)
-                    chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
-                    
-                    targets = torch.tensor(batch['outcome'].to_numpy(), device=device)
-                    loss = F.binary_cross_entropy_with_logits(chosen_logits, targets.float())
-                    pred = chosen_logits >= 0
-                    valid_losses.append(loss.item())
-                    valid_targets.append(targets.numpy(force=True))
-                    valid_preds.append(pred.numpy(force=True))
-                print(f"Valid loss: {np.mean(valid_losses)}")
-                acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
-                print(f"Valid acc: {acc}")
-
-
-
+do_training = False
 # %%
-torch.save(net.state_dict(), save_path)
+if do_training:
+    opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
+    for epoch in range(2):
+        train_df_shuffled = train_df.sample(frac=1)
+        print(f"Epoch {epoch}")
+        for i in range(len(train_df_shuffled) // batch_size):
+            batch = train_df_shuffled.iloc[i*batch_size:(i+1)*batch_size]
+            output = feed_to_net(batch)
+            
+            chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
+            batch_indices = torch.arange(len(batch), device=device)
+            chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
+            
+            targets = torch.tensor(batch['outcome'].to_numpy(), device=device, dtype=torch.float32)
+            loss = F.binary_cross_entropy_with_logits(chosen_logits, targets)
+            
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+            if i % 20 == 0:
+                print(f"{i}: {loss.item():.4f}")
+            if i % 1000 == 0 or i == len(train_df_shuffled) // batch_size - 1:
+                torch.save(net.state_dict(), f"net.{i}.pt")
+                print(f"{i}: Validating")
+                valid_losses = []
+                valid_preds = []
+                valid_targets = []
+                with torch.no_grad():
+                    for j in range(len(valid_df) // batch_size):
+                        batch = valid_df.iloc[j*batch_size:(j+1)*batch_size]
+                        output = feed_to_net(batch)
+                        chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
+                        batch_indices = torch.arange(len(batch), device=device)
+                        chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
+                        
+                        targets = torch.tensor(batch['outcome'].to_numpy(), device=device)
+                        loss = F.binary_cross_entropy_with_logits(chosen_logits, targets.float())
+                        pred = chosen_logits >= 0
+                        valid_losses.append(loss.item())
+                        valid_targets.append(targets.numpy(force=True))
+                        valid_preds.append(pred.numpy(force=True))
+                    print(f"Valid loss: {np.mean(valid_losses)}")
+                    acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
+                    print(f"Valid acc: {acc}")
+
+
+
+    torch.save(net.state_dict(), save_path)
 
 # %%
 state = torch.load(save_path, weights_only=True, map_location=device)
@@ -279,16 +281,22 @@ batch_indices = torch.arange(len(batch), device=device)
 for i in range(min(20, len(batch))):
     probs = all_probs[i]
     chosen_idx = chosen_indices[i]
+    cards_offered = batch.iloc[i]['cards_offered.cards']
+    upgrades = batch.iloc[i]['cards_offered.upgrades']
+    
     prob_strs = []
-    for j, p in enumerate(probs):
-        if p == float('-inf'):  # Skip masked values
+    for j, (card_id, upgrade) in enumerate(zip(cards_offered, upgrades)):
+        if probs[j] == float('-inf'):  # Skip masked values
             continue
-        prob_str = f"{p:.3f}"
+        card = sts.Card(sts.CardId(card_id), upgrade)
+        prob_str = f"{card}({probs[j]:.3f})"
         if j == chosen_idx:
             prob_str = f"[{prob_str}]"  # Mark chosen probability with brackets
         prob_strs.append(prob_str)
     print(f"Example {i}: {', '.join(prob_strs)}")
     print(batch.iloc[i])
+    print()
+    
 
 # %%
 import matplotlib.pyplot as plt
@@ -346,39 +354,42 @@ plt.grid(True)
 plt.show()
 
 # %%
-# Find optimal threshold
+# Find optimal threshold based on accuracy
 thresholds = np.arange(0, 1, 0.01)
-f1_scores = []
+accuracies = []
 for threshold in thresholds:
     predictions = (valid_preds >= threshold).astype(int)
-    tp = np.sum((predictions == 1) & (valid_targets == 1))
-    fp = np.sum((predictions == 1) & (valid_targets == 0))
-    fn = np.sum((predictions == 0) & (valid_targets == 1))
+    accuracy = np.mean(predictions == valid_targets)
+    accuracies.append(accuracy)
 
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-    f1_scores.append(f1)
-
-optimal_idx = np.argmax(f1_scores)
+optimal_idx = np.argmax(accuracies)
 optimal_threshold = thresholds[optimal_idx]
-optimal_f1 = f1_scores[optimal_idx]
+best_accuracy = accuracies[optimal_idx]
 
 print(f'Optimal threshold: {optimal_threshold:.2f}')
-print(f'Best F1 score: {optimal_f1:.3f}')
+print(f'Best accuracy: {best_accuracy:.3f}')
 
-# Plot F1 scores vs thresholds
+# Plot accuracies vs thresholds
 plt.figure(figsize=(10, 6))
-plt.plot(thresholds, f1_scores)
+plt.plot(thresholds, accuracies)
 plt.axvline(x=optimal_threshold, color='r', linestyle='--', label=f'Optimal threshold = {optimal_threshold:.2f}')
 plt.xlabel('Threshold')
-plt.ylabel('F1 Score')
-plt.title('F1 Score vs Classification Threshold')
+plt.ylabel('Accuracy')
+plt.title('Accuracy vs Classification Threshold')
 plt.legend()
 plt.grid(True)
 plt.show()
 
-# Print accuracy at optimal threshold
+# Print confusion matrix at optimal threshold
 predictions = (valid_preds >= optimal_threshold).astype(int)
-accuracy = np.mean(predictions == valid_targets)
-print(f'Accuracy at optimal threshold: {accuracy:.3f}')
+tp = np.sum((predictions == 1) & (valid_targets == 1))
+tn = np.sum((predictions == 0) & (valid_targets == 0))
+fp = np.sum((predictions == 1) & (valid_targets == 0))
+fn = np.sum((predictions == 0) & (valid_targets == 1))
+
+print("\nConfusion Matrix:")
+print(f"True Positives: {tp}")
+print(f"True Negatives: {tn}")
+print(f"False Positives: {fp}")
+print(f"False Negatives: {fn}")
+print(f"Accuracy: {(tp + tn)/(tp + tn + fp + fn):.3f}")

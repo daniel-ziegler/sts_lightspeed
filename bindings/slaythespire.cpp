@@ -257,9 +257,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("as_dict", &sts::py::NNRepresentation::as_dict);
 
     pybind11::class_<Card> card(m, "Card");
-    card.def(pybind11::init<CardId>())
+    card.def(pybind11::init<CardId, int>())
         .def("__repr__", [](const Card &c) {
-            std::string s("<slaythespire.Card ");
+            std::string s("<");
             s += c.getName();
             if (c.isUpgraded()) {
                 s += '+';
