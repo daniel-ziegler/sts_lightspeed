@@ -14,6 +14,8 @@ import slaythespire as sts
 from randomplayouts import ActionType
 from slaythespire import getFixedObservationMaximums
 
+# %%
+torch.set_float32_matmul_precision('high')
 
 # %%
 
@@ -32,6 +34,30 @@ class InputType(IntEnum):
     Potion = auto()
     Choice = auto()
 
+class SinusoidalEmbedding(nn.Module):
+    def __init__(self, dim: int, n_features: int):
+        super().__init__()
+        assert dim % 2 == 0, "Embedding dimension must be even"
+        self.dim = dim
+        half_dim = dim // 2
+        emb = torch.log(torch.tensor(1000.0)) / (half_dim - 1)
+        self.register_buffer('inv_freq', torch.exp(torch.arange(half_dim) * -emb))
+        self.out_dim = dim * n_features
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Create sinusoidal embeddings for numerical values.
+        x: tensor of integers to embed [batch_size, n_features]
+        Returns: [batch_size, n_features * dim] tensor
+        """
+        # [batch_size, n_features, half_dim]
+        emb = x.float().unsqueeze(-1) * self.inv_freq.unsqueeze(0).unsqueeze(0)
+        
+        # [batch_size, n_features, dim]
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+        
+        # [batch_size, n_features * dim]
+        return emb.reshape(x.shape[0], -1)
 
 class RMSNorm(nn.Module):
     def __init__(self, dim, eps: float):
@@ -81,10 +107,10 @@ class NN(nn.Module):
         self.input_type_embed = nn.Embedding(len(InputType), H.dim)
         self.card_embed = nn.Embedding(len(sts.CardId), H.dim, padding_idx=sts.CardId.INVALID.value)
         
-        self.fixed_obs_embeds = nn.ModuleList([
-            nn.Embedding(max_val + 1, H.dim) 
-            for max_val in getFixedObservationMaximums()
-        ])
+        # Add sinusoidal embedding and projection
+        n_fixed_obs = len(getFixedObservationMaximums())
+        self.fixed_obs_embed = SinusoidalEmbedding(H.dim, n_fixed_obs)
+        self.fixed_obs_proj = nn.Linear(self.fixed_obs_embed.out_dim, H.dim)
 
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
@@ -97,7 +123,8 @@ class NN(nn.Module):
         max_deck_len = deck.size(1)
         max_choices_len = card_choices.size(1)
 
-        fixed_obs_x = sum(embed(fixed_obs[:, i]) for i, embed in enumerate(self.fixed_obs_embeds))
+        # Create sinusoidal embeddings for all fixed observations at once
+        fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(fixed_obs))
         
         cards = torch.cat((deck, card_choices), dim=1)
         mask = cards == sts.CardId.INVALID.value
@@ -141,6 +168,13 @@ H = ModelHP()
 
 net = NN(H)
 net = net.to(device)
+net.fixed_obs_embed = torch.compile(net.fixed_obs_embed)
+net.fixed_obs_proj = torch.compile(net.fixed_obs_proj)
+for i, l in enumerate(net.layers):
+    net.layers[i] = torch.compile(l)
+
+# %%
+print(net.fixed_obs_embed.inv_freq)
 # %%
 # df = pd.read_parquet("rollouts0_100000.parquet")
 df = pd.read_parquet("rollouts0_6000.parquet")
@@ -199,16 +233,16 @@ def feed_to_net(df):
  #batch['outcome']
 
 # %%
-batch_size = 128
+batch_size = 512
 # %%
-lr = 5e-5
-weight_decay = 1e-3
+lr = 3e-5
+weight_decay = 5e-4
 
 # %%
 save_path = f"net.outcome.lr{lr:.1e}.wd{weight_decay:.1e}.pt"
 
 # %%
-do_training = False
+do_training = True
 # %%
 if do_training:
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
@@ -393,3 +427,43 @@ print(f"True Negatives: {tn}")
 print(f"False Positives: {fp}")
 print(f"False Negatives: {fn}")
 print(f"Accuracy: {(tp + tn)/(tp + tn + fp + fn):.3f}")
+
+# Simple linear regression baseline using fixed observations
+# print("\nLogistic Regression Baseline:")
+# from sklearn.linear_model import LogisticRegression
+# from sklearn.metrics import accuracy_score, confusion_matrix
+# 
+# # Prepare data
+# train_X = np.stack(train_df["obs.fixed_observation"].to_numpy())
+# train_y = train_df["outcome"].to_numpy()
+# valid_X = np.stack(valid_df["obs.fixed_observation"].to_numpy())
+# valid_y = valid_df["outcome"].to_numpy()
+# 
+# # Train logistic regression
+# lr_model = LogisticRegression(random_state=42)
+# lr_model.fit(train_X, train_y)
+# 
+# # Make predictions
+# lr_preds = lr_model.predict_proba(valid_X)[:, 1]
+# lr_binary_preds = lr_preds >= 0.5
+# 
+# # Calculate metrics
+# lr_accuracy = accuracy_score(valid_y, lr_binary_preds)
+# lr_conf_matrix = confusion_matrix(valid_y, lr_binary_preds)
+# 
+# print(f"Logistic Regression Accuracy: {lr_accuracy:.3f}")
+# print("\nConfusion Matrix:")
+# print(f"True Positives: {lr_conf_matrix[1,1]}")
+# print(f"True Negatives: {lr_conf_matrix[0,0]}")
+# print(f"False Positives: {lr_conf_matrix[0,1]}")
+# print(f"False Negatives: {lr_conf_matrix[1,0]}")
+# 
+# # Print feature importance
+# fixed_obs_maxvals = getFixedObservationMaximums()
+# importance = list(zip(range(len(fixed_obs_maxvals)), lr_model.coef_[0]))
+# importance.sort(key=lambda x: abs(x[1]), reverse=True)
+# print("\nFeature Importance (absolute coefficient value):")
+# for idx, coef in importance[:10]:  # Top 10 most important features
+#     print(f"Fixed observation {idx} (max {fixed_obs_maxvals[idx]}): {coef:.3f}")
+# 
+# %%
