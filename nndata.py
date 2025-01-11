@@ -92,9 +92,9 @@ class TransformerBlock(nn.Module):
         self.norm2 = RMSNorm(H.dim, eps=H.norm_eps)
         self.ffn = FFN(H.dim, H.dim * H.ffn_dim_mult)
 
-    def forward(self, x, mask):
+    def forward(self, x, attn_mask):
         xn = self.norm1(x)
-        xatt, _ = self.attn(xn, xn, xn, key_padding_mask=mask)
+        xatt, _ = self.attn(xn, xn, xn, attn_mask=None, key_padding_mask=attn_mask)
         x1 = x + xatt
         x2 = x1 + self.ffn(self.norm2(x1))
         return x2
@@ -106,6 +106,8 @@ class NN(nn.Module):
 
         self.input_type_embed = nn.Embedding(len(InputType), H.dim)
         self.card_embed = nn.Embedding(len(sts.CardId), H.dim, padding_idx=sts.CardId.INVALID.value)
+        # Add upgrade embedding - make it handle a reasonable range (0-20 should be enough for Searing Blow)
+        self.upgrade_embed = nn.Embedding(21, H.dim, padding_idx=0)
         
         # Add sinusoidal embedding and projection
         n_fixed_obs = len(getFixedObservationMaximums())
@@ -119,7 +121,7 @@ class NN(nn.Module):
         nn.init.uniform_(self.card_winprob.weight, -0.01, 0.01)
         nn.init.zeros_(self.card_winprob.bias)
 
-    def forward(self, deck, card_choices, fixed_obs):
+    def forward(self, deck, deck_upgrades, card_choices, choice_upgrades, fixed_obs):
         max_deck_len = deck.size(1)
         max_choices_len = card_choices.size(1)
 
@@ -127,8 +129,13 @@ class NN(nn.Module):
         fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(fixed_obs))
         
         cards = torch.cat((deck, card_choices), dim=1)
+        upgrades = torch.cat((deck_upgrades, choice_upgrades), dim=1)
         mask = cards == sts.CardId.INVALID.value
-        card_x = self.card_embed(cards) + self.input_type_embed(torch.tensor([int(InputType.Card)], device=device))
+        
+        # Combine card and upgrade embeddings
+        card_x = (self.card_embed(cards) + 
+                 self.upgrade_embed(upgrades.clamp(max=20)) +
+                 self.input_type_embed(torch.tensor([int(InputType.Card)], device=device)))
         card_x[:, max_deck_len:, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
         
         x = torch.cat([
@@ -136,13 +143,14 @@ class NN(nn.Module):
             card_x
         ], dim=1)
         
-        full_mask = torch.cat([
+        # Add fixed obs token to mask (False = don't mask)
+        attn_mask = torch.cat([
             torch.zeros(mask.size(0), 1, device=mask.device, dtype=mask.dtype),
             mask
         ], dim=1)
 
         for l in self.layers:
-            x = l(x, full_mask)
+            x = l(x, attn_mask)
         xn = self.norm(x)
         
         card_x = xn[:, 1+max_deck_len:, :]
@@ -152,13 +160,6 @@ class NN(nn.Module):
         return dict(
             card_choice_winprob_logits=card_choice_winprob_logits,
         )
-
-def pad_sequence(sequences, max_len, device):
-    return torch.nn.utils.rnn.pad_sequence(
-        [torch.tensor(s, device=device) for s in sequences],
-        batch_first=True,
-        padding_value=sts.CardId.INVALID.value
-    )[:, :max_len]
 
 # %%
 device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -171,10 +172,8 @@ net = net.to(device)
 net = torch.compile(net, mode="reduce-overhead")
 
 # %%
-print(net.fixed_obs_embed.inv_freq)
-# %%
-df = pd.read_parquet("rollouts0_100000.parquet")
-# df = pd.read_parquet("rollouts0_6000.parquet")
+# df = pd.read_parquet("rollouts0_100000.parquet")
+df = pd.read_parquet("rollouts0_6000.parquet")
 
 # %%
 data_df: pd.DataFrame = df[df.apply(lambda r: r["chosen_idx"] < len(r["cards_offered.cards"]), axis=1)]
@@ -205,15 +204,66 @@ np.random.seed(3)
 
 
 # %%
-def feed_to_net(batch):
-    max_deck_len = max(len(d) for d in batch["obs.deck.cards"])
-    max_choices_len = max(len(c) for c in batch["cards_offered.cards"])
+class SlayDataset(torch.utils.data.Dataset):
+    def __init__(self, df):
+        self.df = df
+        
+    def __len__(self):
+        return len(self.df)
+    
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        return {
+            'deck': np.array(row['obs.deck.cards'], dtype=np.int32),
+            'deck_upgrades': np.array(row['obs.deck.upgrades'], dtype=np.int32),
+            'choices': np.array(row['cards_offered.cards'], dtype=np.int32),
+            'choice_upgrades': np.array(row['cards_offered.upgrades'], dtype=np.int32),
+            'fixed_obs': np.array(row['obs.fixed_observation'], dtype=np.int32),
+            'chosen_idx': row['chosen_idx'],
+            'outcome': row['outcome'],
+        }
 
-    deck = pad_sequence(batch["obs.deck.cards"].apply(lambda x: x.astype(np.int32)), max_deck_len, device=device)
-    choices = pad_sequence(batch["cards_offered.cards"].apply(lambda x: x.astype(np.int32)), max_choices_len, device=device)
-    fixed_obs = torch.tensor(np.stack(batch["obs.fixed_observation"].to_numpy()), device=device)
+def collate_fn(batch):
+    # Get max lengths
+    max_deck_len = max(len(x['deck']) for x in batch)
+    max_choices_len = max(len(x['choices']) for x in batch)
+    
+    # Prepare arrays
+    deck = torch.full((len(batch), max_deck_len), sts.CardId.INVALID.value, dtype=torch.int32)
+    deck_upgrades = torch.zeros((len(batch), max_deck_len), dtype=torch.int32)
+    choices = torch.full((len(batch), max_choices_len), sts.CardId.INVALID.value, dtype=torch.int32)
+    choice_upgrades = torch.zeros((len(batch), max_choices_len), dtype=torch.int32)
+    fixed_obs = torch.zeros((len(batch), len(getFixedObservationMaximums())), dtype=torch.int32)
+    chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
+    outcome = torch.zeros(len(batch), dtype=torch.float32)
+    
+    # Fill arrays
+    for i, x in enumerate(batch):
+        deck[i, :len(x['deck'])] = torch.from_numpy(x['deck'])
+        deck_upgrades[i, :len(x['deck_upgrades'])] = torch.from_numpy(x['deck_upgrades'])
+        choices[i, :len(x['choices'])] = torch.from_numpy(x['choices'])
+        choice_upgrades[i, :len(x['choice_upgrades'])] = torch.from_numpy(x['choice_upgrades'])
+        fixed_obs[i] = torch.from_numpy(x['fixed_obs'])
+        chosen_idx[i] = x['chosen_idx']
+        outcome[i] = x['outcome']
+    
+    return {
+        'deck': deck,
+        'deck_upgrades': deck_upgrades,
+        'choices': choices,
+        'choice_upgrades': choice_upgrades,
+        'fixed_obs': fixed_obs,
+        'chosen_idx': chosen_idx,
+        'outcome': outcome,
+    }
 
-    return net(deck, choices, fixed_obs)
+# Replace feed_to_net with this
+def process_batch(batch, device):
+    # Move tensors to device
+    batch = {k: v.to(device) for k, v in batch.items()}
+    return net(batch['deck'], batch['deck_upgrades'], 
+              batch['choices'], batch['choice_upgrades'], 
+              batch['fixed_obs'])
 
 # %%
 # Test padding with longer batch element
@@ -230,7 +280,7 @@ def feed_to_net(batch):
  #batch['outcome']
 
 # %%
-batch_size = 512
+batch_size = 256
 # %%
 lr = 3e-5
 weight_decay = 5e-4
@@ -246,56 +296,73 @@ def train(batch, opt, device):
     Perform one training step.
     Returns (loss, accuracy) tuple
     """
-    output = feed_to_net(batch)
+    batch = {k: v.to(device) for k, v in batch.items()}
+    output = process_batch(batch, device)
     
-    chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
-    batch_indices = torch.arange(len(batch), device=device)
-    chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
+    chosen_logits = output['card_choice_winprob_logits'][
+        torch.arange(len(batch['chosen_idx']), device=device),
+        batch['chosen_idx']
+    ]
     
-    targets = torch.tensor(batch['outcome'].to_numpy(), device=device, dtype=torch.float32)
-    loss = F.binary_cross_entropy_with_logits(chosen_logits, targets)
+    loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
     
     opt.zero_grad()
     loss.backward()
     opt.step()
 
     with torch.no_grad():
-        accuracy = ((chosen_logits >= 0) == targets).float().mean()
+        accuracy = ((chosen_logits >= 0) == batch['outcome']).float().mean()
     
     return loss.item(), accuracy.item()
 
 # %%
+valid_loader = torch.utils.data.DataLoader(
+    SlayDataset(valid_df),
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=4,
+    collate_fn=collate_fn,
+    pin_memory=True,
+)
+    
 if do_training:
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
+    
+    train_loader = torch.utils.data.DataLoader(
+        SlayDataset(train_df),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        collate_fn=collate_fn,
+        pin_memory=True,
+    )
+    
     for epoch in range(2):
-        train_df_shuffled = train_df.sample(frac=1)
         print(f"Epoch {epoch}")
-        for i in range(len(train_df_shuffled) // batch_size):
-            batch = train_df_shuffled.iloc[i*batch_size:(i+1)*batch_size]
+        for i, batch in enumerate(train_loader):
             loss, acc = train(batch, opt, device)
 
             if i % 20 == 0:
                 print(f"{i}: loss={loss:.4f}, acc={acc:.3f}")
-            if i % 1000 == 0 or i == len(train_df_shuffled) // batch_size - 1:
+            if i % 1000 == 0 or i == len(train_loader) - 1:
                 torch.save(net.state_dict(), f"net.{i}.pt")
                 print(f"{i}: Validating")
                 valid_losses = []
                 valid_preds = []
                 valid_targets = []
                 with torch.no_grad():
-                    for j in range(len(valid_df) // batch_size):
-                        batch = valid_df.iloc[j*batch_size:(j+1)*batch_size]
-                        output = feed_to_net(batch)
-                        chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
-                        batch_indices = torch.arange(len(batch), device=device)
-                        chosen_logits = output['card_choice_winprob_logits'][batch_indices, chosen_indices]
+                    for batch in valid_loader:
+                        output = process_batch(batch, device)
+                        chosen_logits = output['card_choice_winprob_logits'][
+                            torch.arange(len(batch['chosen_idx']), device=device),
+                            batch['chosen_idx']
+                        ]
                         
-                        targets = torch.tensor(batch['outcome'].to_numpy(), device=device)
-                        loss = F.binary_cross_entropy_with_logits(chosen_logits, targets.float())
+                        loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'].to(device))
                         pred = chosen_logits >= 0
                         valid_losses.append(loss.item())
-                        valid_targets.append(targets.numpy(force=True))
-                        valid_preds.append(pred.numpy(force=True))
+                        valid_targets.append(batch['outcome'].cpu().numpy())
+                        valid_preds.append(pred.cpu().numpy())
                     print(f"Valid loss: {np.mean(valid_losses)}")
                     acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
                     print(f"Valid acc: {acc}")
@@ -313,10 +380,12 @@ batch = valid_df.sample(128)
 len(batch.iloc[0]['obs.deck.cards'])
 
 # %%
-output = feed_to_net(batch)
+batch_data = collate_fn([SlayDataset(batch).__getitem__(i) for i in range(len(batch))])
+output = process_batch(batch_data, device)
+
 # Get win probabilities for all cards and mark chosen ones
 all_probs = torch.sigmoid(output['card_choice_winprob_logits'])
-chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
+chosen_indices = batch_data['chosen_idx']
 batch_indices = torch.arange(len(batch), device=device)
 
 # Print probabilities for each example in batch
@@ -363,17 +432,15 @@ valid_targets = []
 
 # Get predictions for validation set
 with torch.no_grad():
-    for i in range(0, len(valid_df), batch_size):
-        batch = valid_df.iloc[i:i+batch_size]
-        output = feed_to_net(batch)
-        
-        # Get probabilities for chosen cards
-        chosen_indices = torch.tensor(batch['chosen_idx'].to_numpy(), device=device)
-        batch_indices = torch.arange(len(batch), device=device)
-        probs = torch.sigmoid(output['card_choice_winprob_logits'][batch_indices, chosen_indices]).cpu().numpy()
-        
+    for batch in valid_loader:
+        output = process_batch(batch, device)
+        chosen_logits = output['card_choice_winprob_logits'][
+            torch.arange(len(batch['chosen_idx']), device=device),
+            batch['chosen_idx'].to(device)
+        ]
+        probs = torch.sigmoid(chosen_logits).cpu().numpy()
         valid_preds.extend(probs)
-        valid_targets.extend(batch['outcome'].to_numpy())
+        valid_targets.extend(batch['outcome'].numpy())
 
 valid_preds = np.array(valid_preds)
 valid_targets = np.array(valid_targets)
