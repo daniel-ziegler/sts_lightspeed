@@ -1,4 +1,6 @@
 # %%
+from __future__ import annotations
+
 import sys
 import random
 from enum import IntEnum, auto
@@ -211,6 +213,9 @@ class NNService:
                 # Send responses
                 for i, req in enumerate(requests):
                     logits = output['card_choice_winprob_logits'][i].cpu().numpy()
+                    # Only return valid logits
+                    n_valid = len(batch[i]['choices'])
+                    logits = logits[:n_valid]  # Slice to only valid choices
                     req.response_queue.put(logits)
                 
             except Empty:
@@ -237,28 +242,40 @@ class NNService:
         self.shutdown_event.set()
         self.thread.join()
 
-def get_card_probs(logits: np.ndarray, n_valid: int) -> np.ndarray:
-    """Convert logits to probabilities and mask invalid entries"""
-    probs = 1 / (1 + np.exp(-logits))  # sigmoid
-    probs[n_valid:] = float('-inf')  # mask invalid entries
-    return probs
+def get_card_probs(logits: np.ndarray) -> np.ndarray:
+    """Convert logits to probabilities"""
+    # Just pretend they're softmax logits (even though they're really sigmoid logits)
+    exp_logits = np.exp(logits)
+    return exp_logits / np.sum(exp_logits)
 
-def sample_boltzmann(probs: np.ndarray, temperature: float = 0.1) -> int:
-    """Sample an index using Boltzmann distribution"""
-    logits = np.log(np.maximum(probs, 1e-20)) / temperature  # Convert back to logits with temperature
+def entropy(probs: np.ndarray) -> float:
+    """Calculate entropy of a probability distribution"""
+    probs /= np.sum(probs)
+    return -np.sum(probs * np.log(probs))
+
+def get_boltzmann_probs(probs: np.ndarray, temperature: float = 0.01) -> np.ndarray:
+    """Convert probabilities to Boltzmann distribution"""
+    logits = np.log(np.maximum(probs, 1e-20)) / temperature
     logits = logits - np.max(logits)  # Subtract max for numerical stability
     exp_logits = np.exp(logits)
-    softmax_probs = exp_logits / np.sum(exp_logits)
+    return exp_logits / np.sum(exp_logits)
+
+def sample_boltzmann(probs: np.ndarray, temperature: float = 0.01) -> int:
+    """Sample an index using Boltzmann distribution"""
+    softmax_probs = get_boltzmann_probs(probs, temperature)
     return int(np.random.choice(len(probs), p=softmax_probs))
 
-def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext) -> sts.GameAction:
+def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext, stats: ChoiceStats = None) -> sts.GameAction:
     """Use neural network to pick a card from the choices using Boltzmann sampling"""
     if choice.choice_type != ActionType.CARD:
         raise ValueError("Only card choices are supported")
         
     logits = service.get_logits(choice)
-    n_valid = sum(len(s.cards) for s in choice.cards_offered)
-    probs = get_card_probs(logits, n_valid)
+    probs = get_card_probs(logits)
+    
+    if stats is not None:
+        stats.add_choice(probs)
+        
     chosen_idx = sample_boltzmann(probs)
     
     # Find the GameAction that corresponds to this card index
@@ -279,7 +296,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     # Fallback to random choice if something went wrong
     return random.choice(actions)
 
-def random_playout(seed: int, net: NN = None, verbose: bool = False):
+def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
 
     agent = sts.Agent()
@@ -304,7 +321,7 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False):
                     cards_offered = gc.screen_state_info.rewards_container.cards
                     if cards_offered:
                         choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], choice_type=ActionType.CARD)
-                        action = pick_card_with_net(net, choice, actions, gc)
+                        action = pick_card_with_net(net, choice, actions, gc, stats)
                     else:
                         action = agent.pick_gameaction(gc)
                 else:
@@ -354,28 +371,81 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False):
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome)
 
-def random_playout_data(seed: int, net: NN = None):
-    choices, outcome = random_playout(seed, net=net, verbose=False)
+def random_playout_data(seed: int, net: NN = None, stats: ChoiceStats = None):
+    choices, outcome = random_playout(seed, net=net, verbose=False, stats=stats)
     df = pd.DataFrame([flatten_dict(c.as_dict()) for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
     return df
 
+class ChoiceStats:
+    def __init__(self):
+        self.entropies = []
+        self.n_options = []
+        self.boltzmann_entropies = []
+        
+    def add_choice(self, probs: np.ndarray):
+        """Record statistics for a choice"""
+        # Get raw entropy
+        self.entropies.append(entropy(probs))
+        
+        # Count valid options
+        self.n_options.append(np.sum(probs != float('-inf')))
+        
+        # Get Boltzmann entropy
+        boltz_probs = get_boltzmann_probs(probs)
+        self.boltzmann_entropies.append(entropy(boltz_probs))
+    
+    def plot_stats(self):
+        import matplotlib.pyplot as plt
+        
+        # Raw entropy histogram
+        plt.figure(figsize=(10, 6))
+        plt.hist(self.entropies, bins=50, label='Raw')
+        plt.hist(self.boltzmann_entropies, bins=50, alpha=0.5, label='After Boltzmann')
+        plt.xlabel('Entropy')
+        plt.ylabel('Count')
+        plt.title(f'Distribution of Choice Entropies\n' +
+                 f'Raw mean={np.mean(self.entropies):.3f}, ' +
+                 f'Boltzmann mean={np.mean(self.boltzmann_entropies):.3f}')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        
+        # Entropy vs number of options scatter
+        plt.figure(figsize=(10, 6))
+        plt.scatter(self.n_options, self.entropies, alpha=0.1, label='Raw')
+        plt.scatter(self.n_options, self.boltzmann_entropies, alpha=0.1, label='After Boltzmann')
+        plt.xlabel('Number of Options')
+        plt.ylabel('Entropy')
+        plt.title('Entropy vs Number of Options')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        
+        print(f"\nChoice Statistics:")
+        print(f"Total choices: {len(self.entropies)}")
+        print(f"Raw entropy: mean={np.mean(self.entropies):.3f}, median={np.median(self.entropies):.3f}")
+        print(f"Boltzmann entropy: mean={np.mean(self.boltzmann_entropies):.3f}, median={np.median(self.boltzmann_entropies):.3f}")
+        print(f"Options: mean={np.mean(self.n_options):.1f}, median={np.median(self.n_options):.1f}")
+
 # %%
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
 
-    num_threads = 30
+    num_threads = 4
     start_seed = 0
-    num_playouts = 10_000
+    num_playouts = 100  #10_000
     
     # Load neural network and start service
     net = load_net()
     service = NNService(net, batch_size=32)
     print("Loaded neural network and started service")
 
+    stats = ChoiceStats()
+    
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(random_playout_data, s, service) for s in range(start_seed, start_seed+num_playouts)]
+        futures = [executor.submit(random_playout_data, s, service, stats) for s in range(start_seed, start_seed+num_playouts)]
         df = pd.concat([
             future.result()
             for future
@@ -398,6 +468,9 @@ if __name__ == "__main__":
     print(f"\nResults from {n_unique_seeds} games:")
     print(f"Wins: {n_wins}")
     print(f"Winrate: {winrate:.1%}")
+    
+    # Plot choice statistics
+    stats.plot_stats()
 
     df.to_parquet(f"rollouts{start_seed}_{start_seed+num_playouts}.net.parquet", engine="pyarrow")
 ## %%
