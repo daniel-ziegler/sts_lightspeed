@@ -15,7 +15,7 @@ from randomplayouts import ActionType
 from slaythespire import getFixedObservationMaximums
 
 # Constants for data processing
-MAX_DECK_SIZE = 60  # Should be enough for most decks
+MAX_DECK_SIZE = 64  # Should be enough for most decks
 MAX_CHOICES = 10    # Usually 3-4, but can be more in edge cases
 
 # %%
@@ -176,8 +176,8 @@ net = net.to(device)
 net = torch.compile(net, mode="reduce-overhead")
 
 # %%
-# df = pd.read_parquet("rollouts0_100000.parquet")
-df = pd.read_parquet("rollouts0_6000.parquet")
+df = pd.read_parquet("rollouts0_100000.parquet")
+# df = pd.read_parquet("rollouts0_6000.parquet")
 
 # %%
 data_df: pd.DataFrame = df[
@@ -295,10 +295,10 @@ def process_batch(batch, device):
  #batch['outcome']
 
 # %%
-batch_size = 256
+batch_size = 512
 # %%
-lr = 3e-5
-weight_decay = 5e-4
+lr = 1e-5
+weight_decay = 3e-4
 
 # %%
 save_path = f"net.outcome.lr{lr:.1e}.wd{weight_decay:.1e}.pt"
@@ -440,7 +440,7 @@ plt.show()
 # %%
 from sklearn.metrics import roc_curve, auc
 
-batch_size = 256
+batch_size = 512
 
 valid_preds = []
 valid_targets = []
