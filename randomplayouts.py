@@ -8,7 +8,7 @@ from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue, Empty
 from threading import Thread, Event, Timer
-from typing import NamedTuple
+from typing import NamedTuple, Optional, List
 import time
 import threading
 import argparse
@@ -22,7 +22,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ModelHP, collate_fn, process_batch
+from network import NN, FixedAction, ModelHP, collate_fn, process_batch
 import slaythespire as sts
 
 # %%
@@ -42,6 +42,7 @@ class ActionType(IntEnum):
     CARD = auto()
     PATH = auto()
     EVENT_OPTION = auto()
+    FIXED = auto()  # New type for fixed actions like SKIP
 
 # %%
 @dataclass
@@ -55,13 +56,15 @@ class Choice:
     # ActionType.PATH
     paths_offered: list[int]  # room ids (indices in NNMapRepresentation vectors)
 
+    # ActionType.FIXED
+    fixed_actions: list[FixedAction]  # Actions like SKIP
+
     choice_type: ActionType
 
     def as_dict(self):
         return dict(
             obs=self.obs.as_dict(),
             cards_offered=dict(
-                # TODO preserve 2D structure
                 cards=(
                     np.concatenate([s.cards for s in self.cards_offered], axis=0, dtype=np.int32)
                     if self.cards_offered
@@ -73,6 +76,7 @@ class Choice:
                     else np.array([], dtype=np.int32)
                 )
             ),
+            fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
             choice_type=self.choice_type,
         )
@@ -149,7 +153,7 @@ def load_net(model_path, device=None):
     net = torch.compile(net, mode="reduce-overhead")
     
     state = torch.load(model_path, map_location=device, weights_only=True)
-    net.load_state_dict(state)
+    net.load_state_dict(state, strict=False)
     net.eval()
     
     return net
@@ -215,9 +219,11 @@ class NNService:
                 # Send responses
                 for i, req in enumerate(requests):
                     logits = output['card_choice_winprob_logits'][i].cpu().numpy()
-                    # Only return valid logits
+                    # Get number of valid options (cards + fixed actions)
                     n_valid = len(batch[i]['choices'])
-                    logits = logits[:n_valid]  # Slice to only valid choices
+                    if req.choice.fixed_actions:
+                        n_valid += len(req.choice.fixed_actions)
+                    logits = logits[:n_valid]
                     req.response_queue.put(logits)
                 
             except Empty:
@@ -290,12 +296,19 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
                 if (action.idx1 == which_set and 
                     action.idx2 == which_card):
                     return action
-            # If we get here, something went wrong
-            print(f"Warning: Could not find action for card index {chosen_idx} (set {which_set}, card {which_card})")
             break
         total += len(card_set.cards)
     
+    # If we get here, check if it's a fixed action
+    if choice.fixed_actions and chosen_idx == total:
+        if FixedAction.SKIP in choice.fixed_actions:
+            # Find the skip action
+            for action in actions:
+                if action.rewards_action_type == sts.RewardsActionType.SKIP:
+                    return action
+    
     # Fallback to random choice if something went wrong
+    print(f"Warning: Could not find action for card index {chosen_idx} (set {which_set}, card {which_card})")
     return random.choice(actions)
 
 def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
@@ -341,8 +354,14 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 # Use network for card choices if available
                 if net is not None and gc.screen_state == sts.ScreenState.REWARDS:
                     cards_offered = gc.screen_state_info.rewards_container.cards
+                    # Check if skip is allowed
+                    fixed_actions = []
+                    if any(a.rewards_action_type == sts.RewardsActionType.SKIP for a in actions):
+                        fixed_actions.append(FixedAction.SKIP)
+                    
                     if cards_offered:
-                        choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], choice_type=ActionType.CARD)
+                        choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], 
+                                     choice_type=ActionType.CARD, fixed_actions=fixed_actions)
                         action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats)
                     else:
                         action = agent.pick_gameaction(gc)
@@ -382,7 +401,8 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     choice_type = ActionType.INVALID
                     chosen_idx = -1
                 if choice_type != ActionType.INVALID:
-                    choice = Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, choice_type=choice_type)
+                    choice = Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, 
+                                     choice_type=choice_type, fixed_actions=[])
                     choices.append(ChoiceOutcome(choice, chosen_idx))
                 if verbose:
                     print(action.getDesc(gc))

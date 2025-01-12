@@ -32,6 +32,9 @@ class InputType(IntEnum):
     Choice = auto()
 
 
+class FixedAction(IntEnum):
+    SKIP = 0
+
 class SinusoidalEmbedding(nn.Module):
     def __init__(self, dim: int, n_features: int):
         super().__init__()
@@ -108,8 +111,10 @@ class NN(nn.Module):
 
         self.input_type_embed = nn.Embedding(len(InputType), H.dim)
         self.card_embed = nn.Embedding(len(sts.CardId), H.dim, padding_idx=sts.CardId.INVALID.value)
-        # Add upgrade embedding - make it handle a reasonable range (0-20 should be enough for Searing Blow)
         self.upgrade_embed = nn.Embedding(21, H.dim, padding_idx=0)
+        
+        # Add fixed action embedding
+        self.fixed_action_embed = nn.Embedding(len(FixedAction), H.dim)
 
         # Add sinusoidal embedding and projection
         n_fixed_obs = len(sts.getFixedObservationMaximums())
@@ -131,6 +136,7 @@ class NN(nn.Module):
         # Create sinusoidal embeddings for all fixed observations at once
         fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(fixed_obs))
 
+        # Embed cards
         cards = torch.cat((deck, card_choices), dim=1)
         upgrades = torch.cat((deck_upgrades, choice_upgrades), dim=1)
         mask = cards == sts.CardId.INVALID.value
@@ -141,27 +147,47 @@ class NN(nn.Module):
                  self.input_type_embed(torch.tensor([int(InputType.Card)], device=device)))
         card_x[:, max_deck_len:, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
 
+        # Add fixed action embeddings (SKIP)
+        fixed_x = self.fixed_action_embed(torch.arange(len(FixedAction), device=device)).unsqueeze(0).expand(len(deck), -1, -1)
+        fixed_x = fixed_x + self.input_type_embed(torch.tensor([int(InputType.FIXED)], device=device))
+
+        # Combine all embeddings
         x = torch.cat([
-            fixed_obs_x.unsqueeze(1),
-            card_x
+            fixed_obs_x.unsqueeze(1),  # [batch, 1, dim]
+            card_x,                     # [batch, deck+choices, dim]
+            fixed_x,                    # [batch, n_fixed_actions, dim]
         ], dim=1)
 
-        # Add fixed obs token to mask (False = don't mask)
+        # Add fixed obs and fixed action tokens to mask (False = don't mask)
         pos_mask = torch.cat([
-            torch.zeros(mask.size(0), 1, device=device, dtype=mask.dtype),
-            mask
+            torch.zeros(mask.size(0), 1, device=device, dtype=mask.dtype),  # fixed obs
+            mask,                                                           # cards
+            torch.zeros(mask.size(0), len(FixedAction), device=device, dtype=mask.dtype),  # fixed actions
         ], dim=1)
 
         for l in self.layers:
             x = l(x, pos_mask)
         xn = self.norm(x)
 
-        card_x = xn[:, 1+max_deck_len:, :]
-        card_choice_winprob_logits = self.card_winprob(card_x).squeeze(-1).float()
-        card_choice_winprob_logits = card_choice_winprob_logits.masked_fill(mask[:, max_deck_len:], float('-inf'))
+        # Get logits for both cards and fixed actions
+        choice_x = xn[:, 1+max_deck_len:1+max_deck_len+max_choices_len, :]  # card choices
+        fixed_x = xn[:, -len(FixedAction):, :]  # fixed actions
+        
+        # Get win probabilities for both
+        card_choice_winprob_logits = self.card_winprob(choice_x).squeeze(-1).float()
+        fixed_action_winprob_logits = self.card_winprob(fixed_x).squeeze(-1).float()
+        
+        # Combine logits
+        all_logits = torch.cat([
+            card_choice_winprob_logits,
+            fixed_action_winprob_logits
+        ], dim=1)
+        
+        # Mask invalid card choices
+        all_logits[:, :max_choices_len] = all_logits[:, :max_choices_len].masked_fill(mask[:, max_deck_len:], float('-inf'))
 
         return dict(
-            card_choice_winprob_logits=card_choice_winprob_logits,
+            card_choice_winprob_logits=all_logits,
         )
     
     @property

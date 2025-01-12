@@ -6,7 +6,7 @@ from itertools import product
 import json
 from datetime import datetime
 
-from network import MAX_CHOICES, NN, ModelHP, SlayDataset, collate_fn, process_batch
+from network import MAX_CHOICES, NN, FixedAction, ModelHP, SlayDataset, collate_fn, process_batch
 import numpy as np
 import pandas as pd
 import torch
@@ -45,10 +45,82 @@ def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
     hash_val = ((seed * 1327217885) & 0xFFFFFFFF) / 0xFFFFFFFF
     return hash_val < valid_fraction
 
+class SlayDataset(torch.utils.data.Dataset):
+    def __init__(self, df):
+        self.df = df
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        
+        # For fixed actions (like SKIP), map to indices after card choices
+        chosen_idx = row['chosen_idx']
+        if chosen_idx < 0:  # Fixed action
+            # Map fixed actions to indices after card choices
+            if row['rewards_action_type'] == sts.RewardsActionType.SKIP:
+                chosen_idx = len(row['cards_offered.cards']) + FixedAction.SKIP
+            else:
+                raise ValueError(f"Unknown fixed action type: {row['rewards_action_type']}")
+        
+        return {
+            'deck': np.array(row['obs.deck.cards'], dtype=np.int32),
+            'deck_upgrades': np.array(row['obs.deck.upgrades'], dtype=np.int32),
+            'choices': np.array(row['cards_offered.cards'], dtype=np.int32),
+            'choice_upgrades': np.array(row['cards_offered.upgrades'], dtype=np.int32),
+            'fixed_obs': np.array(row['obs.fixed_observation'], dtype=np.int32),
+            'chosen_idx': chosen_idx,
+            'outcome': row['outcome'],
+        }
+
+def collate_fn(batch):
+    for x in batch:
+        n_choices = len(x['choices'])
+        chosen_idx = x['chosen_idx']
+        # Allow indices up to n_choices + n_fixed_actions
+        max_valid_idx = n_choices + len(FixedAction)
+        assert chosen_idx < max_valid_idx, f"chosen_idx {chosen_idx} >= max valid index {max_valid_idx}"
+        assert chosen_idx < MAX_CHOICES + len(FixedAction), f"chosen_idx {chosen_idx} >= MAX_CHOICES + fixed actions {MAX_CHOICES + len(FixedAction)}"
+
+    # Prepare arrays
+    deck = torch.full((len(batch), MAX_DECK_SIZE), sts.CardId.INVALID.value, dtype=torch.int32)
+    deck_upgrades = torch.zeros((len(batch), MAX_DECK_SIZE), dtype=torch.int32)
+    choices = torch.full((len(batch), MAX_CHOICES), sts.CardId.INVALID.value, dtype=torch.int32)
+    choice_upgrades = torch.zeros((len(batch), MAX_CHOICES), dtype=torch.int32)
+    fixed_obs = torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
+    chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
+    outcome = torch.zeros(len(batch), dtype=torch.float32)
+
+    # Fill arrays
+    for i, x in enumerate(batch):
+        deck[i, :min(len(x['deck']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck'])[:MAX_DECK_SIZE]
+        deck_upgrades[i, :min(len(x['deck_upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck_upgrades'])[:MAX_DECK_SIZE]
+        choices[i, :min(len(x['choices']), MAX_CHOICES)] = torch.from_numpy(x['choices'])[:MAX_CHOICES]
+        choice_upgrades[i, :min(len(x['choice_upgrades']), MAX_CHOICES)] = torch.from_numpy(x['choice_upgrades'])[:MAX_CHOICES]
+        fixed_obs[i] = torch.from_numpy(x['fixed_obs'])
+        chosen_idx[i] = x['chosen_idx']
+        outcome[i] = x['outcome']
+
+    return {
+        'deck': deck,
+        'deck_upgrades': deck_upgrades,
+        'choices': choices,
+        'choice_upgrades': choice_upgrades,
+        'fixed_obs': fixed_obs,
+        'chosen_idx': chosen_idx,
+        'outcome': outcome,
+    }
+
+# Update data filtering to handle fixed actions
 data_df = df[
     df.apply(lambda r: (
-        r["chosen_idx"] < len(r["cards_offered.cards"]) and
-        r["chosen_idx"] < MAX_CHOICES
+        # Allow fixed actions (like SKIP)
+        (r["rewards_action_type"] == sts.RewardsActionType.SKIP) or
+        # Or normal card choices within bounds
+        (r["chosen_idx"] >= 0 and 
+         r["chosen_idx"] < len(r["cards_offered.cards"]) and
+         r["chosen_idx"] < MAX_CHOICES)
     ), axis=1)
 ]
 assert (data_df["choice_type"] == ActionType.CARD).all()
@@ -95,6 +167,7 @@ def train_step(net, opt, batch):
     batch = {k: v.to(device) for k, v in batch.items()}
     output = process_batch(batch, net)
     
+    # Get logits for chosen actions
     chosen_logits = output['card_choice_winprob_logits'][
         torch.arange(len(batch['chosen_idx']), device=device),
         batch['chosen_idx']
