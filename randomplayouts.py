@@ -150,11 +150,12 @@ def load_net(device=None):
     
     return net
 
-class CardPickRequest(NamedTuple):
+class NNRequest(NamedTuple):
     choice: Choice
     response_queue: Queue
 
-class CardPickerService:
+class NNService:
+    """Background service that batches neural network inference requests"""
     def __init__(self, net: NN, batch_size=32, max_wait_time=0.001):
         self.net = net
         self.batch_size = batch_size
@@ -207,31 +208,23 @@ class CardPickerService:
                 with torch.no_grad():
                     output = process_batch(batch_tensors, self.net)
                 
-                # Extract probabilities for each request
-                all_probs = torch.sigmoid(output['card_choice_winprob_logits']).cpu().numpy()
-                
                 # Send responses
                 for i, req in enumerate(requests):
-                    probs = all_probs[i]
-                    n_valid = sum(len(s.cards) for s in req.choice.cards_offered)
-                    probs[n_valid:] = float('-inf')
-                    req.response_queue.put(probs)
+                    logits = output['card_choice_winprob_logits'][i].cpu().numpy()
+                    req.response_queue.put(logits)
                 
             except Empty:
                 continue
             except Exception as e:
-                print(f"Error in card picker service: {e}")
+                print(f"Error in NN service: {e}")
                 # Send error response to all waiting requests
                 for req in requests:
                     req.response_queue.put(e)
     
-    def get_probs(self, choice: Choice) -> np.ndarray:
-        """Get win probabilities for a choice. Thread-safe."""
-        if choice.choice_type != ActionType.CARD:
-            raise ValueError("Only card choices are supported")
-        
+    def get_logits(self, choice: Choice) -> np.ndarray:
+        """Get raw logits from the network. Thread-safe."""
         response_queue = Queue()
-        self.request_queue.put(CardPickRequest(choice, response_queue))
+        self.request_queue.put(NNRequest(choice, response_queue))
         response = response_queue.get()
         
         if isinstance(response, Exception):
@@ -240,14 +233,33 @@ class CardPickerService:
         return response
     
     def stop(self):
-        """Stop the card picker service and wait for it to finish"""
+        """Stop the service and wait for it to finish"""
         self.shutdown_event.set()
         self.thread.join()
 
-def pick_card_with_net(picker: CardPickerService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext) -> sts.GameAction:
-    """Use neural network to pick a card from the choices"""
-    probs = picker.get_probs(choice)
-    chosen_idx = int(np.argmax(probs))
+def get_card_probs(logits: np.ndarray, n_valid: int) -> np.ndarray:
+    """Convert logits to probabilities and mask invalid entries"""
+    probs = 1 / (1 + np.exp(-logits))  # sigmoid
+    probs[n_valid:] = float('-inf')  # mask invalid entries
+    return probs
+
+def sample_boltzmann(probs: np.ndarray, temperature: float = 0.1) -> int:
+    """Sample an index using Boltzmann distribution"""
+    logits = np.log(np.maximum(probs, 1e-20)) / temperature  # Convert back to logits with temperature
+    logits = logits - np.max(logits)  # Subtract max for numerical stability
+    exp_logits = np.exp(logits)
+    softmax_probs = exp_logits / np.sum(exp_logits)
+    return int(np.random.choice(len(probs), p=softmax_probs))
+
+def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext) -> sts.GameAction:
+    """Use neural network to pick a card from the choices using Boltzmann sampling"""
+    if choice.choice_type != ActionType.CARD:
+        raise ValueError("Only card choices are supported")
+        
+    logits = service.get_logits(choice)
+    n_valid = sum(len(s.cards) for s in choice.cards_offered)
+    probs = get_card_probs(logits, n_valid)
+    chosen_idx = sample_boltzmann(probs)
     
     # Find the GameAction that corresponds to this card index
     total = 0
@@ -353,17 +365,17 @@ def random_playout_data(seed: int, net: NN = None):
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
 
-    num_threads = 10
+    num_threads = 30
     start_seed = 0
-    num_playouts = 100 # _000
+    num_playouts = 10_000
     
-    # Load neural network and start card picker service
+    # Load neural network and start service
     net = load_net()
-    picker = CardPickerService(net, batch_size=32)
-    print("Loaded neural network and started card picker service")
+    service = NNService(net, batch_size=32)
+    print("Loaded neural network and started service")
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(random_playout_data, s, picker) for s in range(start_seed, start_seed+num_playouts)]
+        futures = [executor.submit(random_playout_data, s, service) for s in range(start_seed, start_seed+num_playouts)]
         df = pd.concat([
             future.result()
             for future
@@ -377,7 +389,7 @@ if __name__ == "__main__":
             )
         ])
 
-    picker.stop()
+    service.stop()
     
     # Calculate and print winrate
     n_unique_seeds = df['seed'].nunique()
