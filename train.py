@@ -2,6 +2,9 @@
 import sys
 import random
 from dataclasses import dataclass
+from itertools import product
+import json
+from datetime import datetime
 
 from network import MAX_CHOICES, NN, ModelHP, SlayDataset, collate_fn, process_batch
 import numpy as np
@@ -25,18 +28,10 @@ class TrainingHP:
     initial_lr: float = 1e-4
     final_lr: float = 1e-6
     weight_decay: float = 1e-4
-    num_epochs: int = 2
+    num_epochs: int = 1
     validation_fraction: float = 0.1
     validate_every_n_steps: int = 2000
     log_every_n_steps: int = 20
-
-# %%
-H = ModelHP()
-T = TrainingHP()
-
-net = NN(H)
-net = net.to(device)
-net = torch.compile(net, mode="reduce-overhead")
 
 # %%
 df = pd.read_parquet("rollouts100000_110000.net.parquet")
@@ -95,16 +90,12 @@ np.random.seed(3)
  #batch['outcome']
 
 # %%
-save_path = f"net.outcome.lr{T.initial_lr:.1e}.wd{T.weight_decay:.1e}.e{T.num_epochs}.pt"
-
-# %%
-do_training = True
-
-def train(batch, opt, device):
+def train_step(net, opt, batch):
     """
     Perform one training step.
     Returns (loss, accuracy) tuple
     """
+    device = net.device
     batch = {k: v.to(device) for k, v in batch.items()}
     output = process_batch(batch, net)
     
@@ -124,19 +115,30 @@ def train(batch, opt, device):
     
     return loss.item(), accuracy.item()
 
-# %%
-valid_loader = torch.utils.data.DataLoader(
-    SlayDataset(valid_df),
-    batch_size=T.batch_size,
-    shuffle=False,
-    num_workers=4,
-    collate_fn=collate_fn,
-    pin_memory=True,
-)
+def train(net, train_df, valid_df, T: TrainingHP, device: torch.device):
+    """
+    Train the network using the provided parameters and data.
     
-if do_training:
-    opt = torch.optim.AdamW(net.parameters(), lr=T.initial_lr, weight_decay=T.weight_decay)
+    Args:
+        net: The neural network to train
+        train_df: Training data DataFrame
+        valid_df: Validation data DataFrame
+        T: Training hyperparameters
+        device: Device to train on
+        
+    Returns:
+        Tuple of (save_path, final_validation_accuracy)
+    """
+    save_path = f"net.outcome.lr{T.initial_lr:.1e}.wd{T.weight_decay:.1e}.e{T.num_epochs}.pt"
     
+    valid_loader = torch.utils.data.DataLoader(
+        SlayDataset(valid_df),
+        batch_size=T.batch_size,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=collate_fn,
+        pin_memory=True,
+    )
     train_loader = torch.utils.data.DataLoader(
         SlayDataset(train_df),
         batch_size=T.batch_size,
@@ -145,8 +147,11 @@ if do_training:
         collate_fn=collate_fn,
         pin_memory=True,
     )
-    
+
+    opt = torch.optim.AdamW(net.parameters(), lr=T.initial_lr, weight_decay=T.weight_decay)
     total_steps = len(train_loader) * T.num_epochs
+
+    valid_acc = np.nan
     
     for epoch in range(T.num_epochs):
         print(f"Epoch {epoch}")
@@ -157,37 +162,128 @@ if do_training:
             for param_group in opt.param_groups:
                 param_group['lr'] = current_lr
             
-            loss, acc = train(batch, opt, device)
+            loss, acc = train_step(net, opt, batch)
 
             if i % T.log_every_n_steps == 0:
                 print(f"{i}: loss={loss:.4f}, acc={acc:.3f}, lr={current_lr:.2e}")
             if i != 0 and i % T.validate_every_n_steps == 0 or i == len(train_loader) - 1:
                 print(f"{i}: Validating")
-                valid_losses = []
-                valid_preds = []
-                valid_targets = []
-                with torch.no_grad():
-                    for batch in valid_loader:
-                        output = process_batch(batch, net)
-                        chosen_logits = output['card_choice_winprob_logits'][
-                            torch.arange(len(batch['chosen_idx']), device=device),
-                            batch['chosen_idx']
-                        ]
-                        
-                        loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'].to(device))
-                        pred = chosen_logits >= 0
-                        valid_losses.append(loss.item())
-                        valid_targets.append(batch['outcome'].cpu().numpy())
-                        valid_preds.append(pred.cpu().numpy())
-                    print(f"Valid loss: {np.mean(valid_losses)}")
-                    acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
-                    print(f"Valid acc: {acc}")
+                valid_losses, valid_acc = validate(valid_loader, net, device)
+                print(f"Valid loss: {np.mean(valid_losses)}")
+                print(f"Valid acc: {valid_acc}")
 
     torch.save(net.state_dict(), save_path)
+    return save_path, valid_acc
+
+def validate(valid_loader, net, device):
+    """Run validation and return losses and accuracy."""
+    valid_losses = []
+    valid_preds = []
+    valid_targets = []
+    with torch.no_grad():
+        for batch in valid_loader:
+            output = process_batch(batch, net)
+            chosen_logits = output['card_choice_winprob_logits'][
+                torch.arange(len(batch['chosen_idx']), device=device),
+                batch['chosen_idx']
+            ]
+            
+            loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'].to(device))
+            pred = chosen_logits >= 0
+            valid_losses.append(loss.item())
+            valid_targets.append(batch['outcome'].cpu().numpy())
+            valid_preds.append(pred.cpu().numpy())
+        
+        acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
+    return valid_losses, acc
+
+def hyperparameter_sweep():
+    """Run hyperparameter sweep and save results."""
+    learning_rates = np.geomspace(1e-3, 1e-5, 5)
+    weight_decays = np.geomspace(1e-5, 1e-3, 3)
+    
+    results = []
+    
+    # Load and prepare data once
+    df = pd.read_parquet("rollouts100000_110000.net.parquet")
+    data_df = df[
+        df.apply(lambda r: (
+            r["chosen_idx"] < len(r["cards_offered.cards"]) and
+            r["chosen_idx"] < MAX_CHOICES
+        ), axis=1)
+    ]
+    assert (data_df["choice_type"] == ActionType.CARD).all()
+    
+    # Split data
+    T = TrainingHP()  # Base hyperparameters
+    valid_df = data_df[data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
+    train_df = data_df[~data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
+    
+    # Balance validation set
+    valid_positives = valid_df[valid_df['outcome'] == 1]
+    valid_negatives = valid_df[valid_df['outcome'] == 0]
+    n_samples = min(len(valid_positives), len(valid_negatives))
+    balanced_valid_df = pd.concat([
+        valid_positives.sample(n=n_samples, random_state=42),
+        valid_negatives.sample(n=n_samples, random_state=42)
+    ])
+    valid_df = balanced_valid_df
+    
+    # Run sweep
+    for lr, wd in product(learning_rates, weight_decays):
+        print(f"\nTraining with lr={lr:.1e}, wd={wd:.1e}")
+        
+        # Create fresh model for each run
+        H = ModelHP()
+        net = NN(H)
+        net = net.to(device)
+        net = torch.compile(net, mode="reduce-overhead")
+        
+        # Update hyperparameters
+        T = TrainingHP(
+            initial_lr=lr,
+            weight_decay=wd,
+        )
+        
+        # Train model
+        save_path, valid_acc = train(net, train_df, valid_df, T, device)
+
+        del net
+        
+        # Store results
+        result = {
+            'learning_rate': lr,
+            'weight_decay': wd,
+            'valid_accuracy': valid_acc,
+            'model_path': save_path,
+            'timestamp': datetime.now().isoformat()
+        }
+        results.append(result)
+        
+        # Save intermediate results
+        with open('sweep_results.json', 'w') as f:
+            json.dump(results, f, indent=2)
+        
+    # Find best model
+    best_result = max(results, key=lambda x: x['valid_accuracy'])
+    print("\nBest model:")
+    print(f"Learning rate: {best_result['learning_rate']:.1e}")
+    print(f"Weight decay: {best_result['weight_decay']:.1e}")
+    print(f"Validation accuracy: {best_result['valid_accuracy']:.4f}")
+    print(f"Model path: {best_result['model_path']}")
+    
+    return best_result['model_path'], results
+
+save_path, results = hyperparameter_sweep()
 
 # %%
+
 state = torch.load(save_path, weights_only=True, map_location=device)
 # %%
+H = ModelHP()
+net = NN(H)
+net = net.to(device)
+net = torch.compile(net, mode="reduce-overhead")
 net.load_state_dict(state)
 
 # %%
