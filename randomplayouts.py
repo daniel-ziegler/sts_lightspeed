@@ -298,7 +298,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     # Fallback to random choice if something went wrong
     return random.choice(actions)
 
-def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStats = None):
+def run_game(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
 
     agent = sts.Agent()
@@ -393,8 +393,8 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome)
 
-def random_playout_data(seed: int, net: NN = None, stats: ChoiceStats = None):
-    choices, outcome = random_playout(seed, net=net, verbose=False, stats=stats)
+def run_game_data(seed: int, net: NN = None, stats: ChoiceStats = None):
+    choices, outcome = run_game(seed, net=net, verbose=False, stats=stats)
     df = pd.DataFrame([flatten_dict(c.as_dict()) for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
@@ -463,15 +463,15 @@ def main(args):
     
     with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
         futures = [
-            executor.submit(random_playout_data, s, service, stats) 
-            for s in range(args.start_seed, args.start_seed + args.num_playouts)
+            executor.submit(run_game_data, s, service, stats) 
+            for s in range(args.start_seed, args.start_seed + args.num_games)
         ]
         df = pd.concat([
             future.result()
             for future
             in tqdm(
                 as_completed(futures),
-                total=args.num_playouts,
+                total=args.num_games,
                 mininterval=5,
                 maxinterval=60,
                 miniters=args.num_threads,
@@ -496,9 +496,10 @@ def main(args):
     # Shuffle the DataFrame
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
-    df_path = f"rollouts{args.start_seed}_{args.start_seed+args.num_playouts}.net.parquet"
-    df.to_parquet(df_path, engine="pyarrow")
-    print(f"Saved to {df_path}")
+    if not args.no_save:
+        df_path = f"rollouts{args.start_seed}_{args.start_seed+args.num_games}.net.parquet"
+        df.to_parquet(df_path, engine="pyarrow")
+        print(f"Saved to {df_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run Slay the Spire simulations with neural network guidance')
@@ -508,12 +509,14 @@ if __name__ == "__main__":
                         help='Number of parallel threads to use')
     parser.add_argument('--start-seed', type=int, default=200_000,
                         help='Starting seed for simulations')
-    parser.add_argument('--num-playouts', type=int, default=50_000,
+    parser.add_argument('--num-games', type=int, default=50_000,
                         help='Number of games to simulate')
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for neural network inference')
     parser.add_argument('--no-plots', action='store_true',
                         help='Disable plotting of statistics')
+    parser.add_argument('--no-save', action='store_true',
+                        help='Disable saving results to parquet file')
     
     args = parser.parse_args()
     main(args)

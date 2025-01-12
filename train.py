@@ -24,7 +24,7 @@ device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("
 # %%
 @dataclass
 class TrainingHP:
-    batch_size: int = 128
+    batch_size: int = 512
     initial_lr: float = 1e-4
     final_lr: float = 1e-6
     weight_decay: float = 1e-4
@@ -34,19 +34,8 @@ class TrainingHP:
     log_every_n_steps: int = 20
 
 # %%
-df = pd.read_parquet("rollouts100000_110000.net.parquet")
+df = pd.read_parquet("rollouts110000_150000.net.parquet")
 # df = pd.read_parquet("rollouts0_6000.parquet")
-
-# %%
-data_df: pd.DataFrame = df[
-    df.apply(lambda r: (
-        r["chosen_idx"] < len(r["cards_offered.cards"]) and  # Original check
-        r["chosen_idx"] < MAX_CHOICES  # Use constant
-    ), axis=1)
-]
-assert (data_df["choice_type"] == ActionType.CARD).all()
-print(f"Filtered out {len(df) - len(data_df)} rows with chosen_idx >= {MAX_CHOICES}")
-print(f"Remaining rows: {len(data_df)}")
 
 # %%
 # Split into train and validation sets based on seed value
@@ -56,12 +45,20 @@ def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
     hash_val = ((seed * 1327217885) & 0xFFFFFFFF) / 0xFFFFFFFF
     return hash_val < valid_fraction
 
-# Split data
-valid_df = data_df[data_df['seed'].apply(is_validation_seed)]
-train_df = data_df[~data_df['seed'].apply(is_validation_seed)]
-print(f"Train size: {len(train_df)}, Validation size: {len(valid_df)}")
+data_df = df[
+    df.apply(lambda r: (
+        r["chosen_idx"] < len(r["cards_offered.cards"]) and
+        r["chosen_idx"] < MAX_CHOICES
+    ), axis=1)
+]
+assert (data_df["choice_type"] == ActionType.CARD).all()
 
-# Create balanced validation set
+# Split data
+T = TrainingHP()  # Base hyperparameters
+valid_df = data_df[data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
+train_df = data_df[~data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
+
+# Balance validation set
 valid_positives = valid_df[valid_df['outcome'] == 1]
 valid_negatives = valid_df[valid_df['outcome'] == 0]
 n_samples = min(len(valid_positives), len(valid_negatives))
@@ -69,7 +66,6 @@ balanced_valid_df = pd.concat([
     valid_positives.sample(n=n_samples, random_state=42),
     valid_negatives.sample(n=n_samples, random_state=42)
 ])
-print(f"Balanced validation set length: {len(balanced_valid_df)}")
 valid_df = balanced_valid_df
 # %%
 np.random.seed(3)
@@ -197,37 +193,13 @@ def validate(valid_loader, net, device):
         acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
     return valid_losses, acc
 
-def hyperparameter_sweep():
+def hyperparameter_sweep(train_df, valid_df):
     """Run hyperparameter sweep and save results."""
-    learning_rates = np.geomspace(1e-3, 1e-5, 5)
-    weight_decays = np.geomspace(1e-5, 1e-3, 3)
+    learning_rates = np.geomspace(2e-4, 4e-5, 5)
+    weight_decays = np.geomspace(1e-5, 1e-5, 1)
     
     results = []
     
-    # Load and prepare data once
-    df = pd.read_parquet("rollouts100000_110000.net.parquet")
-    data_df = df[
-        df.apply(lambda r: (
-            r["chosen_idx"] < len(r["cards_offered.cards"]) and
-            r["chosen_idx"] < MAX_CHOICES
-        ), axis=1)
-    ]
-    assert (data_df["choice_type"] == ActionType.CARD).all()
-    
-    # Split data
-    T = TrainingHP()  # Base hyperparameters
-    valid_df = data_df[data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
-    train_df = data_df[~data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
-    
-    # Balance validation set
-    valid_positives = valid_df[valid_df['outcome'] == 1]
-    valid_negatives = valid_df[valid_df['outcome'] == 0]
-    n_samples = min(len(valid_positives), len(valid_negatives))
-    balanced_valid_df = pd.concat([
-        valid_positives.sample(n=n_samples, random_state=42),
-        valid_negatives.sample(n=n_samples, random_state=42)
-    ])
-    valid_df = balanced_valid_df
     
     # Run sweep
     for lr, wd in product(learning_rates, weight_decays):
@@ -274,7 +246,7 @@ def hyperparameter_sweep():
     
     return best_result['model_path'], results
 
-save_path, results = hyperparameter_sweep()
+save_path, results = hyperparameter_sweep(train_df, valid_df)
 
 # %%
 
@@ -339,6 +311,16 @@ plt.show()
 from sklearn.metrics import roc_curve, auc
 
 batch_size = 512
+
+# Create fresh validation loader
+valid_loader = torch.utils.data.DataLoader(
+    SlayDataset(valid_df),
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=4,
+    collate_fn=collate_fn,
+    pin_memory=True,
+)
 
 valid_preds = []
 valid_targets = []
