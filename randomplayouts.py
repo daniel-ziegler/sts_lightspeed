@@ -4,6 +4,10 @@ import random
 from enum import IntEnum, auto
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue, Empty
+from threading import Thread, Event
+from typing import NamedTuple
+import time
 
 import pickle
 from tqdm.auto import tqdm
@@ -146,9 +150,103 @@ def load_net(device=None):
     
     return net
 
-def pick_card_with_net(net: NN, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext) -> sts.GameAction:
+class CardPickRequest(NamedTuple):
+    choice: Choice
+    response_queue: Queue
+
+class CardPickerService:
+    def __init__(self, net: NN, batch_size=32, max_wait_time=0.001):
+        self.net = net
+        self.batch_size = batch_size
+        self.max_wait_time = max_wait_time
+        self.request_queue = Queue()
+        self.shutdown_event = Event()
+        self.thread = Thread(target=self._process_requests, daemon=True)
+        self.thread.start()
+    
+    def _process_requests(self):
+        while not self.shutdown_event.is_set():
+            # Collect requests
+            requests = []
+            try:
+                # Get at least one request
+                requests.append(self.request_queue.get(timeout=0.1))
+                
+                # Try to get more requests up to batch_size or max_wait_time
+                start_time = time.time()
+                while len(requests) < self.batch_size and time.time() - start_time < self.max_wait_time:
+                    try:
+                        requests.append(self.request_queue.get_nowait())
+                    except Empty:
+                        break
+                
+                # Process batch
+                choices = [req.choice for req in requests]
+                
+                # Create batch
+                batch = [{
+                    'deck': np.array(choice.obs.deck.cards, dtype=np.int32),
+                    'deck_upgrades': np.array(choice.obs.deck.upgrades, dtype=np.int32),
+                    'choices': (
+                        np.concatenate([s.cards for s in choice.cards_offered], axis=0, dtype=np.int32)
+                        if choice.cards_offered
+                        else np.array([], dtype=np.int32)
+                    ),
+                    'choice_upgrades': (
+                        np.concatenate([s.upgrades for s in choice.cards_offered], axis=0, dtype=np.int32)
+                        if choice.cards_offered
+                        else np.array([], dtype=np.int32)
+                    ),
+                    'fixed_obs': np.array(choice.obs.fixed_observation, dtype=np.int32),
+                    'chosen_idx': 0,  # Dummy value
+                    'outcome': 0.0,   # Dummy value
+                } for choice in choices]
+                
+                # Process through network
+                batch_tensors = collate_fn(batch)
+                with torch.no_grad():
+                    output = process_batch(batch_tensors, self.net)
+                
+                # Extract probabilities for each request
+                all_probs = torch.sigmoid(output['card_choice_winprob_logits']).cpu().numpy()
+                
+                # Send responses
+                for i, req in enumerate(requests):
+                    probs = all_probs[i]
+                    n_valid = sum(len(s.cards) for s in req.choice.cards_offered)
+                    probs[n_valid:] = float('-inf')
+                    req.response_queue.put(probs)
+                
+            except Empty:
+                continue
+            except Exception as e:
+                print(f"Error in card picker service: {e}")
+                # Send error response to all waiting requests
+                for req in requests:
+                    req.response_queue.put(e)
+    
+    def get_probs(self, choice: Choice) -> np.ndarray:
+        """Get win probabilities for a choice. Thread-safe."""
+        if choice.choice_type != ActionType.CARD:
+            raise ValueError("Only card choices are supported")
+        
+        response_queue = Queue()
+        self.request_queue.put(CardPickRequest(choice, response_queue))
+        response = response_queue.get()
+        
+        if isinstance(response, Exception):
+            raise response
+        
+        return response
+    
+    def stop(self):
+        """Stop the card picker service and wait for it to finish"""
+        self.shutdown_event.set()
+        self.thread.join()
+
+def pick_card_with_net(picker: CardPickerService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext) -> sts.GameAction:
     """Use neural network to pick a card from the choices"""
-    probs = get_choice_winprobs(net, choice)
+    probs = picker.get_probs(choice)
     chosen_idx = int(np.argmax(probs))
     
     # Find the GameAction that corresponds to this card index
@@ -253,16 +351,19 @@ def random_playout_data(seed: int, net: NN = None):
 
 # %%
 if __name__ == "__main__":
-    num_threads = 1
+    torch.set_float32_matmul_precision('high')
+
+    num_threads = 10
     start_seed = 0
     num_playouts = 100 # _000
     
-    # Load neural network
+    # Load neural network and start card picker service
     net = load_net()
-    print("Loaded neural network")
+    picker = CardPickerService(net, batch_size=32)
+    print("Loaded neural network and started card picker service")
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(random_playout_data, s, net) for s in range(start_seed, start_seed+num_playouts)]
+        futures = [executor.submit(random_playout_data, s, picker) for s in range(start_seed, start_seed+num_playouts)]
         df = pd.concat([
             future.result()
             for future
@@ -276,6 +377,8 @@ if __name__ == "__main__":
             )
         ])
 
+    picker.stop()
+    
     # Calculate and print winrate
     n_unique_seeds = df['seed'].nunique()
     n_wins = df.groupby('seed')['outcome'].last().sum()
