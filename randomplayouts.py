@@ -255,19 +255,19 @@ def entropy(probs: np.ndarray) -> float:
     probs /= np.sum(probs)
     return -np.sum(probs * np.log(np.maximum(probs, 1e-20)))
 
-def get_boltzmann_probs(probs: np.ndarray, temperature: float = 0.01) -> np.ndarray:
+def get_boltzmann_probs(probs: np.ndarray, temperature: float) -> np.ndarray:
     """Convert probabilities to Boltzmann distribution"""
     logits = np.log(np.maximum(probs, 1e-20)) / temperature
     logits = logits - np.max(logits)  # Subtract max for numerical stability
     exp_logits = np.exp(logits)
     return exp_logits / np.sum(exp_logits)
 
-def sample_boltzmann(probs: np.ndarray, temperature: float = 0.01) -> int:
+def sample_boltzmann(probs: np.ndarray, temperature: float) -> int:
     """Sample an index using Boltzmann distribution"""
     softmax_probs = get_boltzmann_probs(probs, temperature)
     return int(np.random.choice(len(probs), p=softmax_probs))
 
-def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext, stats: ChoiceStats = None) -> sts.GameAction:
+def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], temperature: float = 0.01, stats: ChoiceStats = None) -> sts.GameAction:
     """Use neural network to pick a card from the choices using Boltzmann sampling"""
     if choice.choice_type != ActionType.CARD:
         raise ValueError("Only card choices are supported")
@@ -276,9 +276,9 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     probs = get_card_probs(logits)
     
     if stats is not None:
-        stats.add_choice(probs)
+        stats.add_choice(probs, temperature)
         
-    chosen_idx = sample_boltzmann(probs)
+    chosen_idx = sample_boltzmann(probs, temperature)
     
     # Find the GameAction that corresponds to this card index
     total = 0
@@ -298,7 +298,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     # Fallback to random choice if something went wrong
     return random.choice(actions)
 
-def run_game(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStats = None):
+def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
 
     agent = sts.Agent()
@@ -343,7 +343,7 @@ def run_game(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStat
                     cards_offered = gc.screen_state_info.rewards_container.cards
                     if cards_offered:
                         choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], choice_type=ActionType.CARD)
-                        action = pick_card_with_net(net, choice, actions, gc, stats)
+                        action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats)
                     else:
                         action = agent.pick_gameaction(gc)
                 else:
@@ -393,8 +393,8 @@ def run_game(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStat
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome)
 
-def run_game_data(seed: int, net: NN = None, stats: ChoiceStats = None):
-    choices, outcome = run_game(seed, net=net, verbose=False, stats=stats)
+def run_game_data(seed: int, net: NN = None, temperature: float = 0.01, stats: ChoiceStats = None):
+    choices, outcome = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
     df = pd.DataFrame([flatten_dict(c.as_dict()) for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
@@ -406,7 +406,7 @@ class ChoiceStats:
         self.n_options = []
         self.boltzmann_entropies = []
         
-    def add_choice(self, probs: np.ndarray):
+    def add_choice(self, probs: np.ndarray, temperature: float):
         """Record statistics for a choice"""
         # Get raw entropy
         self.entropies.append(entropy(probs))
@@ -415,7 +415,7 @@ class ChoiceStats:
         self.n_options.append(np.sum(probs != float('-inf')))
         
         # Get Boltzmann entropy
-        boltz_probs = get_boltzmann_probs(probs)
+        boltz_probs = get_boltzmann_probs(probs, temperature)
         self.boltzmann_entropies.append(entropy(boltz_probs))
     
     def plot_stats(self):
@@ -463,7 +463,7 @@ def main(args):
     
     with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
         futures = [
-            executor.submit(run_game_data, s, service, stats) 
+            executor.submit(run_game_data, s, service, args.temperature, stats) 
             for s in range(args.start_seed, args.start_seed + args.num_games)
         ]
         df = pd.concat([
@@ -517,6 +517,8 @@ if __name__ == "__main__":
                         help='Disable plotting of statistics')
     parser.add_argument('--no-save', action='store_true',
                         help='Disable saving results to parquet file')
+    parser.add_argument('--temperature', type=float, default=0.05,
+                        help='Temperature for Boltzmann sampling (default: 0.05)')
     
     args = parser.parse_args()
     main(args)
