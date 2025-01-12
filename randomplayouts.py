@@ -7,9 +7,10 @@ from enum import IntEnum, auto
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue, Empty
-from threading import Thread, Event
+from threading import Thread, Event, Timer
 from typing import NamedTuple
 import time
+import threading
 
 import pickle
 from tqdm.auto import tqdm
@@ -251,7 +252,7 @@ def get_card_probs(logits: np.ndarray) -> np.ndarray:
 def entropy(probs: np.ndarray) -> float:
     """Calculate entropy of a probability distribution"""
     probs /= np.sum(probs)
-    return -np.sum(probs * np.log(probs))
+    return -np.sum(probs * np.log(np.maximum(probs, 1e-20)))
 
 def get_boltzmann_probs(probs: np.ndarray, temperature: float = 0.01) -> np.ndarray:
     """Convert probabilities to Boltzmann distribution"""
@@ -303,12 +304,32 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
     agent.simulation_count_base = 1000
     choices: list[ChoiceOutcome] = []
 
+    # Create an event to signal timeout
+    timeout_event = threading.Event()
+    
+    def timeout_handler():
+        timeout_event.set()
+        print(f"Warning: Battle simulation taking too long for seed {seed}")
+
     while gc.outcome == sts.GameOutcome.UNDECIDED:
         try:
             if gc.screen_state == sts.ScreenState.BATTLE:
                 if verbose:
                     print(gc.deck)
-                agent.playout_battle(gc)
+                
+                # Start a timer before battle simulation
+                timer = Timer(10.0, timeout_handler)
+                timer.start()
+                
+                try:
+                    agent.playout_battle(gc)
+                finally:
+                    timer.cancel()
+                    
+                # Check if we hit the timeout
+                # if timeout_event.is_set():
+                #     raise RuntimeError(f"Battle simulation timed out for seed {seed}")
+                    
                 obs = sts.getNNRepresentation(gc)
             else:
                 obs = sts.getNNRepresentation(gc)
@@ -433,9 +454,9 @@ class ChoiceStats:
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
 
-    num_threads = 30
-    start_seed = 100_000
-    num_playouts = 50_000
+    num_threads = 1 # 30
+    start_seed = 101239 # 100_000
+    num_playouts = 1 # 50_000
     
     # Load neural network and start service
     net = load_net()
@@ -475,5 +496,8 @@ if __name__ == "__main__":
     # Shuffle the DataFrame
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
-    df.to_parquet(f"rollouts{start_seed}_{start_seed+num_playouts}.net.parquet", engine="pyarrow")
+    df_path = f"rollouts{start_seed}_{start_seed+num_playouts}.net.parquet"
+    df.to_parquet(df_path, engine="pyarrow")
+    print(f"Saved to {df_path}")
+
 ## %%
