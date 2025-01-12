@@ -39,7 +39,7 @@ net = net.to(device)
 net = torch.compile(net, mode="reduce-overhead")
 
 # %%
-df = pd.read_parquet("rollouts0_100000.net.parquet")
+df = pd.read_parquet("rollouts100000_110000.net.parquet")
 # df = pd.read_parquet("rollouts0_6000.parquet")
 
 # %%
@@ -95,10 +95,10 @@ np.random.seed(3)
  #batch['outcome']
 
 # %%
-save_path = f"net.outcome.lr{T.initial_lr:.1e}-{T.final_lr:.1e}.wd{T.weight_decay:.1e}.e{T.num_epochs}.pt"
+save_path = f"net.outcome.lr{T.initial_lr:.1e}.wd{T.weight_decay:.1e}.e{T.num_epochs}.pt"
 
 # %%
-do_training = False # True
+do_training = True
 
 def train(batch, opt, device):
     """
@@ -196,13 +196,14 @@ batch = valid_df.sample(128)
 len(batch.iloc[0]['obs.deck.cards'])
 
 # %%
-batch_data = collate_fn([SlayDataset(batch).__getitem__(i) for i in range(len(batch))])
-output = process_batch(batch_data, net)
+with torch.no_grad():
+    batch_data = collate_fn([SlayDataset(batch).__getitem__(i) for i in range(len(batch))])
+    output = process_batch(batch_data, net)
 
-# Get win probabilities for all cards and mark chosen ones
-all_probs = torch.sigmoid(output['card_choice_winprob_logits'])
-chosen_indices = batch_data['chosen_idx']
-batch_indices = torch.arange(len(batch), device=device)
+    # Get win probabilities for all cards and mark chosen ones
+    all_probs = torch.sigmoid(output['card_choice_winprob_logits'])
+    chosen_indices = batch_data['chosen_idx']
+    batch_indices = torch.arange(len(batch), device=device)
 
 # Print probabilities for each example in batch
 for i in range(min(20, len(batch))):

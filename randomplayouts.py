@@ -11,6 +11,7 @@ from threading import Thread, Event, Timer
 from typing import NamedTuple
 import time
 import threading
+import argparse
 
 import pickle
 from tqdm.auto import tqdm
@@ -139,7 +140,7 @@ class ChoiceOutcome:
             'chosen_idx': self.chosen_idx,
         }
 
-def load_net(device=None):
+def load_net(model_path, device=None):
     if device is None:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
@@ -147,7 +148,7 @@ def load_net(device=None):
     net = net.to(device)
     net = torch.compile(net, mode="reduce-overhead")
     
-    state = torch.load("net.outcome.pt", map_location=device, weights_only=True)
+    state = torch.load(model_path, map_location=device, weights_only=True)
     net.load_state_dict(state)
     net.eval()
     
@@ -318,7 +319,7 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
                     print(gc.deck)
                 
                 # Start a timer before battle simulation
-                timer = Timer(10.0, timeout_handler)
+                timer = Timer(30.0, timeout_handler)
                 timer.start()
                 
                 try:
@@ -327,8 +328,8 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
                     timer.cancel()
                     
                 # Check if we hit the timeout
-                # if timeout_event.is_set():
-                #     raise RuntimeError(f"Battle simulation timed out for seed {seed}")
+                if timeout_event.is_set():
+                    print(f"Seed {seed} did finish")
                     
                 obs = sts.getNNRepresentation(gc)
             else:
@@ -450,32 +451,30 @@ class ChoiceStats:
         print(f"Boltzmann entropy: mean={np.mean(self.boltzmann_entropies):.3f}, median={np.median(self.boltzmann_entropies):.3f}")
         print(f"Options: mean={np.mean(self.n_options):.1f}, median={np.median(self.n_options):.1f}")
 
-# %%
-if __name__ == "__main__":
+def main(args):
     torch.set_float32_matmul_precision('high')
-
-    num_threads = 1 # 30
-    start_seed = 101239 # 100_000
-    num_playouts = 1 # 50_000
     
     # Load neural network and start service
-    net = load_net()
-    service = NNService(net, batch_size=16)
-    print("Loaded neural network and started service")
+    net = load_net(args.model_path)
+    service = NNService(net, batch_size=args.batch_size)
+    print(f"Loaded neural network from {args.model_path}")
 
     stats = ChoiceStats()
     
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(random_playout_data, s, service, stats) for s in range(start_seed, start_seed+num_playouts)]
+    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+        futures = [
+            executor.submit(random_playout_data, s, service, stats) 
+            for s in range(args.start_seed, args.start_seed + args.num_playouts)
+        ]
         df = pd.concat([
             future.result()
             for future
             in tqdm(
                 as_completed(futures),
-                total=num_playouts,
+                total=args.num_playouts,
                 mininterval=5,
                 maxinterval=60,
-                miniters=num_threads,
+                miniters=args.num_threads,
                 smoothing=0.1,
             )
         ])
@@ -491,13 +490,32 @@ if __name__ == "__main__":
     print(f"Winrate: {winrate:.1%}")
     
     # Plot choice statistics
-    stats.plot_stats()
+    if not args.no_plots:
+        stats.plot_stats()
 
     # Shuffle the DataFrame
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
-    df_path = f"rollouts{start_seed}_{start_seed+num_playouts}.net.parquet"
+    df_path = f"rollouts{args.start_seed}_{args.start_seed+args.num_playouts}.net.parquet"
     df.to_parquet(df_path, engine="pyarrow")
     print(f"Saved to {df_path}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Run Slay the Spire simulations with neural network guidance')
+    parser.add_argument('--model-path', type=str, default="net.outcome.pt",
+                        help='Path to the neural network model file')
+    parser.add_argument('--num-threads', type=int, default=30,
+                        help='Number of parallel threads to use')
+    parser.add_argument('--start-seed', type=int, default=200_000,
+                        help='Starting seed for simulations')
+    parser.add_argument('--num-playouts', type=int, default=50_000,
+                        help='Number of games to simulate')
+    parser.add_argument('--batch-size', type=int, default=32,
+                        help='Batch size for neural network inference')
+    parser.add_argument('--no-plots', action='store_true',
+                        help='Disable plotting of statistics')
+    
+    args = parser.parse_args()
+    main(args)
 
 ## %%
