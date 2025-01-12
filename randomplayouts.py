@@ -433,13 +433,13 @@ class ChoiceStats:
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
 
-    num_threads = 4
-    start_seed = 0
-    num_playouts = 100  #10_000
+    num_threads = 30
+    start_seed = 100_000
+    num_playouts = 50_000
     
     # Load neural network and start service
     net = load_net()
-    service = NNService(net, batch_size=32)
+    service = NNService(net, batch_size=16)
     print("Loaded neural network and started service")
 
     stats = ChoiceStats()
@@ -472,6 +472,8 @@ if __name__ == "__main__":
     # Plot choice statistics
     stats.plot_stats()
 
+    # Shuffle the DataFrame
+    df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
+
     df.to_parquet(f"rollouts{start_seed}_{start_seed+num_playouts}.net.parquet", engine="pyarrow")
 ## %%
-#
