@@ -368,6 +368,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 # Check if we hit the timeout
                 if timeout_event.is_set():
                     print(f"Seed {seed} did finish")
+                    timeout_event.clear()
                     
                 obs = sts.getNNRepresentation(gc)
             else:
