@@ -79,19 +79,7 @@ def process_choice(net: NN, choice: Choice) -> dict:
     """
     # Create a minimal batch with just this choice
     batch = [{
-        'deck': np.array(choice.obs.deck.cards, dtype=np.int32),
-        'deck_upgrades': np.array(choice.obs.deck.upgrades, dtype=np.int32),
-        'choices': (
-            np.concatenate([s.cards for s in choice.cards_offered], axis=0, dtype=np.int32)
-            if choice.cards_offered
-            else np.array([], dtype=np.int32)
-        ),
-        'choice_upgrades': (
-            np.concatenate([s.upgrades for s in choice.cards_offered], axis=0, dtype=np.int32)
-            if choice.cards_offered
-            else np.array([], dtype=np.int32)
-        ),
-        'fixed_obs': np.array(choice.obs.fixed_observation, dtype=np.int32),
+        **choice.as_dict(),
         'chosen_idx': 0,  # Dummy value, not used
         'outcome': 0.0,   # Dummy value, not used
     }]
@@ -209,21 +197,8 @@ class NNService:
                 
                 # Create batch
                 batch = [{
-                    'deck': np.array(choice.obs.deck.cards, dtype=np.int32),
-                    'deck_upgrades': np.array(choice.obs.deck.upgrades, dtype=np.int32),
-                    'choices': (
-                        np.concatenate([s.cards for s in choice.cards_offered], axis=0, dtype=np.int32)
-                        if choice.cards_offered
-                        else np.array([], dtype=np.int32)
-                    ),
-                    'choice_upgrades': (
-                        np.concatenate([s.upgrades for s in choice.cards_offered], axis=0, dtype=np.int32)
-                        if choice.cards_offered
-                        else np.array([], dtype=np.int32)
-                    ),
-                    'fixed_obs': np.array(choice.obs.fixed_observation, dtype=np.int32),
-                    'fixed_actions': np.array([a.value for a in choice.fixed_actions], dtype=np.int32),
-                    'choice_type': 0, # Dummy value
+                    **choice.as_dict(),
+                    'choice_type': 0,  # Dummy value
                     'chosen_idx': 0,  # Dummy value
                     'outcome': 0.0,   # Dummy value
                 } for choice in choices]
@@ -239,7 +214,7 @@ class NNService:
                     fixed_logits = output['fixed_logits'][i].cpu().numpy()
                     
                     # Get number of valid options
-                    n_valid_cards = len(batch[i]['choices'])
+                    n_valid_cards = len(batch[i]['cards_offered']['cards'])
                     n_fixed = len(req.choice.fixed_actions)
                     
                     # Trim logits to valid lengths

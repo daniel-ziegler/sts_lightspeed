@@ -8,6 +8,7 @@ import slaythespire as sts
 
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -18,6 +19,7 @@ class ModelHP:
     n_heads: int = 8
     norm_eps: float = 1e-5
     n_fixed_obs: int = len(sts.getFixedObservationMaximums())
+    max_relics: int = 25  # Maximum number of relics a player typically has
 
 
 # Constants for data processing
@@ -131,6 +133,9 @@ class NN(nn.Module):
         self.fixed_obs_embed = SinusoidalEmbedding(H.dim, n_fixed_obs)
         self.fixed_obs_proj = nn.Linear(self.fixed_obs_embed.out_dim, H.dim)
 
+        # Add relic embedding
+        self.relic_embed = nn.Embedding(len(sts.RelicId), H.dim, padding_idx=sts.RelicId.INVALID.value)
+
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
         self.norm = RMSNorm(H.dim, H.norm_eps)
@@ -150,41 +155,50 @@ class NN(nn.Module):
                 - choice_upgrades: [batch_size, MAX_CHOICES] tensor of upgrade counts
                 - fixed_obs: [batch_size, n_fixed_obs] tensor of fixed observations
                 - fixed_actions: [batch_size, n_fixed_actions] tensor of fixed action IDs
+                - relics: [batch_size, max_relics] tensor of relic IDs
         """
         device = batch['deck'].device
         max_deck_len = batch['deck'].size(1)
         max_choices_len = batch['choices'].size(1)
 
-        # Create sinusoidal embeddings for all fixed observations at once
+        # Create embeddings list to concatenate
+        embeddings = []
+
+        # Add fixed observations
         fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(batch['fixed_obs']))
+        embeddings.append(fixed_obs_x.unsqueeze(1))  # [batch, 1, dim]
 
         # Embed cards
         cards = torch.cat((batch['deck'], batch['choices']), dim=1)
         upgrades = torch.cat((batch['deck_upgrades'], batch['choice_upgrades']), dim=1)
-        mask = cards == sts.CardId.INVALID.value
+        card_mask = cards == sts.CardId.INVALID.value
 
-        # Combine card and upgrade embeddings
         card_x = (self.card_embed(cards) +
                  self.upgrade_embed(upgrades.clamp(max=20)) +
                  self.input_type_embed(torch.tensor([int(InputType.Card)], device=device)))
         card_x[:, max_deck_len:, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
+        embeddings.append(card_x)
+
+        # Add relic embeddings
+        relic_x = self.relic_embed(batch['relics'])
+        relic_x = relic_x + self.input_type_embed(torch.tensor([int(InputType.Relic)], device=device))
+        embeddings.append(relic_x)
+        relic_mask = batch['relics'] == sts.RelicId.INVALID.value
 
         # Add fixed action embeddings
         fixed_x = self.fixed_action_embed(batch['fixed_actions'])
         fixed_x = fixed_x + self.input_type_embed(torch.tensor([int(InputType.Fixed)], device=device))
+        embeddings.append(fixed_x)
 
         # Combine all embeddings
-        x = torch.cat([
-            fixed_obs_x.unsqueeze(1),  # [batch, 1, dim]
-            card_x,                     # [batch, deck+choices, dim]
-            fixed_x,                    # [batch, n_fixed_actions, dim]
-        ], dim=1)
+        x = torch.cat(embeddings, dim=1)
 
-        # Add fixed obs and fixed action tokens to mask (False = don't mask)
+        # Combine masks
         pos_mask = torch.cat([
-            torch.zeros(mask.size(0), 1, device=device, dtype=mask.dtype),  # fixed obs
-            mask,                                                           # cards
-            batch['fixed_actions'] == FixedAction.INVALID.value,           # fixed actions
+            torch.zeros(card_mask.size(0), 1, device=device, dtype=card_mask.dtype),  # fixed obs
+            card_mask,  # cards
+            relic_mask,  # relics
+            batch['fixed_actions'] == FixedAction.INVALID.value,  # fixed actions
         ], dim=1)
 
         for l in self.layers:
@@ -200,7 +214,7 @@ class NN(nn.Module):
         fixed_action_logits = self.card_winprob(fixed_x).squeeze(-1).float()
         
         # Mask invalid card choices and fixed actions
-        card_logits = card_logits.masked_fill(mask[:, max_deck_len:], float('-inf'))
+        card_logits = card_logits.masked_fill(card_mask[:, max_deck_len:], float('-inf'))
         fixed_action_logits = fixed_action_logits.masked_fill(
             batch['fixed_actions'] == FixedAction.INVALID.value, 
             float('-inf')
@@ -232,6 +246,7 @@ class SlayDataset(torch.utils.data.Dataset):
             'choices': np.array(row['cards_offered.cards'], dtype=np.int32),
             'choice_upgrades': np.array(row['cards_offered.upgrades'], dtype=np.int32),
             'fixed_obs': np.array(row['obs.fixed_observation'], dtype=np.int32),
+            'relics': np.array(row['obs.relics'], dtype=np.int32),
             'chosen_idx': row['chosen_idx'],
             'outcome': row['outcome'],
         }
@@ -239,7 +254,7 @@ class SlayDataset(torch.utils.data.Dataset):
 
 def collate_fn(batch):
     for x in batch:
-        n_card_choices = len(x['choices'])
+        n_card_choices = len(x['cards_offered']['cards'])
         n_fixed_actions = len(x['fixed_actions'])
         chosen_idx = x['chosen_idx']
         # Allow indices up to n_choices + n_fixed_actions
@@ -259,15 +274,17 @@ def collate_fn(batch):
     chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
     choice_type = torch.zeros(len(batch), dtype=torch.int64)
     outcome = torch.zeros(len(batch), dtype=torch.float32)
+    relics = torch.full((len(batch), ModelHP.max_relics), sts.RelicId.INVALID.value, dtype=torch.int32)
 
     # Fill arrays
     for i, x in enumerate(batch):
-        deck[i, :min(len(x['deck']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck'])[:MAX_DECK_SIZE]
-        deck_upgrades[i, :min(len(x['deck_upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck_upgrades'])[:MAX_DECK_SIZE]
-        choices[i, :min(len(x['choices']), MAX_CHOICES)] = torch.from_numpy(x['choices'])[:MAX_CHOICES]
-        choice_upgrades[i, :min(len(x['choice_upgrades']), MAX_CHOICES)] = torch.from_numpy(x['choice_upgrades'])[:MAX_CHOICES]
-        fixed_obs[i] = torch.from_numpy(x['fixed_obs'])
+        deck[i, :min(len(x['obs']['deck']['cards']), MAX_DECK_SIZE)] = torch.from_numpy(x['obs']['deck']['cards'])[:MAX_DECK_SIZE]
+        deck_upgrades[i, :min(len(x['obs']['deck']['upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(x['obs']['deck']['upgrades'])[:MAX_DECK_SIZE]
+        choices[i, :min(len(x['cards_offered']['cards']), MAX_CHOICES)] = torch.from_numpy(x['cards_offered']['cards'])[:MAX_CHOICES]
+        choice_upgrades[i, :min(len(x['cards_offered']['upgrades']), MAX_CHOICES)] = torch.from_numpy(x['cards_offered']['upgrades'])[:MAX_CHOICES]
+        fixed_obs[i] = torch.from_numpy(x['obs']['fixed_observation'])
         fixed_actions[i, :len(x['fixed_actions'])] = torch.from_numpy(x['fixed_actions'])
+        relics[i, :len(x['obs']['relics']['relics'])] = torch.from_numpy(x['obs']['relics']['relics'])
         chosen_idx[i] = x['chosen_idx']
         choice_type[i] = x['choice_type']
         outcome[i] = x['outcome']
@@ -279,6 +296,7 @@ def collate_fn(batch):
         'choice_upgrades': choice_upgrades,
         'fixed_obs': fixed_obs,
         'fixed_actions': fixed_actions,
+        'relics': relics,
         'chosen_idx': chosen_idx,
         'choice_type': choice_type,
         'outcome': outcome,
