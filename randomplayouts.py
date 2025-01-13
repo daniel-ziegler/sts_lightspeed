@@ -290,12 +290,15 @@ def get_boltzmann_probs(probs: np.ndarray, temperature: float) -> np.ndarray:
     exp_logits = np.exp(logits)
     return exp_logits / np.sum(exp_logits)
 
-def sample_boltzmann(probs: np.ndarray, temperature: float) -> int:
+def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random = None) -> int:
     """Sample an index using Boltzmann distribution"""
     softmax_probs = get_boltzmann_probs(probs, temperature)
-    return int(np.random.choice(len(probs), p=softmax_probs))
+    if rng is None:
+        return int(np.random.choice(len(probs), p=softmax_probs))
+    return int(rng.choices(range(len(probs)), weights=softmax_probs, k=1)[0])
 
-def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], temperature: float = 0.01, stats: ChoiceStats = None) -> sts.GameAction:
+def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
+                      temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> sts.GameAction:
     """Use neural network to pick a card from the choices using Boltzmann sampling"""
     logits = service.get_logits(choice)
     
@@ -309,7 +312,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     if stats is not None:
         stats.add_choice(probs, temperature)
         
-    chosen_idx = sample_boltzmann(probs, temperature)
+    chosen_idx = sample_boltzmann(probs, temperature, rng)
     
     # Find the GameAction that corresponds to this card index
     total = 0
@@ -334,10 +337,12 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     
     # Fallback to random choice if something went wrong
     print(f"Warning: Could not find action for card index {chosen_idx} (set {which_set}, card {which_card})")
-    return random.choice(actions)
+    return rng.choice(actions) if rng else random.choice(actions)
 
 def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
+    # Create seeded RNG instance for this game
+    rng = random.Random(seed)
 
     agent = sts.Agent()
     agent.simulation_count_base = 1000
@@ -388,7 +393,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     if cards_offered:
                         choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], 
                                      fixed_actions=fixed_actions)
-                        action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats)
+                        action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     else:
                         action = agent.pick_gameaction(gc)
                 else:
