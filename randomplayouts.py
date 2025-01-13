@@ -163,9 +163,11 @@ class NNRequest(NamedTuple):
 
 class NNService:
     """Background service that batches neural network inference requests"""
-    def __init__(self, net: NN, batch_size=32, max_wait_time=0.001):
+    def __init__(self, net: NN, batch_size=32, max_wait_time=0.001, batch_size_factor=8):
         self.net = net
-        self.batch_size = batch_size
+        # Round batch_size up to nearest multiple of batch_size_factor
+        self.batch_size = ((batch_size + batch_size_factor - 1) // batch_size_factor) * batch_size_factor
+        self.batch_size_factor = batch_size_factor
         self.max_wait_time = max_wait_time
         self.request_queue = Queue()
         self.shutdown_event = Event()
@@ -180,13 +182,27 @@ class NNService:
                 # Get at least one request
                 requests.append(self.request_queue.get(timeout=0.1))
                 
-                # Try to get more requests up to batch_size or max_wait_time
+                # Try to get more requests up to next multiple of batch_size_factor
                 start_time = time.time()
-                while len(requests) < self.batch_size and time.time() - start_time < self.max_wait_time:
+                target_size = ((len(requests) + self.batch_size_factor - 1) 
+                             // self.batch_size_factor) * self.batch_size_factor
+                target_size = min(target_size, self.batch_size)
+                
+                while len(requests) < target_size and time.time() - start_time < self.max_wait_time:
                     try:
                         requests.append(self.request_queue.get_nowait())
                     except Empty:
                         break
+
+                print(f"Processing {len(requests)} requests")
+                
+                # Pad batch to multiple of batch_size_factor if needed
+                if len(requests) < target_size:
+                    target_size = ((len(requests) + self.batch_size_factor - 1) 
+                                 // self.batch_size_factor) * self.batch_size_factor
+                    # Duplicate last request to pad batch
+                    while len(requests) < target_size:
+                        requests.append(requests[-1])
                 
                 # Process batch
                 choices = [req.choice for req in requests]
@@ -505,7 +521,7 @@ def main(args):
         model_path = args.model_path
     # Load neural network and start service
     net = load_net(model_path)
-    service = NNService(net, batch_size=args.batch_size)
+    service = NNService(net, batch_size=args.batch_size, batch_size_factor=8)
     print(f"Loaded neural network from {args.model_path}")
 
     stats = ChoiceStats()
