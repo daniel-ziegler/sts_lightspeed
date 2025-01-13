@@ -163,7 +163,7 @@ class NNRequest(NamedTuple):
 
 class NNService:
     """Background service that batches neural network inference requests"""
-    def __init__(self, net: NN, batch_size=32, max_wait_time=0.001, batch_size_factor=8):
+    def __init__(self, net: NN, batch_size=32, max_wait_time=0.01, batch_size_factor=8):
         self.net = net
         # Round batch_size up to nearest multiple of batch_size_factor
         self.batch_size = ((batch_size + batch_size_factor - 1) // batch_size_factor) * batch_size_factor
@@ -194,7 +194,7 @@ class NNService:
                     except Empty:
                         break
 
-                print(f"Processing {len(requests)} requests")
+                unpadded_len = len(requests)
                 
                 # Pad batch to multiple of batch_size_factor if needed
                 if len(requests) < target_size:
@@ -234,7 +234,7 @@ class NNService:
                     output = process_batch(batch_tensors, self.net)
                 
                 # Send responses
-                for i, req in enumerate(requests):
+                for i, req in enumerate(requests[:unpadded_len]):
                     card_logits = output['card_logits'][i].cpu().numpy()
                     fixed_logits = output['fixed_logits'][i].cpu().numpy()
                     
@@ -521,7 +521,11 @@ def main(args):
         model_path = args.model_path
     # Load neural network and start service
     net = load_net(model_path)
-    service = NNService(net, batch_size=args.batch_size, batch_size_factor=8)
+    service = NNService(
+        net,
+        batch_size=args.batch_size,
+        batch_size_factor=min(min(8, args.batch_size), (args.num_threads + 1) // 2),
+    )
     print(f"Loaded neural network from {args.model_path}")
 
     stats = ChoiceStats()
