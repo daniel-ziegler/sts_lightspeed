@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from itertools import product
 import json
 from datetime import datetime
+from typing import List
 
 from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, process_batch, collate_fn
 import numpy as np
@@ -33,12 +34,6 @@ class TrainingHP:
     log_every_n_steps: int = 20
 
 # %%
-df = pd.read_parquet("rollouts_v2_20000_25000.parquet")
-# df = pd.read_parquet("rollouts_v2_0_50000.parquet")
-# df = pd.read_parquet("rollouts0_6000.parquet")
-
-# %%
-# Split into train and validation sets based on seed value
 def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
     """Deterministically decide if a seed should be in validation set"""
     # Use a simple hash function to get a value between 0 and 1
@@ -67,34 +62,55 @@ class SlayDataset(torch.utils.data.Dataset):
             'outcome': row['outcome'],
         }
 
+def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Load and preprocess data from a parquet file, splitting into train and validation sets.
+    
+    Args:
+        path: Path to the parquet file
+        validation_fraction: Fraction of data to use for validation
+        
+    Returns:
+        Tuple of (train_df, valid_df)
+    """
+    df = pd.concat([pd.read_parquet(path) for path in paths])
+    
+    # Filter data to handle fixed actions
+    data_df = df[
+        df.apply(lambda r: (
+            # Allow fixed actions (like SKIP)
+            (r["choice_type"] == ActionType.FIXED) or
+            # Or normal card choices within bounds
+            (r["choice_type"] == ActionType.CARD and 
+             r["chosen_idx"] >= 0 and 
+             r["chosen_idx"] < len(r["cards_offered.cards"]) and
+             r["chosen_idx"] < MAX_CHOICES)
+        ), axis=1)
+    ]
 
-# Update data filtering to handle fixed actions
-data_df = df[
-    df.apply(lambda r: (
-        # Allow fixed actions (like SKIP)
-        (r["choice_type"] == ActionType.FIXED) or
-        # Or normal card choices within bounds
-        (r["choice_type"] == ActionType.CARD and 
-         r["chosen_idx"] >= 0 and 
-         r["chosen_idx"] < len(r["cards_offered.cards"]) and
-         r["chosen_idx"] < MAX_CHOICES)
-    ), axis=1)
-]
+    # Split data
+    valid_df = data_df[data_df['seed'].apply(lambda s: is_validation_seed(s, validation_fraction))]
+    train_df = data_df[~data_df['seed'].apply(lambda s: is_validation_seed(s, validation_fraction))]
 
-# Split data
-T = TrainingHP()  # Base hyperparameters
-valid_df = data_df[data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
-train_df = data_df[~data_df['seed'].apply(lambda s: is_validation_seed(s, T.validation_fraction))]
+    # Balance validation set
+    valid_positives = valid_df[valid_df['outcome'] == 1]
+    valid_negatives = valid_df[valid_df['outcome'] == 0]
+    n_samples = min(len(valid_positives), len(valid_negatives))
+    balanced_valid_df = pd.concat([
+        valid_positives.sample(n=n_samples, random_state=42),
+        valid_negatives.sample(n=n_samples, random_state=42)
+    ])
+    
+    return train_df, balanced_valid_df
 
-# Balance validation set
-valid_positives = valid_df[valid_df['outcome'] == 1]
-valid_negatives = valid_df[valid_df['outcome'] == 0]
-n_samples = min(len(valid_positives), len(valid_negatives))
-balanced_valid_df = pd.concat([
-    valid_positives.sample(n=n_samples, random_state=42),
-    valid_negatives.sample(n=n_samples, random_state=42)
-])
-valid_df = balanced_valid_df
+def get_data_paths() -> List[str]:
+    """Get data paths from command line args, or use default if none provided"""
+    if len(sys.argv) > 1:
+        return sys.argv[1:]
+    return ["rollouts_v2_25000_30000.parquet"]  # Default path
+
+T = TrainingHP()
+train_df, valid_df = load_and_preprocess_data(get_data_paths(), T.validation_fraction)
 
 # %%
 np.random.seed(3)
