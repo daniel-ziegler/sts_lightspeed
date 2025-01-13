@@ -22,7 +22,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, FixedAction, ModelHP, collate_fn, process_batch
+from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch
 import slaythespire as sts
 
 # %%
@@ -36,13 +36,6 @@ def flatten_dict(d, parent_key='', sep='.'):
             items.append((new_key, v))
     return dict(items)
 
-# %%
-class ActionType(IntEnum):
-    INVALID = auto()
-    CARD = auto()
-    PATH = auto()
-    EVENT_OPTION = auto()
-    FIXED = auto()  # New type for fixed actions like SKIP
 
 # %%
 @dataclass
@@ -58,8 +51,6 @@ class Choice:
 
     # ActionType.FIXED
     fixed_actions: list[FixedAction]  # Actions like SKIP
-
-    choice_type: ActionType
 
     def as_dict(self):
         return dict(
@@ -78,7 +69,6 @@ class Choice:
             ),
             fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
-            choice_type=self.choice_type,
         )
 
 
@@ -115,33 +105,41 @@ def process_choice(net: NN, choice: Choice) -> dict:
     return output
 
 
-def get_choice_winprobs(net: NN, choice: Choice) -> np.ndarray:
+def get_choice_winprobs(net: NN, choice: Choice) -> dict[str, np.ndarray]:
     """
     Get win probabilities for each option in a Choice.
-    Returns numpy array of probabilities.
+    Returns dict with 'card_probs' and 'fixed_probs' arrays.
     """
-    if choice.choice_type != ActionType.CARD:
-        raise ValueError("Only card choices are supported currently")
-        
     with torch.no_grad():
         output = process_choice(net, choice)
-        probs = torch.sigmoid(output['card_choice_winprob_logits'][0]).cpu().numpy()
+        card_probs = torch.sigmoid(output['card_logits'][0]).cpu().numpy()
+        fixed_probs = torch.sigmoid(output['fixed_logits'][0]).cpu().numpy()
         
         # Mask invalid entries
         n_valid = sum(len(s.cards) for s in choice.cards_offered)
-        probs[n_valid:] = float('-inf')
+        card_probs[n_valid:] = float('-inf')  # Mask invalid card choices
+        
+        # Mask invalid fixed actions
+        n_fixed = len(choice.fixed_actions)
+        fixed_probs[n_fixed:] = float('-inf')  # Mask invalid fixed actions
     
-    return probs
+    return {
+        'card_probs': card_probs,
+        'fixed_probs': fixed_probs,
+    }
 @dataclass
 class ChoiceOutcome:
     """A Choice and what was chosen from it"""
     choice: Choice
+
+    choice_type: ActionType  # which choice_type was chosen
     chosen_idx: int  # idx in arr/ays corresponding to choice_type
 
     def as_dict(self):
         return {
             **self.choice.as_dict(),
             'chosen_idx': self.chosen_idx,
+            'choice_type': self.choice_type,
         }
 
 def load_net(model_path, device=None):
@@ -152,8 +150,9 @@ def load_net(model_path, device=None):
     net = net.to(device)
     net = torch.compile(net, mode="reduce-overhead")
     
-    state = torch.load(model_path, map_location=device, weights_only=True)
-    net.load_state_dict(state, strict=False)
+    if model_path is not None:
+        state = torch.load(model_path, map_location=device, weights_only=True)
+        net.load_state_dict(state)
     net.eval()
     
     return net
@@ -207,6 +206,8 @@ class NNService:
                         else np.array([], dtype=np.int32)
                     ),
                     'fixed_obs': np.array(choice.obs.fixed_observation, dtype=np.int32),
+                    'fixed_actions': np.array([a.value for a in choice.fixed_actions], dtype=np.int32),
+                    'choice_type': 0, # Dummy value
                     'chosen_idx': 0,  # Dummy value
                     'outcome': 0.0,   # Dummy value
                 } for choice in choices]
@@ -218,13 +219,18 @@ class NNService:
                 
                 # Send responses
                 for i, req in enumerate(requests):
-                    logits = output['card_choice_winprob_logits'][i].cpu().numpy()
-                    # Get number of valid options (cards + fixed actions)
-                    n_valid = len(batch[i]['choices'])
-                    if req.choice.fixed_actions:
-                        n_valid += len(req.choice.fixed_actions)
-                    logits = logits[:n_valid]
-                    req.response_queue.put(logits)
+                    card_logits = output['card_logits'][i].cpu().numpy()
+                    fixed_logits = output['fixed_logits'][i].cpu().numpy()
+                    
+                    # Get number of valid options
+                    n_valid_cards = len(batch[i]['choices'])
+                    n_fixed = len(req.choice.fixed_actions)
+                    
+                    # Trim logits to valid lengths
+                    req.response_queue.put({
+                        'card_logits': card_logits[:n_valid_cards],
+                        'fixed_logits': fixed_logits[:n_fixed],
+                    })
                 
             except Empty:
                 continue
@@ -234,7 +240,7 @@ class NNService:
                 for req in requests:
                     req.response_queue.put(e)
     
-    def get_logits(self, choice: Choice) -> np.ndarray:
+    def get_logits(self, choice: Choice) -> dict[str, np.ndarray]:
         """Get raw logits from the network. Thread-safe."""
         response_queue = Queue()
         self.request_queue.put(NNRequest(choice, response_queue))
@@ -275,11 +281,14 @@ def sample_boltzmann(probs: np.ndarray, temperature: float) -> int:
 
 def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], temperature: float = 0.01, stats: ChoiceStats = None) -> sts.GameAction:
     """Use neural network to pick a card from the choices using Boltzmann sampling"""
-    if choice.choice_type != ActionType.CARD:
-        raise ValueError("Only card choices are supported")
-        
     logits = service.get_logits(choice)
-    probs = get_card_probs(logits)
+    
+    # Combine logits for sampling
+    all_logits = np.concatenate([
+        logits['card_logits'],
+        logits['fixed_logits']
+    ])
+    probs = get_card_probs(all_logits)
     
     if stats is not None:
         stats.add_choice(probs, temperature)
@@ -361,7 +370,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     
                     if cards_offered:
                         choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], 
-                                     choice_type=ActionType.CARD, fixed_actions=fixed_actions)
+                                     fixed_actions=fixed_actions)
                         action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats)
                     else:
                         action = agent.pick_gameaction(gc)
@@ -379,12 +388,18 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 if gc.screen_state == sts.ScreenState.REWARDS:
                     cards_offered = gc.screen_state_info.rewards_container.cards
                     which_set, which_card = action.idx1, action.idx2
-                    if cards_offered and which_card < len(cards_offered[which_set].cards):
+                    
+                    # Determine choice type and index based on the action taken
+                    if action.rewards_action_type == sts.RewardsActionType.SKIP:
+                        choice_type = ActionType.FIXED
+                        chosen_idx = 0
+                    elif cards_offered and which_card < len(cards_offered[which_set].cards):
                         choice_type = ActionType.CARD
                         chosen_idx = sum([len(s.cards) for s in cards_offered[:which_set]]) + which_card
                     else:
                         choice_type = ActionType.INVALID
                         chosen_idx = -1
+
                 elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
                     def xy_to_roomid(x, y):
                         roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
@@ -401,9 +416,15 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     choice_type = ActionType.INVALID
                     chosen_idx = -1
                 if choice_type != ActionType.INVALID:
+                    # Create Choice with all available options
+                    fixed_actions = []
+                    if gc.screen_state == sts.ScreenState.REWARDS:
+                        if any(a.rewards_action_type == sts.RewardsActionType.SKIP for a in actions):
+                            fixed_actions.append(FixedAction.SKIP)
+                    
                     choice = Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, 
-                                     choice_type=choice_type, fixed_actions=[])
-                    choices.append(ChoiceOutcome(choice, chosen_idx))
+                                  fixed_actions=fixed_actions)
+                    choices.append(ChoiceOutcome(choice, choice_type=choice_type, chosen_idx=chosen_idx))
                 if verbose:
                     print(action.getDesc(gc))
                 action.execute(gc)
@@ -415,7 +436,11 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
 
 def run_game_data(seed: int, net: NN = None, temperature: float = 0.01, stats: ChoiceStats = None):
     choices, outcome = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
-    df = pd.DataFrame([flatten_dict(c.as_dict()) for c in choices])
+    df = pd.DataFrame([{
+        **flatten_dict(c.choice.as_dict()),
+        'choice_type': c.choice_type,
+        'chosen_idx': c.chosen_idx,
+    } for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
     return df
@@ -474,8 +499,12 @@ class ChoiceStats:
 def main(args):
     torch.set_float32_matmul_precision('high')
     
+    if args.model_path in ("", "-"):
+        model_path = None
+    else:
+        model_path = args.model_path
     # Load neural network and start service
-    net = load_net(args.model_path)
+    net = load_net(model_path)
     service = NNService(net, batch_size=args.batch_size)
     print(f"Loaded neural network from {args.model_path}")
 
@@ -517,7 +546,7 @@ def main(args):
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
     if not args.no_save:
-        df_path = f"rollouts{args.start_seed}_{args.start_seed+args.num_games}.net.parquet"
+        df_path = f"rollouts_v2_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
         df.to_parquet(df_path, engine="pyarrow")
         print(f"Saved to {df_path}")
 

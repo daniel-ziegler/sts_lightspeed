@@ -6,14 +6,13 @@ from itertools import product
 import json
 from datetime import datetime
 
-from network import MAX_CHOICES, NN, FixedAction, ModelHP, SlayDataset, collate_fn, process_batch
+from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, process_batch, collate_fn
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 
 import slaythespire as sts
-from randomplayouts import ActionType
 
 # %%
 torch.set_float32_matmul_precision('high')
@@ -24,7 +23,7 @@ device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("
 # %%
 @dataclass
 class TrainingHP:
-    batch_size: int = 512
+    batch_size: int = 128
     initial_lr: float = 1e-4
     final_lr: float = 1e-6
     weight_decay: float = 1e-4
@@ -34,7 +33,8 @@ class TrainingHP:
     log_every_n_steps: int = 20
 
 # %%
-df = pd.read_parquet("rollouts110000_150000.net.parquet")
+df = pd.read_parquet("rollouts_v2_10000_15000.parquet")
+# df = pd.read_parquet("rollouts_v2_0_50000.parquet")
 # df = pd.read_parquet("rollouts0_6000.parquet")
 
 # %%
@@ -55,75 +55,31 @@ class SlayDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         
-        # For fixed actions (like SKIP), map to indices after card choices
-        chosen_idx = row['chosen_idx']
-        if chosen_idx < 0:  # Fixed action
-            # Map fixed actions to indices after card choices
-            if row['rewards_action_type'] == sts.RewardsActionType.SKIP:
-                chosen_idx = len(row['cards_offered.cards']) + FixedAction.SKIP
-            else:
-                raise ValueError(f"Unknown fixed action type: {row['rewards_action_type']}")
-        
         return {
             'deck': np.array(row['obs.deck.cards'], dtype=np.int32),
             'deck_upgrades': np.array(row['obs.deck.upgrades'], dtype=np.int32),
             'choices': np.array(row['cards_offered.cards'], dtype=np.int32),
             'choice_upgrades': np.array(row['cards_offered.upgrades'], dtype=np.int32),
             'fixed_obs': np.array(row['obs.fixed_observation'], dtype=np.int32),
-            'chosen_idx': chosen_idx,
+            'fixed_actions': np.array(row['fixed_actions'], dtype=np.int32),
+            'chosen_idx': row['chosen_idx'],
+            'choice_type': row['choice_type'],
             'outcome': row['outcome'],
         }
 
-def collate_fn(batch):
-    for x in batch:
-        n_choices = len(x['choices'])
-        chosen_idx = x['chosen_idx']
-        # Allow indices up to n_choices + n_fixed_actions
-        max_valid_idx = n_choices + len(FixedAction)
-        assert chosen_idx < max_valid_idx, f"chosen_idx {chosen_idx} >= max valid index {max_valid_idx}"
-        assert chosen_idx < MAX_CHOICES + len(FixedAction), f"chosen_idx {chosen_idx} >= MAX_CHOICES + fixed actions {MAX_CHOICES + len(FixedAction)}"
-
-    # Prepare arrays
-    deck = torch.full((len(batch), MAX_DECK_SIZE), sts.CardId.INVALID.value, dtype=torch.int32)
-    deck_upgrades = torch.zeros((len(batch), MAX_DECK_SIZE), dtype=torch.int32)
-    choices = torch.full((len(batch), MAX_CHOICES), sts.CardId.INVALID.value, dtype=torch.int32)
-    choice_upgrades = torch.zeros((len(batch), MAX_CHOICES), dtype=torch.int32)
-    fixed_obs = torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
-    chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
-    outcome = torch.zeros(len(batch), dtype=torch.float32)
-
-    # Fill arrays
-    for i, x in enumerate(batch):
-        deck[i, :min(len(x['deck']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck'])[:MAX_DECK_SIZE]
-        deck_upgrades[i, :min(len(x['deck_upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(x['deck_upgrades'])[:MAX_DECK_SIZE]
-        choices[i, :min(len(x['choices']), MAX_CHOICES)] = torch.from_numpy(x['choices'])[:MAX_CHOICES]
-        choice_upgrades[i, :min(len(x['choice_upgrades']), MAX_CHOICES)] = torch.from_numpy(x['choice_upgrades'])[:MAX_CHOICES]
-        fixed_obs[i] = torch.from_numpy(x['fixed_obs'])
-        chosen_idx[i] = x['chosen_idx']
-        outcome[i] = x['outcome']
-
-    return {
-        'deck': deck,
-        'deck_upgrades': deck_upgrades,
-        'choices': choices,
-        'choice_upgrades': choice_upgrades,
-        'fixed_obs': fixed_obs,
-        'chosen_idx': chosen_idx,
-        'outcome': outcome,
-    }
 
 # Update data filtering to handle fixed actions
 data_df = df[
     df.apply(lambda r: (
         # Allow fixed actions (like SKIP)
-        (r["rewards_action_type"] == sts.RewardsActionType.SKIP) or
+        (r["choice_type"] == ActionType.FIXED) or
         # Or normal card choices within bounds
-        (r["chosen_idx"] >= 0 and 
+        (r["choice_type"] == ActionType.CARD and 
+         r["chosen_idx"] >= 0 and 
          r["chosen_idx"] < len(r["cards_offered.cards"]) and
          r["chosen_idx"] < MAX_CHOICES)
     ), axis=1)
 ]
-assert (data_df["choice_type"] == ActionType.CARD).all()
 
 # Split data
 T = TrainingHP()  # Base hyperparameters
@@ -139,6 +95,7 @@ balanced_valid_df = pd.concat([
     valid_negatives.sample(n=n_samples, random_state=42)
 ])
 valid_df = balanced_valid_df
+
 # %%
 np.random.seed(3)
 
@@ -167,16 +124,54 @@ def train_step(net, opt, batch):
     batch = {k: v.to(device) for k, v in batch.items()}
     output = process_batch(batch, net)
     
-    # Get logits for chosen actions
-    chosen_logits = output['card_choice_winprob_logits'][
-        torch.arange(len(batch['chosen_idx']), device=device),
-        batch['chosen_idx']
-    ]
+    # Get logits for chosen actions based on choice type
+    batch_indices = torch.arange(len(batch['chosen_idx']), device=device)
+    
+    # Initialize chosen logits
+    chosen_logits = torch.zeros(len(batch['chosen_idx']), device=device)
+    
+    # Handle card choices
+    card_mask = batch['choice_type'] == ActionType.CARD
+    if card_mask.any():
+        chosen_logits[card_mask] = output['card_logits'][
+            batch_indices[card_mask],
+            batch['chosen_idx'][card_mask]
+        ]
+    
+    # Handle fixed actions
+    fixed_mask = batch['choice_type'] == ActionType.FIXED
+    if fixed_mask.any():
+        chosen_logits[fixed_mask] = output['fixed_logits'][
+            batch_indices[fixed_mask],
+            batch['chosen_idx'][fixed_mask]
+        ]
+    
+    # Clip logits to avoid numerical issues
+    chosen_logits = torch.clamp(chosen_logits, min=-20, max=20)
+    
+    # Check for NaN before loss
+    if torch.isnan(chosen_logits).any():
+        print("Warning: NaN in logits")
+        print("Card logits:", output['card_logits'])
+        print("Fixed logits:", output['fixed_logits'])
+        print("Chosen logits:", chosen_logits)
+        raise ValueError("NaN in logits")
     
     loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
     
+    # Check for NaN loss
+    if torch.isnan(loss):
+        print("Warning: NaN loss")
+        print("Chosen logits:", chosen_logits)
+        print("Outcomes:", batch['outcome'])
+        raise ValueError("NaN loss")
+    
     opt.zero_grad()
     loss.backward()
+    
+    # Clip gradients
+    torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+    
     opt.step()
 
     with torch.no_grad():
@@ -252,10 +247,31 @@ def validate(valid_loader, net, device):
     with torch.no_grad():
         for batch in valid_loader:
             output = process_batch(batch, net)
-            chosen_logits = output['card_choice_winprob_logits'][
-                torch.arange(len(batch['chosen_idx']), device=device),
-                batch['chosen_idx']
-            ]
+            
+            # Get logits for chosen actions based on choice type
+            batch_indices = torch.arange(len(batch['chosen_idx']), device=device)
+            
+            # Initialize chosen logits
+            chosen_logits = torch.zeros(len(batch['chosen_idx']), device=device)
+            
+            # Handle card choices
+            card_mask = batch['choice_type'] == ActionType.CARD
+            if card_mask.any():
+                chosen_logits[card_mask] = output['card_logits'][
+                    batch_indices[card_mask],
+                    batch['chosen_idx'][card_mask]
+                ]
+            
+            # Handle fixed actions
+            fixed_mask = batch['choice_type'] == ActionType.FIXED
+            if fixed_mask.any():
+                chosen_logits[fixed_mask] = output['fixed_logits'][
+                    batch_indices[fixed_mask],
+                    batch['chosen_idx'][fixed_mask]
+                ]
+            
+            # Clip logits to avoid numerical issues
+            chosen_logits = torch.clamp(chosen_logits, min=-20, max=20)
             
             loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'].to(device))
             pred = chosen_logits >= 0
@@ -268,7 +284,7 @@ def validate(valid_loader, net, device):
 
 def hyperparameter_sweep(train_df, valid_df):
     """Run hyperparameter sweep and save results."""
-    learning_rates = np.geomspace(2e-4, 4e-5, 5)
+    learning_rates = np.geomspace(5e-5, 1e-5, 5)
     weight_decays = np.geomspace(1e-5, 1e-5, 1)
     
     results = []
@@ -323,16 +339,18 @@ save_path, results = hyperparameter_sweep(train_df, valid_df)
 
 # %%
 
-state = torch.load(save_path, weights_only=True, map_location=device)
 # %%
 H = ModelHP()
 net = NN(H)
 net = net.to(device)
 net = torch.compile(net, mode="reduce-overhead")
+
+# %%
+state = torch.load(save_path, weights_only=True, map_location=device)
 net.load_state_dict(state)
 
 # %%
-batch = valid_df.sample(128)
+batch = valid_df.sample(20)
 # %%
 len(batch.iloc[0]['obs.deck.cards'])
 
@@ -342,53 +360,65 @@ with torch.no_grad():
     output = process_batch(batch_data, net)
 
     # Get win probabilities for all cards and mark chosen ones
-    all_probs = torch.sigmoid(output['card_choice_winprob_logits'])
+    card_probs = torch.sigmoid(output['card_logits'])
+    fixed_probs = torch.sigmoid(output['fixed_logits'])
     chosen_indices = batch_data['chosen_idx']
     batch_indices = torch.arange(len(batch), device=device)
 
+# %%
+
 # Print probabilities for each example in batch
-for i in range(min(20, len(batch))):
-    probs = all_probs[i]
-    chosen_idx = chosen_indices[i]
+for i in range(len(batch)):
+    choice_type = batch_data['choice_type'][i].item()
+    chosen_idx = chosen_indices[i].item()
+    
+    # Print card choices
+    card_prob_strs = []
+    probs = card_probs[i].cpu().numpy()
     cards_offered = batch.iloc[i]['cards_offered.cards']
     upgrades = batch.iloc[i]['cards_offered.upgrades']
     
-    prob_strs = []
     for j, (card_id, upgrade) in enumerate(zip(cards_offered, upgrades)):
         if probs[j] == float('-inf'):  # Skip masked values
             continue
         card = sts.Card(sts.CardId(card_id), upgrade)
         prob_str = f"{card}({probs[j]:.3f})"
-        if j == chosen_idx:
-            prob_str = f"[{prob_str}]"  # Mark chosen probability with brackets
-        prob_strs.append(prob_str)
-    print(f"Example {i}: {', '.join(prob_strs)}")
+        if choice_type == ActionType.CARD and j == chosen_idx:
+            prob_str = f"[{prob_str}]"  # Mark chosen card with brackets
+        card_prob_strs.append(prob_str)
+    
+    # Print fixed actions
+    fixed_prob_strs = []
+    probs = fixed_probs[i].cpu().numpy()
+    fixed_actions = batch.iloc[i]['fixed_actions']
+    
+    for j, action in enumerate(fixed_actions):
+        if probs[j] == float('-inf'):  # Skip masked values
+            continue
+        action_name = FixedAction(action).name
+        prob_str = f"{action_name}({probs[j]:.3f})"
+        if choice_type == ActionType.FIXED and j == chosen_idx:
+            prob_str = f"[{prob_str}]"  # Mark chosen action with brackets
+        fixed_prob_strs.append(prob_str)
+    
+    print(f"Example {i} ({ActionType(choice_type).name}):")
+    if card_prob_strs:
+        print(f"  Cards: {', '.join(card_prob_strs)}")
+    if fixed_prob_strs:
+        print(f"  Fixed: {', '.join(fixed_prob_strs)}")
     print(batch.iloc[i])
     print()
     
 
 # %%
+from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
 
-plt.figure(figsize=(10, 6))
-plt.plot([len(d) for d in batch['obs.deck.cards']], torch.sigmoid(output['card_choice_winprob_logits']).mean(dim=1).numpy(force=True), 'o')
-plt.xlabel('Deck size')
-plt.ylabel('Win probability')
-plt.title('Deck size vs predicted win probability')
-plt.grid(True)
-plt.show()
-# %%
-
-
-# %%
-from sklearn.metrics import roc_curve, auc
-
-batch_size = 512
 
 # Create fresh validation loader
 valid_loader = torch.utils.data.DataLoader(
     SlayDataset(valid_df),
-    batch_size=batch_size,
+    batch_size=T.batch_size,
     shuffle=False,
     num_workers=4,
     collate_fn=collate_fn,
@@ -398,32 +428,53 @@ valid_loader = torch.utils.data.DataLoader(
 valid_preds = []
 valid_targets = []
 card_predictions = {}  # Dictionary to store predictions for each card
+fixed_predictions = {}  # Dictionary to store predictions for each fixed action
 
 # Get predictions for validation set
 with torch.no_grad():
     for batch in valid_loader:
+        batch = {k: v.to(device) for k, v in batch.items()}
         output = process_batch(batch, net)
         
-        # Get chosen card predictions for ROC curve
-        chosen_logits = output['card_choice_winprob_logits'][
-            torch.arange(len(batch['chosen_idx']), device=net.device),
-            batch['chosen_idx'].to(net.device)
-        ]
+        # Get chosen action predictions for ROC curve
+        batch_indices = torch.arange(len(batch['chosen_idx']), device=device)
+        
+        # Initialize chosen logits
+        chosen_logits = torch.zeros(len(batch['chosen_idx']), device=device)
+        
+        # Handle card choices
+        card_mask = batch['choice_type'] == ActionType.CARD
+        if card_mask.any():
+            chosen_logits[card_mask] = output['card_logits'][
+                batch_indices[card_mask],
+                batch['chosen_idx'][card_mask]
+            ]
+        
+        # Handle fixed actions
+        fixed_mask = batch['choice_type'] == ActionType.FIXED
+        if fixed_mask.any():
+            chosen_logits[fixed_mask] = output['fixed_logits'][
+                batch_indices[fixed_mask],
+                batch['chosen_idx'][fixed_mask]
+            ]
+        
         probs = torch.sigmoid(chosen_logits).cpu().numpy()
         valid_preds.extend(probs)
-        valid_targets.extend(batch['outcome'].numpy())
+        valid_targets.extend(batch['outcome'].cpu().numpy())
         
         # Get predictions for all cards
-        all_probs = torch.sigmoid(output['card_choice_winprob_logits'])
+        card_probs = torch.sigmoid(output['card_logits'])
+        fixed_probs = torch.sigmoid(output['fixed_logits'])
         
         # For each example in batch
         for i in range(len(batch['choices'])):
+            # Process card choices
             choices = batch['choices'][i]
             upgrades = batch['choice_upgrades'][i]
             
             # Get valid probabilities for this choice
             valid_mask = choices != sts.CardId.INVALID.value
-            choice_probs = all_probs[i, valid_mask].cpu().numpy()
+            choice_probs = card_probs[i, valid_mask].cpu().numpy()
             
             # For each valid card choice
             for j, (card_id, upgrade) in enumerate(zip(choices[valid_mask], upgrades[valid_mask])):
@@ -437,77 +488,73 @@ with torch.no_grad():
                 if card_key not in card_predictions:
                     card_predictions[card_key] = []
                 card_predictions[card_key].append(relative_prob)
+            
+            # Process fixed actions
+            fixed_actions = batch['fixed_actions'][i]
+            valid_mask = fixed_actions != FixedAction.INVALID.value
+            fixed_action_probs = fixed_probs[i, valid_mask].cpu().numpy()
+            
+            # For each valid fixed action
+            for j, action in enumerate(fixed_actions[valid_mask]):
+                action_name = FixedAction(action.item()).name
+                
+                # Calculate relative probability
+                other_probs = np.concatenate([fixed_action_probs[:j], fixed_action_probs[j+1:]])
+                relative_prob = fixed_action_probs[j] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                
+                if action_name not in fixed_predictions:
+                    fixed_predictions[action_name] = []
+                fixed_predictions[action_name].append(relative_prob)
 
-# Calculate card statistics
+# Calculate and plot ROC curve
+fpr, tpr, _ = roc_curve(valid_targets, valid_preds)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(8, 8))
+plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.3f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic')
+plt.legend(loc="lower right")
+plt.grid(True)
+plt.show()
+
+# Calculate and print card statistics
+print("\nCard Win Probability Statistics (relative to alternatives):")
 card_stats = {}
 for card_key, preds in card_predictions.items():
     preds = np.array(preds)
     card_stats[card_key] = {
-        'mean': np.mean(preds),  # Now represents average advantage over alternatives
+        'mean': np.mean(preds),
         'std': np.std(preds),
         'count': len(preds)
     }
 
 # Sort and print card statistics
 sorted_cards = sorted(card_stats.items(), key=lambda x: x[1]['mean'], reverse=True)
+for card, stats in sorted_cards:
+    if stats['count'] >= 10:  # Only show cards with enough samples
+        print(f"{card:25} {stats['mean']:+.3f} ±{stats['std']:.3f} (n={stats['count']})")
 
-print("\nCard Win Probability Statistics (relative to alternatives):")
-print(f"{'Card':<30} {'Advantage':>8} {'Std':>8} {'Count':>8}")
-print("-" * 56)
-for card_key, stats in sorted_cards:
-    print(f"{card_key:<30} {stats['mean']:8.3f} {stats['std']:8.3f} {stats['count']:8d}")
+# Calculate and print fixed action statistics
+print("\nFixed Action Win Probability Statistics (relative to alternatives):")
+fixed_stats = {}
+for action_name, preds in fixed_predictions.items():
+    preds = np.array(preds)
+    fixed_stats[action_name] = {
+        'mean': np.mean(preds),
+        'std': np.std(preds),
+        'count': len(preds)
+    }
 
-# Plot top cards
-N = 20
-plt.figure(figsize=(15, 8))
-means = [stats['mean'] for _, stats in sorted_cards[:N]]
-cards = [card for card, _ in sorted_cards[:N]]
-plt.bar(range(N), means)
-plt.xticks(range(N), cards, rotation=45, ha='right')
-plt.ylabel('Mean Win Probability')
-plt.title('Top Cards by Predicted Win Probability')
-plt.tight_layout()
-plt.show()
-
-# Find optimal threshold and print confusion matrix
-thresholds = np.arange(0, 1, 0.01)
-accuracies = []
-for threshold in thresholds:
-    predictions = (valid_preds >= threshold).astype(int)
-    accuracy = np.mean(predictions == valid_targets)
-    accuracies.append(accuracy)
-
-optimal_idx = np.argmax(accuracies)
-optimal_threshold = thresholds[optimal_idx]
-best_accuracy = accuracies[optimal_idx]
-
-print(f'\nOptimal threshold: {optimal_threshold:.2f}')
-print(f'Best accuracy: {best_accuracy:.3f}')
-
-# Plot accuracies vs thresholds
-plt.figure(figsize=(10, 6))
-plt.plot(thresholds, accuracies)
-plt.axvline(x=optimal_threshold, color='r', linestyle='--', label=f'Optimal threshold = {optimal_threshold:.2f}')
-plt.xlabel('Threshold')
-plt.ylabel('Accuracy')
-plt.title('Accuracy vs Classification Threshold')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# Print confusion matrix
-predictions = (valid_preds >= optimal_threshold).astype(int)
-tp = np.sum((predictions == 1) & (valid_targets == 1))
-tn = np.sum((predictions == 0) & (valid_targets == 0))
-fp = np.sum((predictions == 1) & (valid_targets == 0))
-fn = np.sum((predictions == 0) & (valid_targets == 1))
-
-print("\nConfusion Matrix:")
-print(f"True Positives: {tp}")
-print(f"True Negatives: {tn}")
-print(f"False Positives: {fp}")
-print(f"False Negatives: {fn}")
-print(f"Accuracy: {(tp + tn)/(tp + tn + fp + fn):.3f}")
+# Sort and print fixed action statistics
+sorted_actions = sorted(fixed_stats.items(), key=lambda x: x[1]['mean'], reverse=True)
+for action, stats in sorted_actions:
+    if stats['count'] >= 10:  # Only show actions with enough samples
+        print(f"{action:25} {stats['mean']:+.3f} ±{stats['std']:.3f} (n={stats['count']})")
 
 # %%
 print(f"Saved to {save_path}")

@@ -25,14 +25,24 @@ MAX_DECK_SIZE = 64  # Should be enough for most decks
 MAX_CHOICES = 10    # Usually 3-4, but can be more in edge cases
 
 
+class ActionType(IntEnum):
+    INVALID = auto()
+    CARD = auto()
+    PATH = auto()
+    EVENT_OPTION = auto()
+    FIXED = auto()  # New type for fixed actions like SKIP
+
 class InputType(IntEnum):
+    # TODO maybe should unify with ActionType
     Card = 0
     Relic = auto()
     Potion = auto()
     Choice = auto()
+    Fixed = auto()
 
 
 class FixedAction(IntEnum):
+    INVALID = -1
     SKIP = 0
 
 class SinusoidalEmbedding(nn.Module):
@@ -114,7 +124,7 @@ class NN(nn.Module):
         self.upgrade_embed = nn.Embedding(21, H.dim, padding_idx=0)
         
         # Add fixed action embedding
-        self.fixed_action_embed = nn.Embedding(len(FixedAction), H.dim)
+        self.fixed_action_embed = nn.Embedding(len(FixedAction)-1, H.dim)
 
         # Add sinusoidal embedding and projection
         n_fixed_obs = len(sts.getFixedObservationMaximums())
@@ -128,17 +138,29 @@ class NN(nn.Module):
         nn.init.uniform_(self.card_winprob.weight, -0.01, 0.01)
         nn.init.zeros_(self.card_winprob.bias)
 
-    def forward(self, deck, deck_upgrades, card_choices, choice_upgrades, fixed_obs):
-        device = deck.device
-        max_deck_len = deck.size(1)
-        max_choices_len = card_choices.size(1)
+    def forward(self, batch: dict[str, torch.Tensor]):
+        """
+        Process a batch of inputs through the network.
+        
+        Args:
+            batch: Dictionary containing:
+                - deck: [batch_size, MAX_DECK_SIZE] tensor of card IDs
+                - deck_upgrades: [batch_size, MAX_DECK_SIZE] tensor of upgrade counts
+                - choices: [batch_size, MAX_CHOICES] tensor of card IDs
+                - choice_upgrades: [batch_size, MAX_CHOICES] tensor of upgrade counts
+                - fixed_obs: [batch_size, n_fixed_obs] tensor of fixed observations
+                - fixed_actions: [batch_size, n_fixed_actions] tensor of fixed action IDs
+        """
+        device = batch['deck'].device
+        max_deck_len = batch['deck'].size(1)
+        max_choices_len = batch['choices'].size(1)
 
         # Create sinusoidal embeddings for all fixed observations at once
-        fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(fixed_obs))
+        fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(batch['fixed_obs']))
 
         # Embed cards
-        cards = torch.cat((deck, card_choices), dim=1)
-        upgrades = torch.cat((deck_upgrades, choice_upgrades), dim=1)
+        cards = torch.cat((batch['deck'], batch['choices']), dim=1)
+        upgrades = torch.cat((batch['deck_upgrades'], batch['choice_upgrades']), dim=1)
         mask = cards == sts.CardId.INVALID.value
 
         # Combine card and upgrade embeddings
@@ -147,9 +169,9 @@ class NN(nn.Module):
                  self.input_type_embed(torch.tensor([int(InputType.Card)], device=device)))
         card_x[:, max_deck_len:, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
 
-        # Add fixed action embeddings (SKIP)
-        fixed_x = self.fixed_action_embed(torch.arange(len(FixedAction), device=device)).unsqueeze(0).expand(len(deck), -1, -1)
-        fixed_x = fixed_x + self.input_type_embed(torch.tensor([int(InputType.FIXED)], device=device))
+        # Add fixed action embeddings
+        fixed_x = self.fixed_action_embed(batch['fixed_actions'])
+        fixed_x = fixed_x + self.input_type_embed(torch.tensor([int(InputType.Fixed)], device=device))
 
         # Combine all embeddings
         x = torch.cat([
@@ -162,7 +184,7 @@ class NN(nn.Module):
         pos_mask = torch.cat([
             torch.zeros(mask.size(0), 1, device=device, dtype=mask.dtype),  # fixed obs
             mask,                                                           # cards
-            torch.zeros(mask.size(0), len(FixedAction), device=device, dtype=mask.dtype),  # fixed actions
+            batch['fixed_actions'] == FixedAction.INVALID.value,           # fixed actions
         ], dim=1)
 
         for l in self.layers:
@@ -171,23 +193,22 @@ class NN(nn.Module):
 
         # Get logits for both cards and fixed actions
         choice_x = xn[:, 1+max_deck_len:1+max_deck_len+max_choices_len, :]  # card choices
-        fixed_x = xn[:, -len(FixedAction):, :]  # fixed actions
+        fixed_x = xn[:, -batch['fixed_actions'].size(1):, :]  # fixed actions
         
         # Get win probabilities for both
-        card_choice_winprob_logits = self.card_winprob(choice_x).squeeze(-1).float()
-        fixed_action_winprob_logits = self.card_winprob(fixed_x).squeeze(-1).float()
+        card_logits = self.card_winprob(choice_x).squeeze(-1).float()
+        fixed_action_logits = self.card_winprob(fixed_x).squeeze(-1).float()
         
-        # Combine logits
-        all_logits = torch.cat([
-            card_choice_winprob_logits,
-            fixed_action_winprob_logits
-        ], dim=1)
-        
-        # Mask invalid card choices
-        all_logits[:, :max_choices_len] = all_logits[:, :max_choices_len].masked_fill(mask[:, max_deck_len:], float('-inf'))
+        # Mask invalid card choices and fixed actions
+        card_logits = card_logits.masked_fill(mask[:, max_deck_len:], float('-inf'))
+        fixed_action_logits = fixed_action_logits.masked_fill(
+            batch['fixed_actions'] == FixedAction.INVALID.value, 
+            float('-inf')
+        )
 
         return dict(
-            card_choice_winprob_logits=all_logits,
+            card_logits=card_logits,
+            fixed_logits=fixed_action_logits,
         )
     
     @property
@@ -218,8 +239,15 @@ class SlayDataset(torch.utils.data.Dataset):
 
 def collate_fn(batch):
     for x in batch:
-        assert x['chosen_idx'] < MAX_CHOICES, f"chosen_idx {x['chosen_idx']} >= MAX_CHOICES {MAX_CHOICES}"
-        assert x['chosen_idx'] < len(x['choices']), f"chosen_idx {x['chosen_idx']} >= choices length {len(x['choices'])}"
+        n_card_choices = len(x['choices'])
+        n_fixed_actions = len(x['fixed_actions'])
+        chosen_idx = x['chosen_idx']
+        # Allow indices up to n_choices + n_fixed_actions
+        if x['choice_type'] == ActionType.CARD:
+            assert chosen_idx < n_card_choices, f"chosen_idx {chosen_idx} >= n_choices {n_card_choices}"
+            assert chosen_idx < MAX_CHOICES, f"chosen_idx {chosen_idx} >= MAX_CHOICES {MAX_CHOICES}"
+        elif x['choice_type'] == ActionType.FIXED:
+            assert chosen_idx < n_fixed_actions, f"chosen_idx {chosen_idx} >= n_fixed_actions {n_fixed_actions}"
 
     # Prepare arrays
     deck = torch.full((len(batch), MAX_DECK_SIZE), sts.CardId.INVALID.value, dtype=torch.int32)
@@ -227,7 +255,9 @@ def collate_fn(batch):
     choices = torch.full((len(batch), MAX_CHOICES), sts.CardId.INVALID.value, dtype=torch.int32)
     choice_upgrades = torch.zeros((len(batch), MAX_CHOICES), dtype=torch.int32)
     fixed_obs = torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
+    fixed_actions = torch.full((len(batch), len(FixedAction)-1), FixedAction.INVALID.value, dtype=torch.int32)
     chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
+    choice_type = torch.zeros(len(batch), dtype=torch.int64)
     outcome = torch.zeros(len(batch), dtype=torch.float32)
 
     # Fill arrays
@@ -237,7 +267,9 @@ def collate_fn(batch):
         choices[i, :min(len(x['choices']), MAX_CHOICES)] = torch.from_numpy(x['choices'])[:MAX_CHOICES]
         choice_upgrades[i, :min(len(x['choice_upgrades']), MAX_CHOICES)] = torch.from_numpy(x['choice_upgrades'])[:MAX_CHOICES]
         fixed_obs[i] = torch.from_numpy(x['fixed_obs'])
+        fixed_actions[i, :len(x['fixed_actions'])] = torch.from_numpy(x['fixed_actions'])
         chosen_idx[i] = x['chosen_idx']
+        choice_type[i] = x['choice_type']
         outcome[i] = x['outcome']
 
     return {
@@ -246,14 +278,16 @@ def collate_fn(batch):
         'choices': choices,
         'choice_upgrades': choice_upgrades,
         'fixed_obs': fixed_obs,
+        'fixed_actions': fixed_actions,
         'chosen_idx': chosen_idx,
+        'choice_type': choice_type,
         'outcome': outcome,
     }
 
-
 def process_batch(batch, net):
     # Move tensors to device
-    batch = {k: v.to(net.device) for k, v in batch.items()}
-    return net(batch['deck'], batch['deck_upgrades'],
-              batch['choices'], batch['choice_upgrades'],
-              batch['fixed_obs'])
+    device = net.device
+    batch = {k: v.to(device) for k, v in batch.items()}
+    return net(batch)
+
+
