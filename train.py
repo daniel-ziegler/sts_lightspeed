@@ -33,7 +33,7 @@ class TrainingHP:
     log_every_n_steps: int = 20
 
 # %%
-df = pd.read_parquet("rollouts_v2_10000_15000.parquet")
+df = pd.read_parquet("rollouts_v2_15000_20000.parquet")
 # df = pd.read_parquet("rollouts_v2_0_50000.parquet")
 # df = pd.read_parquet("rollouts0_6000.parquet")
 
@@ -468,43 +468,58 @@ with torch.no_grad():
         
         # For each example in batch
         for i in range(len(batch['choices'])):
-            # Process card choices
+            # Get all valid probabilities for this choice
+            all_valid_probs = []
+            
+            # Get valid card probabilities
             choices = batch['choices'][i]
             upgrades = batch['choice_upgrades'][i]
-            
-            # Get valid probabilities for this choice
             valid_mask = choices != sts.CardId.INVALID.value
-            choice_probs = card_probs[i, valid_mask].cpu().numpy()
+            if valid_mask.any():
+                all_valid_probs.extend(card_probs[i, valid_mask].cpu().numpy())
             
-            # For each valid card choice
+            # Get valid fixed action probabilities
+            fixed_actions = batch['fixed_actions'][i]
+            valid_mask = fixed_actions != FixedAction.INVALID.value
+            if valid_mask.any():
+                all_valid_probs.extend(fixed_probs[i, valid_mask].cpu().numpy())
+            
+            all_valid_probs = np.array(all_valid_probs)
+            
+            # Process card choices
+            card_idx = 0  # Keep track of position in all_valid_probs
+            choices = batch['choices'][i]
+            upgrades = batch['choice_upgrades'][i]
+            valid_mask = choices != sts.CardId.INVALID.value
+            
             for j, (card_id, upgrade) in enumerate(zip(choices[valid_mask], upgrades[valid_mask])):
                 card = sts.Card(sts.CardId(card_id), upgrade)
                 card_key = str(card)
                 
-                # Calculate relative win probability (compared to alternatives)
-                other_probs = np.concatenate([choice_probs[:j], choice_probs[j+1:]])
-                relative_prob = choice_probs[j] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                # Calculate relative probability compared to all other options
+                other_probs = np.concatenate([all_valid_probs[:card_idx], all_valid_probs[card_idx+1:]])
+                relative_prob = all_valid_probs[card_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
                 
                 if card_key not in card_predictions:
                     card_predictions[card_key] = []
                 card_predictions[card_key].append(relative_prob)
+                card_idx += 1
             
             # Process fixed actions
             fixed_actions = batch['fixed_actions'][i]
             valid_mask = fixed_actions != FixedAction.INVALID.value
-            fixed_action_probs = fixed_probs[i, valid_mask].cpu().numpy()
             
-            # For each valid fixed action
             for j, action in enumerate(fixed_actions[valid_mask]):
                 action_name = FixedAction(action.item()).name
                 
-                # Calculate relative probability
-                other_probs = np.concatenate([fixed_action_probs[:j], fixed_action_probs[j+1:]])
-                relative_prob = fixed_action_probs[j] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                # Calculate relative probability compared to all other options
+                other_probs = np.concatenate([all_valid_probs[:card_idx], all_valid_probs[card_idx+1:]])
+                relative_prob = all_valid_probs[card_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
                 
                 if action_name not in fixed_predictions:
                     fixed_predictions[action_name] = []
                 fixed_predictions[action_name].append(relative_prob)
+                card_idx += 1
 
 # Calculate and plot ROC curve
 fpr, tpr, _ = roc_curve(valid_targets, valid_preds)
