@@ -1,11 +1,13 @@
 # %%
+import dataclasses
 import sys
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from itertools import product
 import json
 from datetime import datetime
 from typing import List
+import argparse
 
 from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, process_batch, collate_fn
 import numpy as np
@@ -32,6 +34,31 @@ class TrainingHP:
     validation_fraction: float = 0.1
     validate_every_n_steps: int = 2000
     log_every_n_steps: int = 20
+
+def parse_args() -> tuple[List[str], TrainingHP]:
+    """Parse command line arguments and return data paths and training hyperparameters"""
+    parser = argparse.ArgumentParser(description='Train the Slay the Spire AI model')
+    
+    # Add positional argument for data paths
+    parser.add_argument('data_paths', nargs='*', help='Paths to parquet files containing training data')
+    
+    # Add arguments for each TrainingHP field
+    defaults = TrainingHP()
+    for field in fields(TrainingHP):
+        parser.add_argument(
+            f'--{field.name}', 
+            type=field.type,
+            default=getattr(defaults, field.name),
+            help=f'Training hyperparameter {field.name} (default: {getattr(defaults, field.name)})'
+        )
+    
+    args = parser.parse_args()
+    
+    # Create TrainingHP from parsed args
+    hp_dict = {field.name: getattr(args, field.name) for field in fields(TrainingHP)}
+    training_hp = TrainingHP(**hp_dict)
+    
+    return args.data_paths, training_hp
 
 # %%
 def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
@@ -103,14 +130,8 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
     
     return train_df, balanced_valid_df
 
-def get_data_paths() -> List[str]:
-    """Get data paths from command line args, or use default if none provided"""
-    if len(sys.argv) > 1:
-        return sys.argv[1:]
-    return ["rollouts_v2_25000_30000.parquet"]  # Default path
-
-T = TrainingHP()
-train_df, valid_df = load_and_preprocess_data(get_data_paths(), T.validation_fraction)
+data_paths, base_T = parse_args()
+train_df, valid_df = load_and_preprocess_data(data_paths, base_T.validation_fraction)
 
 # %%
 np.random.seed(3)
@@ -317,7 +338,7 @@ def hyperparameter_sweep(train_df, valid_df):
         net = torch.compile(net, mode="reduce-overhead")
         
         # Update hyperparameters
-        T = TrainingHP(
+        T = dataclasses.replace(base_T,
             initial_lr=lr,
             weight_decay=wd,
         )
@@ -434,7 +455,7 @@ import matplotlib.pyplot as plt
 # Create fresh validation loader
 valid_loader = torch.utils.data.DataLoader(
     SlayDataset(valid_df),
-    batch_size=T.batch_size,
+    batch_size=base_T.batch_size,
     shuffle=False,
     num_workers=4,
     collate_fn=collate_fn,

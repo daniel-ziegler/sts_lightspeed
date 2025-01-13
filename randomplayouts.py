@@ -549,6 +549,14 @@ def main(args):
         ])
 
     service.stop()
+
+    # Shuffle the DataFrame
+    df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
+
+    if not args.no_save:
+        df_path = f"rollouts_v2_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
+        df.to_parquet(df_path, engine="pyarrow")
+        print(f"Saved to {df_path}")
     
     # Calculate and print winrate
     n_unique_seeds = df['seed'].nunique()
@@ -561,14 +569,6 @@ def main(args):
     # Plot choice statistics
     if not args.no_plots:
         stats.plot_stats()
-
-    # Shuffle the DataFrame
-    df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
-
-    if not args.no_save:
-        df_path = f"rollouts_v2_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
-        df.to_parquet(df_path, engine="pyarrow")
-        print(f"Saved to {df_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run Slay the Spire simulations with neural network guidance')
