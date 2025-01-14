@@ -68,6 +68,7 @@ class Rewards:
 
 class ScreenStateInfo:
     select_screen_type: CardSelectScreenType
+    boss_relics: List[RelicId]
     rewards_container: Rewards
 
 class Relic:

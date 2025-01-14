@@ -1,7 +1,6 @@
 # %%
 from __future__ import annotations
 
-import sys
 import random
 from enum import IntEnum, auto
 from dataclasses import dataclass, asdict
@@ -13,7 +12,6 @@ import time
 import threading
 import argparse
 
-import pickle
 from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
@@ -49,6 +47,9 @@ class Choice:
     # ActionType.PATH
     paths_offered: list[int]  # room ids (indices in NNMapRepresentation vectors)
 
+    # ActionType.RELIC
+    relics_offered: list[sts.RelicId]
+
     # ActionType.FIXED
     fixed_actions: list[FixedAction]  # Actions like SKIP
 
@@ -67,6 +68,7 @@ class Choice:
                     else np.array([], dtype=np.int32)
                 ),
             ),
+            relics_offered=np.array(self.relics_offered, dtype=np.int32),
             fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
         )
@@ -93,28 +95,6 @@ def process_choice(net: NN, choice: Choice) -> dict:
     return output
 
 
-def get_choice_winprobs(net: NN, choice: Choice) -> dict[str, np.ndarray]:
-    """
-    Get win probabilities for each option in a Choice.
-    Returns dict with 'card_probs' and 'fixed_probs' arrays.
-    """
-    with torch.no_grad():
-        output = process_choice(net, choice)
-        card_probs = torch.sigmoid(output['card_logits'][0]).cpu().numpy()
-        fixed_probs = torch.sigmoid(output['fixed_logits'][0]).cpu().numpy()
-        
-        # Mask invalid entries
-        n_valid = sum(len(s.cards) for s in choice.cards_offered)
-        card_probs[n_valid:] = float('-inf')  # Mask invalid card choices
-        
-        # Mask invalid fixed actions
-        n_fixed = len(choice.fixed_actions)
-        fixed_probs[n_fixed:] = float('-inf')  # Mask invalid fixed actions
-    
-    return {
-        'card_probs': card_probs,
-        'fixed_probs': fixed_probs,
-    }
 @dataclass
 class ChoiceOutcome:
     """A Choice and what was chosen from it"""
@@ -212,14 +192,17 @@ class NNService:
                 for i, req in enumerate(requests[:unpadded_len]):
                     card_logits = output['card_logits'][i].cpu().numpy()
                     fixed_logits = output['fixed_logits'][i].cpu().numpy()
+                    relic_logits = output['relic_logits'][i].cpu().numpy()
                     
                     # Get number of valid options
                     n_valid_cards = len(batch[i]['cards_offered.cards'])
+                    n_valid_relics = len(req.choice.relics_offered)
                     n_fixed = len(req.choice.fixed_actions)
                     
                     # Trim logits to valid lengths
                     req.response_queue.put({
                         'card_logits': card_logits[:n_valid_cards],
+                        'relic_logits': relic_logits[:n_valid_relics],
                         'fixed_logits': fixed_logits[:n_fixed],
                     })
                 
@@ -274,12 +257,13 @@ def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random =
 
 def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
                       temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> sts.GameAction:
-    """Use neural network to pick a card from the choices using Boltzmann sampling"""
+    """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
     logits = service.get_logits(choice)
     
     # Combine logits for sampling
     all_logits = np.concatenate([
         logits['card_logits'],
+        logits['relic_logits'],
         logits['fixed_logits']
     ])
     probs = get_card_probs(all_logits)
@@ -289,8 +273,10 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
         
     chosen_idx = sample_boltzmann(probs, temperature, rng)
     
-    # Find the GameAction that corresponds to this card index
+    # Find the GameAction that corresponds to this index
     total = 0
+    
+    # Check card choices first
     for which_set, card_set in enumerate(choice.cards_offered):
         if chosen_idx < total + len(card_set.cards):
             which_card = chosen_idx - total
@@ -302,7 +288,18 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
             break
         total += len(card_set.cards)
     
-    # If we get here, check if it's a fixed action
+    # Check relic choices
+    if choice.relics_offered:
+        n_relics = len(choice.relics_offered)
+        if chosen_idx < total + n_relics:
+            which_relic = chosen_idx - total
+            # Find matching action in actions list
+            for action in actions:
+                if action.idx1 == which_relic:
+                    return action
+            total += n_relics
+    
+    # Check fixed actions
     if choice.fixed_actions and chosen_idx == total:
         if FixedAction.SKIP in choice.fixed_actions:
             # Find the skip action
@@ -311,7 +308,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
                     return action
     
     # Fallback to random choice if something went wrong
-    print(f"Warning: Could not find action for card index {chosen_idx} (set {which_set}, card {which_card})")
+    print(f"Warning: Could not find action for index {chosen_idx}")
     return rng.choice(actions) if rng else random.choice(actions)
 
 def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
@@ -355,19 +352,24 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 obs = sts.getNNRepresentation(gc)
                 cards_offered: list[sts.NNCardRepresentation] = []
                 paths_offered: list[int] = []
+                relics_offered: list[sts.RelicId] = []
                 actions = sts.GameAction.getAllActionsInState(gc)
                 
-                # Use network for card choices if available
-                if net is not None and gc.screen_state == sts.ScreenState.REWARDS:
-                    cards_offered = gc.screen_state_info.rewards_container.cards
+                # Use network for card/relic choices if available
+                if net is not None and (gc.screen_state == sts.ScreenState.REWARDS or 
+                                      gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS):
+                    cards_offered = gc.screen_state_info.rewards_container.cards if gc.screen_state == sts.ScreenState.REWARDS else []
+                    relics_offered = gc.screen_state_info.boss_relics if gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS else []
+                    assert isinstance(relics_offered, list)
+                    
                     # Check if skip is allowed
                     fixed_actions = []
                     if any(a.rewards_action_type == sts.RewardsActionType.SKIP for a in actions):
                         fixed_actions.append(FixedAction.SKIP)
                     
-                    if cards_offered:
+                    if cards_offered or relics_offered:
                         choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], 
-                                     fixed_actions=fixed_actions)
+                                      fixed_actions=fixed_actions, relics_offered=relics_offered)
                         action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     else:
                         action = agent.pick_gameaction(gc)
@@ -397,6 +399,18 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         choice_type = ActionType.INVALID
                         chosen_idx = -1
 
+                elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
+                    relics_offered = gc.screen_state_info.boss_relics
+                    fixed_actions = [FixedAction.SKIP]
+                    which_relic = action.idx1
+                    if which_relic == 3:
+                        # skip
+                        choice_type = ActionType.FIXED
+                        chosen_idx = 0
+                    else:
+                        choice_type = ActionType.RELIC
+                        chosen_idx = which_relic
+
                 elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
                     def xy_to_roomid(x, y):
                         roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
@@ -420,7 +434,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                             fixed_actions.append(FixedAction.SKIP)
                     
                     choice = Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, 
-                                  fixed_actions=fixed_actions)
+                                  fixed_actions=fixed_actions, relics_offered=relics_offered)
                     choices.append(ChoiceOutcome(choice, choice_type=choice_type, chosen_idx=chosen_idx))
                 if verbose:
                     print(action.getDesc(gc))

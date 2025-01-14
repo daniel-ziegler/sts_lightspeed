@@ -31,6 +31,7 @@ class ActionType(IntEnum):
     INVALID = auto()
     CARD = auto()
     PATH = auto()
+    RELIC = auto()
     EVENT_OPTION = auto()
     FIXED = auto()  # New type for fixed actions like SKIP
 
@@ -133,8 +134,13 @@ class NN(nn.Module):
         self.fixed_obs_embed = SinusoidalEmbedding(H.dim, n_fixed_obs)
         self.fixed_obs_proj = nn.Linear(self.fixed_obs_embed.out_dim, H.dim)
 
-        # Add relic embedding
+        # Single relic embedding layer used for both owned and offered relics
         self.relic_embed = nn.Embedding(len(sts.RelicId), H.dim, padding_idx=sts.RelicId.INVALID.value)
+        
+        # Add relic winprob head
+        self.relic_winprob = nn.Linear(H.dim, 1, bias=True)
+        nn.init.uniform_(self.relic_winprob.weight, -0.01, 0.01)
+        nn.init.zeros_(self.relic_winprob.bias)
 
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
@@ -190,6 +196,12 @@ class NN(nn.Module):
         fixed_x = fixed_x + self.input_type_embed(torch.tensor([int(InputType.Fixed)], device=device))
         embeddings.append(fixed_x)
 
+        # Add relic choice embeddings using same embedding layer
+        relic_choice_x = self.relic_embed(batch['relics_offered'])
+        relic_choice_x = relic_choice_x + self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
+        embeddings.append(relic_choice_x)
+        relic_choice_mask = batch['relics_offered'] == sts.RelicId.INVALID.value
+
         # Combine all embeddings
         x = torch.cat(embeddings, dim=1)
 
@@ -197,7 +209,8 @@ class NN(nn.Module):
         pos_mask = torch.cat([
             torch.zeros(card_mask.size(0), 1, device=device, dtype=card_mask.dtype),  # fixed obs
             card_mask,  # cards
-            relic_mask,  # relics
+            relic_mask,  # owned relics
+            relic_choice_mask,  # relic choices
             batch['fixed_actions'] == FixedAction.INVALID.value,  # fixed actions
         ], dim=1)
 
@@ -220,9 +233,15 @@ class NN(nn.Module):
             float('-inf')
         )
 
+        # Get logits for relics
+        relic_choice_x = xn[:, 1+max_deck_len+ModelHP.max_relics:1+max_deck_len+ModelHP.max_relics+batch['relics_offered'].size(1), :]
+        relic_logits = self.relic_winprob(relic_choice_x).squeeze(-1).float()
+        relic_logits = relic_logits.masked_fill(relic_choice_mask, float('-inf'))
+
         return dict(
             card_logits=card_logits,
             fixed_logits=fixed_action_logits,
+            relic_logits=relic_logits,
         )
     
     @property
@@ -242,18 +261,7 @@ class SlayDataset(torch.utils.data.Dataset):
         row = self.df.iloc[idx]
         return {
             col: row[col]
-            for col in [
-                'obs.deck.cards',
-                'obs.deck.upgrades',
-                'cards_offered.cards',
-                'cards_offered.upgrades',
-                'obs.fixed_observation',
-                'obs.relics.relics',
-                'fixed_actions',
-                'chosen_idx',
-                'choice_type',
-                'outcome',
-            ]
+            for col in self.df.columns
         }
 
 
@@ -276,29 +284,25 @@ def collate_fn(batch):
     choice_upgrades = torch.zeros((len(batch), MAX_CHOICES), dtype=torch.int32)
     fixed_obs = torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
     fixed_actions = torch.full((len(batch), len(FixedAction)-1), FixedAction.INVALID.value, dtype=torch.int32)
+    relics = torch.full((len(batch), ModelHP.max_relics), sts.RelicId.INVALID.value, dtype=torch.int32)
+    relics_offered = torch.full((len(batch), 3), sts.RelicId.INVALID.value, dtype=torch.int32)  # Max 3 boss relics
     chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
     choice_type = torch.zeros(len(batch), dtype=torch.int64)
     outcome = torch.zeros(len(batch), dtype=torch.float32)
-    relics = torch.full((len(batch), ModelHP.max_relics), sts.RelicId.INVALID.value, dtype=torch.int32)
 
     # Fill arrays
     for i, x in enumerate(batch):
-        # Convert to numpy arrays first for consistent handling
-        np_arrays = {
-            k: (np.array(v, dtype=np.int32) if k != 'outcome' else v)
-            for k, v in x.items()
-        }
-        
-        deck[i, :min(len(np_arrays['obs.deck.cards']), MAX_DECK_SIZE)] = torch.from_numpy(np_arrays['obs.deck.cards'])[:MAX_DECK_SIZE]
-        deck_upgrades[i, :min(len(np_arrays['obs.deck.upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(np_arrays['obs.deck.upgrades'])[:MAX_DECK_SIZE]
-        choices[i, :min(len(np_arrays['cards_offered.cards']), MAX_CHOICES)] = torch.from_numpy(np_arrays['cards_offered.cards'])[:MAX_CHOICES]
-        choice_upgrades[i, :min(len(np_arrays['cards_offered.upgrades']), MAX_CHOICES)] = torch.from_numpy(np_arrays['cards_offered.upgrades'])[:MAX_CHOICES]
-        fixed_obs[i] = torch.from_numpy(np_arrays['obs.fixed_observation'])
-        fixed_actions[i, :len(np_arrays['fixed_actions'])] = torch.from_numpy(np_arrays['fixed_actions'])
-        relics[i, :len(np_arrays['obs.relics.relics'])] = torch.from_numpy(np_arrays['obs.relics.relics'])
-        chosen_idx[i] = torch.from_numpy(np_arrays['chosen_idx'])
-        choice_type[i] = torch.from_numpy(np_arrays['choice_type'])
-        outcome[i] = np_arrays['outcome']
+        deck[i, :min(len(x['obs.deck.cards']), MAX_DECK_SIZE)] = torch.tensor(x['obs.deck.cards'])[:MAX_DECK_SIZE]
+        deck_upgrades[i, :min(len(x['obs.deck.upgrades']), MAX_DECK_SIZE)] = torch.tensor(x['obs.deck.upgrades'])[:MAX_DECK_SIZE]
+        choices[i, :min(len(x['cards_offered.cards']), MAX_CHOICES)] = torch.tensor(x['cards_offered.cards'])[:MAX_CHOICES]
+        choice_upgrades[i, :min(len(x['cards_offered.upgrades']), MAX_CHOICES)] = torch.tensor(x['cards_offered.upgrades'])[:MAX_CHOICES]
+        fixed_obs[i] = torch.tensor(x['obs.fixed_observation'])
+        fixed_actions[i, :len(x['fixed_actions'])] = torch.tensor(x['fixed_actions'])
+        relics[i, :len(x['obs.relics.relics'])] = torch.tensor(x['obs.relics.relics'])
+        relics_offered[i, :len(x['relics_offered'])] = torch.tensor(x['relics_offered'])
+        chosen_idx[i] = x['chosen_idx']
+        choice_type[i] = x['choice_type']
+        outcome[i] = x['outcome']
 
     return {
         'deck': deck,
@@ -308,6 +312,7 @@ def collate_fn(batch):
         'fixed_obs': fixed_obs,
         'fixed_actions': fixed_actions,
         'relics': relics,
+        'relics_offered': relics_offered,
         'chosen_idx': chosen_idx,
         'choice_type': choice_type,
         'outcome': outcome,

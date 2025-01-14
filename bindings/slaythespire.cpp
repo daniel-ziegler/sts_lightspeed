@@ -203,6 +203,9 @@ PYBIND11_MODULE(slaythespire, m) {
         screenStateInfo
         //.def_readwrite("encounter", &ScreenStateInfo::encounter)
         .def_readwrite("select_screen_type", &ScreenStateInfo::selectScreenType)
+        .def_property_readonly("boss_relics", [](const ScreenStateInfo &s) {
+            return std::vector<RelicId>(s.bossRelics, s.bossRelics+3);
+        })
         // .def_property_readonly("to_select_cards", )
         // .def_property_readonly("have_selected_cards", )
         .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer);
