@@ -65,7 +65,7 @@ class Choice:
                     np.concatenate([s.upgrades for s in self.cards_offered], axis=0, dtype=np.int32)
                     if self.cards_offered
                     else np.array([], dtype=np.int32)
-                )
+                ),
             ),
             fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
@@ -197,7 +197,7 @@ class NNService:
                 
                 # Create batch
                 batch = [{
-                    **choice.as_dict(),
+                    **flatten_dict(choice.as_dict()),
                     'choice_type': 0,  # Dummy value
                     'chosen_idx': 0,  # Dummy value
                     'outcome': 0.0,   # Dummy value
@@ -214,7 +214,7 @@ class NNService:
                     fixed_logits = output['fixed_logits'][i].cpu().numpy()
                     
                     # Get number of valid options
-                    n_valid_cards = len(batch[i]['cards_offered']['cards'])
+                    n_valid_cards = len(batch[i]['cards_offered.cards'])
                     n_fixed = len(req.choice.fixed_actions)
                     
                     # Trim logits to valid lengths
@@ -535,7 +535,7 @@ def main(args):
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
     if not args.no_save:
-        df_path = f"rollouts_v2_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
+        df_path = f"rollouts_v3_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
         df.to_parquet(df_path, engine="pyarrow")
         print(f"Saved to {df_path}")
     
@@ -574,3 +574,5 @@ if __name__ == "__main__":
     main(args)
 
 ## %%
+
+# %%

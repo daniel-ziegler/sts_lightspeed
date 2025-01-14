@@ -241,20 +241,25 @@ class SlayDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         return {
-            'deck': np.array(row['obs.deck.cards'], dtype=np.int32),
-            'deck_upgrades': np.array(row['obs.deck.upgrades'], dtype=np.int32),
-            'choices': np.array(row['cards_offered.cards'], dtype=np.int32),
-            'choice_upgrades': np.array(row['cards_offered.upgrades'], dtype=np.int32),
-            'fixed_obs': np.array(row['obs.fixed_observation'], dtype=np.int32),
-            'relics': np.array(row['obs.relics'], dtype=np.int32),
-            'chosen_idx': row['chosen_idx'],
-            'outcome': row['outcome'],
+            col: row[col]
+            for col in [
+                'obs.deck.cards',
+                'obs.deck.upgrades',
+                'cards_offered.cards',
+                'cards_offered.upgrades',
+                'obs.fixed_observation',
+                'obs.relics.relics',
+                'fixed_actions',
+                'chosen_idx',
+                'choice_type',
+                'outcome',
+            ]
         }
 
 
 def collate_fn(batch):
     for x in batch:
-        n_card_choices = len(x['cards_offered']['cards'])
+        n_card_choices = len(x['cards_offered.cards'])
         n_fixed_actions = len(x['fixed_actions'])
         chosen_idx = x['chosen_idx']
         # Allow indices up to n_choices + n_fixed_actions
@@ -278,16 +283,22 @@ def collate_fn(batch):
 
     # Fill arrays
     for i, x in enumerate(batch):
-        deck[i, :min(len(x['obs']['deck']['cards']), MAX_DECK_SIZE)] = torch.from_numpy(x['obs']['deck']['cards'])[:MAX_DECK_SIZE]
-        deck_upgrades[i, :min(len(x['obs']['deck']['upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(x['obs']['deck']['upgrades'])[:MAX_DECK_SIZE]
-        choices[i, :min(len(x['cards_offered']['cards']), MAX_CHOICES)] = torch.from_numpy(x['cards_offered']['cards'])[:MAX_CHOICES]
-        choice_upgrades[i, :min(len(x['cards_offered']['upgrades']), MAX_CHOICES)] = torch.from_numpy(x['cards_offered']['upgrades'])[:MAX_CHOICES]
-        fixed_obs[i] = torch.from_numpy(x['obs']['fixed_observation'])
-        fixed_actions[i, :len(x['fixed_actions'])] = torch.from_numpy(x['fixed_actions'])
-        relics[i, :len(x['obs']['relics']['relics'])] = torch.from_numpy(x['obs']['relics']['relics'])
-        chosen_idx[i] = x['chosen_idx']
-        choice_type[i] = x['choice_type']
-        outcome[i] = x['outcome']
+        # Convert to numpy arrays first for consistent handling
+        np_arrays = {
+            k: (np.array(v, dtype=np.int32) if k != 'outcome' else v)
+            for k, v in x.items()
+        }
+        
+        deck[i, :min(len(np_arrays['obs.deck.cards']), MAX_DECK_SIZE)] = torch.from_numpy(np_arrays['obs.deck.cards'])[:MAX_DECK_SIZE]
+        deck_upgrades[i, :min(len(np_arrays['obs.deck.upgrades']), MAX_DECK_SIZE)] = torch.from_numpy(np_arrays['obs.deck.upgrades'])[:MAX_DECK_SIZE]
+        choices[i, :min(len(np_arrays['cards_offered.cards']), MAX_CHOICES)] = torch.from_numpy(np_arrays['cards_offered.cards'])[:MAX_CHOICES]
+        choice_upgrades[i, :min(len(np_arrays['cards_offered.upgrades']), MAX_CHOICES)] = torch.from_numpy(np_arrays['cards_offered.upgrades'])[:MAX_CHOICES]
+        fixed_obs[i] = torch.from_numpy(np_arrays['obs.fixed_observation'])
+        fixed_actions[i, :len(np_arrays['fixed_actions'])] = torch.from_numpy(np_arrays['fixed_actions'])
+        relics[i, :len(np_arrays['obs.relics.relics'])] = torch.from_numpy(np_arrays['obs.relics.relics'])
+        chosen_idx[i] = torch.from_numpy(np_arrays['chosen_idx'])
+        choice_type[i] = torch.from_numpy(np_arrays['choice_type'])
+        outcome[i] = np_arrays['outcome']
 
     return {
         'deck': deck,
@@ -309,3 +320,5 @@ def process_batch(batch, net):
     return net(batch)
 
 
+
+# %%

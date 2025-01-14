@@ -67,28 +67,6 @@ def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
     hash_val = ((seed * 1327217885) & 0xFFFFFFFF) / 0xFFFFFFFF
     return hash_val < valid_fraction
 
-class SlayDataset(torch.utils.data.Dataset):
-    def __init__(self, df):
-        self.df = df
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        
-        return {
-            'deck': np.array(row['obs.deck.cards'], dtype=np.int32),
-            'deck_upgrades': np.array(row['obs.deck.upgrades'], dtype=np.int32),
-            'choices': np.array(row['cards_offered.cards'], dtype=np.int32),
-            'choice_upgrades': np.array(row['cards_offered.upgrades'], dtype=np.int32),
-            'fixed_obs': np.array(row['obs.fixed_observation'], dtype=np.int32),
-            'fixed_actions': np.array(row['fixed_actions'], dtype=np.int32),
-            'chosen_idx': row['chosen_idx'],
-            'choice_type': row['choice_type'],
-            'outcome': row['outcome'],
-        }
-
 def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load and preprocess data from a parquet file, splitting into train and validation sets.
@@ -373,8 +351,6 @@ def hyperparameter_sweep(train_df, valid_df):
     return best_result['model_path'], results
 
 save_path, results = hyperparameter_sweep(train_df, valid_df)
-
-# %%
 
 # %%
 H = ModelHP()
