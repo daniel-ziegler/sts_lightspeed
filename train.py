@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List
 import argparse
 
-from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, process_batch, collate_fn
+from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch
 import numpy as np
 import pandas as pd
 import torch
@@ -83,9 +83,8 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
     # Filter data to handle fixed actions
     data_df = df[
         df.apply(lambda r: (
-            # Allow fixed actions (like SKIP)
-            (r["choice_type"] == ActionType.FIXED) or
-            # Or normal card choices within bounds
+            r["choice_type"] == ActionType.FIXED or
+            r["choice_type"] == ActionType.RELIC or 
             (r["choice_type"] == ActionType.CARD and 
              r["chosen_idx"] >= 0 and 
              r["chosen_idx"] < len(r["cards_offered.cards"]) and
@@ -277,6 +276,14 @@ def validate(valid_loader, net, device):
                     batch['chosen_idx'][card_mask]
                 ]
             
+            # Handle relic choices
+            relic_mask = batch['choice_type'] == ActionType.RELIC
+            if relic_mask.any():
+                chosen_logits[relic_mask] = output['relic_logits'][
+                    batch_indices[relic_mask],
+                    batch['chosen_idx'][relic_mask]
+                ]
+            
             # Handle fixed actions
             fixed_mask = batch['choice_type'] == ActionType.FIXED
             if fixed_mask.any():
@@ -299,7 +306,7 @@ def validate(valid_loader, net, device):
 
 def hyperparameter_sweep(train_df, valid_df):
     """Run hyperparameter sweep and save results."""
-    learning_rates = np.geomspace(3e-5, 1e-5, 5)
+    learning_rates = np.geomspace(3e-5, 1e-5, 1)
     weight_decays = np.geomspace(1e-5, 1e-5, 1)
     
     results = []
@@ -440,8 +447,9 @@ valid_loader = torch.utils.data.DataLoader(
 
 valid_preds = []
 valid_targets = []
-card_predictions = {}  # Dictionary to store predictions for each card
-fixed_predictions = {}  # Dictionary to store predictions for each fixed action
+card_predictions = {}
+fixed_predictions = {}
+relic_predictions = {}
 
 # Get predictions for validation set
 with torch.no_grad():
@@ -463,6 +471,14 @@ with torch.no_grad():
                 batch['chosen_idx'][card_mask]
             ]
         
+        # Handle relic choices
+        relic_mask = batch['choice_type'] == ActionType.RELIC
+        if relic_mask.any():
+            chosen_logits[relic_mask] = output['relic_logits'][
+                batch_indices[relic_mask],
+                batch['chosen_idx'][relic_mask]
+            ]
+        
         # Handle fixed actions
         fixed_mask = batch['choice_type'] == ActionType.FIXED
         if fixed_mask.any():
@@ -475,32 +491,17 @@ with torch.no_grad():
         valid_preds.extend(probs)
         valid_targets.extend(batch['outcome'].cpu().numpy())
         
-        # Get predictions for all cards
-        card_probs = torch.sigmoid(output['card_logits'])
-        fixed_probs = torch.sigmoid(output['fixed_logits'])
+        responses = output_to_cpu(output, batch)
         
-        # For each example in batch
-        for i in range(len(batch['choices'])):
-            # Get all valid probabilities for this choice
+        for i, response in enumerate(responses):
             all_valid_probs = []
-            
-            # Get valid card probabilities
-            choices = batch['choices'][i]
-            upgrades = batch['choice_upgrades'][i]
-            valid_mask = choices != sts.CardId.INVALID.value
-            if valid_mask.any():
-                all_valid_probs.extend(card_probs[i, valid_mask].cpu().numpy())
-            
-            # Get valid fixed action probabilities
-            fixed_actions = batch['fixed_actions'][i]
-            valid_mask = fixed_actions != FixedAction.INVALID.value
-            if valid_mask.any():
-                all_valid_probs.extend(fixed_probs[i, valid_mask].cpu().numpy())
-            
+            all_valid_probs.extend(1 / (1 + np.exp(-response['card_logits'])))
+            all_valid_probs.extend(1 / (1 + np.exp(-response['relic_logits'])))
+            all_valid_probs.extend(1 / (1 + np.exp(-response['fixed_logits'])))
             all_valid_probs = np.array(all_valid_probs)
             
             # Process card choices
-            card_idx = 0  # Keep track of position in all_valid_probs
+            logit_idx = 0
             choices = batch['choices'][i]
             upgrades = batch['choice_upgrades'][i]
             valid_mask = choices != sts.CardId.INVALID.value
@@ -510,13 +511,29 @@ with torch.no_grad():
                 card_key = str(card)
                 
                 # Calculate relative probability compared to all other options
-                other_probs = np.concatenate([all_valid_probs[:card_idx], all_valid_probs[card_idx+1:]])
-                relative_prob = all_valid_probs[card_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
+                relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
                 
                 if card_key not in card_predictions:
                     card_predictions[card_key] = []
                 card_predictions[card_key].append(relative_prob)
-                card_idx += 1
+                logit_idx += 1
+            
+            # Process relic choices
+            relics = batch['relics_offered'][i]
+            valid_mask = relics != sts.RelicId.INVALID.value
+            
+            for j, relic_id in enumerate(relics[valid_mask]):
+                relic_name = sts.RelicId(relic_id.item()).name
+                
+                # Calculate relative probability compared to all other options
+                other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
+                relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                
+                if relic_name not in relic_predictions:
+                    relic_predictions[relic_name] = []
+                relic_predictions[relic_name].append(relative_prob)
+                logit_idx += 1
             
             # Process fixed actions
             fixed_actions = batch['fixed_actions'][i]
@@ -526,13 +543,13 @@ with torch.no_grad():
                 action_name = FixedAction(action.item()).name
                 
                 # Calculate relative probability compared to all other options
-                other_probs = np.concatenate([all_valid_probs[:card_idx], all_valid_probs[card_idx+1:]])
-                relative_prob = all_valid_probs[card_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
+                relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
                 
                 if action_name not in fixed_predictions:
                     fixed_predictions[action_name] = []
                 fixed_predictions[action_name].append(relative_prob)
-                card_idx += 1
+                logit_idx += 1
 
 # Calculate and plot ROC curve
 fpr, tpr, _ = roc_curve(valid_targets, valid_preds)
@@ -566,6 +583,23 @@ sorted_cards = sorted(card_stats.items(), key=lambda x: x[1]['mean'], reverse=Tr
 for card, stats in sorted_cards:
     if stats['count'] >= 10:  # Only show cards with enough samples
         print(f"{card:25} {stats['mean']:+.3f} ±{stats['std']:.3f} (n={stats['count']})")
+
+# Calculate and print relic statistics
+print("\nRelic Win Probability Statistics (relative to alternatives):")
+relic_stats = {}
+for relic_name, preds in relic_predictions.items():
+    preds = np.array(preds)
+    relic_stats[relic_name] = {
+        'mean': np.mean(preds),
+        'std': np.std(preds),
+        'count': len(preds)
+    }
+
+# Sort and print relic statistics
+sorted_relics = sorted(relic_stats.items(), key=lambda x: x[1]['mean'], reverse=True)
+for relic, stats in sorted_relics:
+    if stats['count'] >= 10:  # Only show relics with enough samples
+        print(f"{relic:25} {stats['mean']:+.3f} ±{stats['std']:.3f} (n={stats['count']})")
 
 # Calculate and print fixed action statistics
 print("\nFixed Action Win Probability Statistics (relative to alternatives):")

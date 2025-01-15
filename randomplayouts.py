@@ -20,7 +20,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch
+from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu
 import slaythespire as sts
 
 # %%
@@ -187,24 +187,11 @@ class NNService:
                 batch_tensors = collate_fn(batch)
                 with torch.no_grad():
                     output = process_batch(batch_tensors, self.net)
+                    responses = output_to_cpu(output, batch_tensors)
                 
                 # Send responses
                 for i, req in enumerate(requests[:unpadded_len]):
-                    card_logits = output['card_logits'][i].cpu().numpy()
-                    fixed_logits = output['fixed_logits'][i].cpu().numpy()
-                    relic_logits = output['relic_logits'][i].cpu().numpy()
-                    
-                    # Get number of valid options
-                    n_valid_cards = len(batch[i]['cards_offered.cards'])
-                    n_valid_relics = len(req.choice.relics_offered)
-                    n_fixed = len(req.choice.fixed_actions)
-                    
-                    # Trim logits to valid lengths
-                    req.response_queue.put({
-                        'card_logits': card_logits[:n_valid_cards],
-                        'relic_logits': relic_logits[:n_valid_relics],
-                        'fixed_logits': fixed_logits[:n_fixed],
-                    })
+                    req.response_queue.put(responses[i])
                 
             except Empty:
                 continue

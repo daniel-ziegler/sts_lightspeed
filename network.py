@@ -324,6 +324,36 @@ def process_batch(batch, net):
     batch = {k: v.to(device) for k, v in batch.items()}
     return net(batch)
 
+def output_to_cpu(output: dict[str, torch.Tensor], batch: dict) -> list[dict[str, np.ndarray]]:
+    """
+    Moves tensors to CPU and trims them to valid lengths.
+    
+    Returns:
+        List of dictionaries containing trimmed numpy arrays of logits, one per batch item
+    """
+    batch_size = output['card_logits'].size(0)
+    results = []
+    
+    # Move tensors to CPU once
+    card_logits = output['card_logits'].cpu().numpy()
+    relic_logits = output['relic_logits'].cpu().numpy()
+    fixed_logits = output['fixed_logits'].cpu().numpy()
+    
+    for i in range(batch_size):
+        # Use boolean masks to select valid entries
+        card_mask = batch['choices'][i].cpu().numpy() != sts.CardId.INVALID.value
+        relic_mask = batch['relics_offered'][i].cpu().numpy() != sts.RelicId.INVALID.value
+        fixed_mask = batch['fixed_actions'][i].cpu().numpy() != FixedAction.INVALID.value
+        
+        # Trim logits to valid entries
+        results.append({
+            'card_logits': card_logits[i][card_mask],
+            'relic_logits': relic_logits[i][relic_mask],
+            'fixed_logits': fixed_logits[i][fixed_mask],
+        })
+    
+    return results
+
 
 
 # %%
