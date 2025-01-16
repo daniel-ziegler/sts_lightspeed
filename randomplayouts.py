@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import random
+import argparse
 from enum import IntEnum, auto
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,6 +11,7 @@ from queue import Queue, Empty
 from threading import Thread, Event
 from typing import NamedTuple
 import time
+import pathlib
 
 import pickle
 from tqdm.auto import tqdm
@@ -102,10 +104,10 @@ def process_choice(net: NN, choice: Choice) -> dict:
 
     # Use existing collate_fn to create tensors
     batch_tensors = collate_fn(batch)
-    
+
     # Process through network
     output = process_batch(batch_tensors, net)
-    
+
     return output
 
 
@@ -116,16 +118,17 @@ def get_choice_winprobs(net: NN, choice: Choice) -> np.ndarray:
     """
     if choice.choice_type != ActionType.CARD:
         raise ValueError("Only card choices are supported currently")
-        
+
     with torch.no_grad():
         output = process_choice(net, choice)
         probs = torch.sigmoid(output['card_choice_winprob_logits'][0]).cpu().numpy()
-        
+
         # Mask invalid entries
         n_valid = sum(len(s.cards) for s in choice.cards_offered)
         probs[n_valid:] = float('-inf')
-    
+
     return probs
+
 @dataclass
 class ChoiceOutcome:
     """A Choice and what was chosen from it"""
@@ -138,18 +141,18 @@ class ChoiceOutcome:
             'chosen_idx': self.chosen_idx,
         }
 
-def load_net(device=None):
+def load_net(model_path: str, device=None):
     if device is None:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    
+
     net = NN(ModelHP())
     net = net.to(device)
     net = torch.compile(net, mode="reduce-overhead")
-    
-    state = torch.load("net.outcome.pt", map_location=device, weights_only=True)
+
+    state = torch.load(model_path, map_location=device, weights_only=True)
     net.load_state_dict(state)
     net.eval()
-    
+
     return net
 
 class NNRequest(NamedTuple):
@@ -166,7 +169,7 @@ class NNService:
         self.shutdown_event = Event()
         self.thread = Thread(target=self._process_requests, daemon=True)
         self.thread.start()
-    
+
     def _process_requests(self):
         while not self.shutdown_event.is_set():
             # Collect requests
@@ -174,7 +177,7 @@ class NNService:
             try:
                 # Get at least one request
                 requests.append(self.request_queue.get(timeout=0.1))
-                
+
                 # Try to get more requests up to batch_size or max_wait_time
                 start_time = time.time()
                 while len(requests) < self.batch_size and time.time() - start_time < self.max_wait_time:
@@ -182,10 +185,10 @@ class NNService:
                         requests.append(self.request_queue.get_nowait())
                     except Empty:
                         break
-                
+
                 # Process batch
                 choices = [req.choice for req in requests]
-                
+
                 # Create batch
                 batch = [{
                     'deck': np.array(choice.obs.deck.cards, dtype=np.int32),
@@ -204,12 +207,12 @@ class NNService:
                     'chosen_idx': 0,  # Dummy value
                     'outcome': 0.0,   # Dummy value
                 } for choice in choices]
-                
+
                 # Process through network
                 batch_tensors = collate_fn(batch)
                 with torch.no_grad():
                     output = process_batch(batch_tensors, self.net)
-                
+
                 # Send responses
                 for i, req in enumerate(requests):
                     logits = output['card_choice_winprob_logits'][i].cpu().numpy()
@@ -217,7 +220,7 @@ class NNService:
                     n_valid = len(batch[i]['choices'])
                     logits = logits[:n_valid]  # Slice to only valid choices
                     req.response_queue.put(logits)
-                
+
             except Empty:
                 continue
             except Exception as e:
@@ -225,18 +228,18 @@ class NNService:
                 # Send error response to all waiting requests
                 for req in requests:
                     req.response_queue.put(e)
-    
+
     def get_logits(self, choice: Choice) -> np.ndarray:
         """Get raw logits from the network. Thread-safe."""
         response_queue = Queue()
         self.request_queue.put(NNRequest(choice, response_queue))
         response = response_queue.get()
-        
+
         if isinstance(response, Exception):
             raise response
-        
+
         return response
-    
+
     def stop(self):
         """Stop the service and wait for it to finish"""
         self.shutdown_event.set()
@@ -269,15 +272,15 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     """Use neural network to pick a card from the choices using Boltzmann sampling"""
     if choice.choice_type != ActionType.CARD:
         raise ValueError("Only card choices are supported")
-        
+
     logits = service.get_logits(choice)
     probs = get_card_probs(logits)
-    
+
     if stats is not None:
         stats.add_choice(probs)
-        
+
     chosen_idx = sample_boltzmann(probs)
-    
+
     # Find the GameAction that corresponds to this card index
     total = 0
     for which_set, card_set in enumerate(choice.cards_offered):
@@ -285,14 +288,14 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
             which_card = chosen_idx - total
             # Find matching action in actions list
             for action in actions:
-                if (action.idx1 == which_set and 
+                if (action.idx1 == which_set and
                     action.idx2 == which_card):
                     return action
             # If we get here, something went wrong
             print(f"Warning: Could not find action for card index {chosen_idx} (set {which_set}, card {which_card})")
             break
         total += len(card_set.cards)
-    
+
     # Fallback to random choice if something went wrong
     return random.choice(actions)
 
@@ -315,7 +318,7 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
                 cards_offered: list[sts.NNCardRepresentation] = []
                 paths_offered: list[int] = []
                 actions = sts.GameAction.getAllActionsInState(gc)
-                
+
                 # Use network for card choices if available
                 if net is not None and gc.screen_state == sts.ScreenState.REWARDS:
                     cards_offered = gc.screen_state_info.rewards_container.cards
@@ -326,7 +329,7 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
                         action = agent.pick_gameaction(gc)
                 else:
                     action = agent.pick_gameaction(gc)
-                
+
                 if action not in actions:
                     print(gc)
                     print("chose", action.getDesc(gc))
@@ -334,7 +337,7 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
                     for a in actions:
                         print(a.getDesc(gc))
                     raise ValueError("chosen action not in list of actions")
-                
+
                 if gc.screen_state == sts.ScreenState.REWARDS:
                     cards_offered = gc.screen_state_info.rewards_container.cards
                     which_set, which_card = action.idx1, action.idx2
@@ -383,22 +386,22 @@ class ChoiceStats:
         self.entropies = []
         self.n_options = []
         self.boltzmann_entropies = []
-        
+
     def add_choice(self, probs: np.ndarray):
         """Record statistics for a choice"""
         # Get raw entropy
         self.entropies.append(entropy(probs))
-        
+
         # Count valid options
         self.n_options.append(np.sum(probs != float('-inf')))
-        
+
         # Get Boltzmann entropy
         boltz_probs = get_boltzmann_probs(probs)
         self.boltzmann_entropies.append(entropy(boltz_probs))
-    
+
     def plot_stats(self):
         import matplotlib.pyplot as plt
-        
+
         # Raw entropy histogram
         plt.figure(figsize=(10, 6))
         plt.hist(self.entropies, bins=50, label='Raw')
@@ -411,7 +414,7 @@ class ChoiceStats:
         plt.legend()
         plt.grid(True)
         plt.show()
-        
+
         # Entropy vs number of options scatter
         plt.figure(figsize=(10, 6))
         plt.scatter(self.n_options, self.entropies, alpha=0.1, label='Raw')
@@ -422,45 +425,63 @@ class ChoiceStats:
         plt.legend()
         plt.grid(True)
         plt.show()
-        
+
         print(f"\nChoice Statistics:")
         print(f"Total choices: {len(self.entropies)}")
         print(f"Raw entropy: mean={np.mean(self.entropies):.3f}, median={np.median(self.entropies):.3f}")
         print(f"Boltzmann entropy: mean={np.mean(self.boltzmann_entropies):.3f}, median={np.median(self.boltzmann_entropies):.3f}")
         print(f"Options: mean={np.mean(self.n_options):.1f}, median={np.median(self.n_options):.1f}")
 
-# %%
-if __name__ == "__main__":
+def parse_args():
+    parser = argparse.ArgumentParser(description='Run random playouts with neural network guidance')
+    parser.add_argument('--num-threads', type=int, default=8,
+                      help='Number of threads to use for parallel playouts')
+    parser.add_argument('--start-seed', type=int, default=0,
+                      help='Starting seed for random playouts')
+    parser.add_argument('--num-playouts', type=int, default=1000,
+                      help='Number of playouts to run')
+    parser.add_argument('--model-path', type=str, default='net.outcome.pt',
+                      help='Path to the neural network model file')
+    parser.add_argument('--output-path', type=str, default=None,
+                      help='Path to save the output parquet file (default: rollouts{start_seed}_{end_seed}.net.parquet)')
+    parser.add_argument('--batch-size', type=int, default=16,
+                      help='Batch size for neural network inference')
+    parser.add_argument('--plot-stats', action='store_true',
+                      help='Plot choice statistics after running')
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+
     torch.set_float32_matmul_precision('high')
 
-    num_threads = 30
-    start_seed = 100_000
-    num_playouts = 50_000
-    
     # Load neural network and start service
-    net = load_net()
-    service = NNService(net, batch_size=16)
+    net = load_net(args.model_path)
+    service = NNService(net, batch_size=args.batch_size)
     print("Loaded neural network and started service")
 
     stats = ChoiceStats()
-    
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(random_playout_data, s, service, stats) for s in range(start_seed, start_seed+num_playouts)]
+
+    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+        futures = [
+            executor.submit(random_playout_data, s, service, stats)
+            for s in range(args.start_seed, args.start_seed + args.num_playouts)
+        ]
         df = pd.concat([
             future.result()
             for future
             in tqdm(
                 as_completed(futures),
-                total=num_playouts,
+                total=args.num_playouts,
                 mininterval=5,
                 maxinterval=60,
-                miniters=num_threads,
+                miniters=args.num_threads,
                 smoothing=0.1,
             )
         ])
 
     service.stop()
-    
+
     # Calculate and print winrate
     n_unique_seeds = df['seed'].nunique()
     n_wins = df.groupby('seed')['outcome'].last().sum()
@@ -468,12 +489,22 @@ if __name__ == "__main__":
     print(f"\nResults from {n_unique_seeds} games:")
     print(f"Wins: {n_wins}")
     print(f"Winrate: {winrate:.1%}")
-    
-    # Plot choice statistics
-    stats.plot_stats()
+
+    # Plot choice statistics if requested
+    if args.plot_stats:
+        stats.plot_stats()
 
     # Shuffle the DataFrame
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
-    df.to_parquet(f"rollouts{start_seed}_{start_seed+num_playouts}.net.parquet", engine="pyarrow")
-## %%
+    # Save output
+    if args.output_path is None:
+        args.output_path = f"rollouts{args.start_seed}_{args.start_seed + args.num_playouts}.net.parquet"
+
+    output_path = pathlib.Path(args.output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_path, engine="pyarrow")
+    print(f"\nSaved output to {output_path}")
+
+if __name__ == "__main__":
+    main()

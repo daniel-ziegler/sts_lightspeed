@@ -123,16 +123,16 @@ class NN(nn.Module):
         nn.init.uniform_(self.card_winprob.weight, -0.01, 0.01)
         nn.init.zeros_(self.card_winprob.bias)
 
-    def forward(self, deck, deck_upgrades, card_choices, choice_upgrades, fixed_obs):
-        device = deck.device
-        max_deck_len = deck.size(1)
-        max_choices_len = card_choices.size(1)
+    def forward(self, inputs):
+        device = inputs['deck'].device
+        max_deck_len = inputs['deck'].size(1)
+        max_choices_len = inputs['choices'].size(1)
 
         # Create sinusoidal embeddings for all fixed observations at once
-        fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(fixed_obs))
+        fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(inputs['fixed_obs']))
 
-        cards = torch.cat((deck, card_choices), dim=1)
-        upgrades = torch.cat((deck_upgrades, choice_upgrades), dim=1)
+        cards = torch.cat((inputs['deck'], inputs['choices']), dim=1)
+        upgrades = torch.cat((inputs['deck_upgrades'], inputs['choice_upgrades']), dim=1)
         mask = cards == sts.CardId.INVALID.value
 
         # Combine card and upgrade embeddings
@@ -228,6 +228,4 @@ def collate_fn(batch):
 def process_batch(batch, net):
     # Move tensors to device
     batch = {k: v.to(net.device) for k, v in batch.items()}
-    return net(batch['deck'], batch['deck_upgrades'],
-              batch['choices'], batch['choice_upgrades'],
-              batch['fixed_obs'])
+    return net(batch)
