@@ -149,8 +149,9 @@ def load_net(model_path: str, device=None):
     net = net.to(device)
     net = torch.compile(net, mode="reduce-overhead")
 
-    state = torch.load(model_path, map_location=device, weights_only=True)
-    net.load_state_dict(state)
+    if model_path != '-':
+        state = torch.load(model_path, map_location=device, weights_only=True)
+        net.load_state_dict(state)
     net.eval()
 
     return net
@@ -268,7 +269,7 @@ def sample_boltzmann(probs: np.ndarray, temperature: float = 0.01) -> int:
     softmax_probs = get_boltzmann_probs(probs, temperature)
     return int(np.random.choice(len(probs), p=softmax_probs))
 
-def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext, stats: ChoiceStats = None) -> sts.GameAction:
+def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], gc: sts.GameContext, stats: ChoiceStats = None, temperature: float = 0.01) -> sts.GameAction:
     """Use neural network to pick a card from the choices using Boltzmann sampling"""
     if choice.choice_type != ActionType.CARD:
         raise ValueError("Only card choices are supported")
@@ -299,7 +300,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     # Fallback to random choice if something went wrong
     return random.choice(actions)
 
-def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStats = None):
+def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: ChoiceStats = None, temperature: float = 0.01):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
 
     agent = sts.Agent()
@@ -324,7 +325,7 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
                     cards_offered = gc.screen_state_info.rewards_container.cards
                     if cards_offered:
                         choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], choice_type=ActionType.CARD)
-                        action = pick_card_with_net(net, choice, actions, gc, stats)
+                        action = pick_card_with_net(net, choice, actions, gc, stats, temperature)
                     else:
                         action = agent.pick_gameaction(gc)
                 else:
@@ -374,8 +375,8 @@ def random_playout(seed: int, net: NN = None, verbose: bool = False, stats: Choi
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome)
 
-def random_playout_data(seed: int, net: NN = None, stats: ChoiceStats = None):
-    choices, outcome = random_playout(seed, net=net, verbose=False, stats=stats)
+def random_playout_data(seed: int, net: NN = None, stats: ChoiceStats = None, temperature: float = 0.01):
+    choices, outcome = random_playout(seed, net=net, verbose=False, stats=stats, temperature=temperature)
     df = pd.DataFrame([flatten_dict(c.as_dict()) for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
@@ -441,11 +442,13 @@ def parse_args():
     parser.add_argument('--num-playouts', type=int, default=1000,
                       help='Number of playouts to run')
     parser.add_argument('--model-path', type=str, default='net.outcome.pt',
-                      help='Path to the neural network model file')
+                      help='Path to the neural network model file, or "-" to use random weights')
     parser.add_argument('--output-path', type=str, default=None,
                       help='Path to save the output parquet file (default: rollouts{start_seed}_{end_seed}.net.parquet)')
     parser.add_argument('--batch-size', type=int, default=16,
                       help='Batch size for neural network inference')
+    parser.add_argument('--temperature', type=float, default=0.01,
+                      help='Temperature for Boltzmann sampling (higher = more random)')
     parser.add_argument('--plot-stats', action='store_true',
                       help='Plot choice statistics after running')
     return parser.parse_args()
@@ -464,7 +467,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
         futures = [
-            executor.submit(random_playout_data, s, service, stats)
+            executor.submit(random_playout_data, s, service, stats, args.temperature)
             for s in range(args.start_seed, args.start_seed + args.num_playouts)
         ]
         df = pd.concat([
