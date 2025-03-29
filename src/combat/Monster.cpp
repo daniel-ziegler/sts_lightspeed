@@ -494,6 +494,7 @@ void Monster::attackedUnblockedHelper(BattleContext &bc, int damage) { // todo, 
         auto flight = getStatus<MS::FLIGHT>();
         if (flight == 1) {
             setMove(MMID::BYRD_STUNNED);
+            setHasStatus<MS::FLIGHT>(false);
         }
         setStatus<MS::FLIGHT>(flight-1);
 
