@@ -1390,6 +1390,12 @@ bool GameContext::obtainRelic(RelicId r) {
             break;
         }
 
+        case RelicId::MATRYOSHKA: {
+            relicData = 2;
+            break;
+        }
+
+
         case RelicId::PANDORAS_BOX: {
             int transformCount = 0;
             for (int i = deck.size()-1; i >= 0; --i) {
