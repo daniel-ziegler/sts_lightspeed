@@ -1115,6 +1115,7 @@ void GameContext::enterAct3VictoryRoom() {
 void GameContext::enterBattle(MonsterEncounter encounter) {
     screenState = ScreenState::BATTLE;
     info.encounter = encounter;
+    smokeBombUsed = false;
     if (skipBattles) {
         afterBattle();
     }
@@ -1128,6 +1129,10 @@ void GameContext::afterBattle() {
     switch (curRoom) {
         case Room::MONSTER: {
             regainControlAction = returnToMapAction;
+            if (smokeBombUsed) {
+                regainControl();
+                break;
+            }
             auto reward = createCombatReward();
             if (info.stolenGold != 0) { // todo stolen gold actually comes first in the list
                 reward.addGold(info.stolenGold);
@@ -1138,6 +1143,10 @@ void GameContext::afterBattle() {
 
         case Room::ELITE:
             regainControlAction = returnToMapAction;
+            if (smokeBombUsed) {
+                regainControl();
+                break;
+            }
             openCombatRewardScreen(createEliteCombatReward());
             break;
 
@@ -1178,13 +1187,17 @@ void GameContext::afterBattle() {
 
         case Room::EVENT:
             if (curEvent == Event::MYSTERIOUS_SPHERE) { // todo gold from golden idol?
+                regainControlAction = returnToMapAction;
+                if (smokeBombUsed) {
+                    regainControl();
+                    break;
+                }
                 Rewards reward;
                 reward.addGold(info.gold);
                 reward.addRelic(info.bossRelics[0]);
                 addPotionRewards(reward);
                 reward.addCardReward(createCardReward(Room::EVENT));
                 openCombatRewardScreen(reward);
-                regainControlAction = returnToMapAction;
             } else {
                 regainControl();
             }

@@ -24,6 +24,7 @@ void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit
 
     undefinedBehaviorEvoked = false;
     haveUsedDiscoveryAction = false;
+    smokeBombUsed = false;
     seed = gc.seed;
     floorNum = gc.floorNum;
     encounter = encounterToInit;
@@ -497,6 +498,7 @@ void BattleContext::exitBattle(GameContext &g) const {
     updateCardsOnExit(g.deck);
 
     g.info.stolenGold = 0;
+    g.smokeBombUsed = smokeBombUsed;
     if (requiresStolenGoldCheck()) {
         for (int i = 0; i < monsters.monsterCount; ++i) {
             const auto &m = monsters.arr[i];
@@ -2399,7 +2401,10 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::SMOKE_BOMB:
-            // todo
+            if (gameContext->curRoom != Room::BOSS) {
+                smokeBombUsed = true;
+                outcome = Outcome::PLAYER_VICTORY;
+            }
             break;
 
         case Potion::SNECKO_OIL:

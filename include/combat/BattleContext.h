@@ -76,6 +76,7 @@ namespace sts {
         bool endTurnQueued = false;
         bool turnHasEnded = false;
         bool skipMonsterTurn = false;
+        bool smokeBombUsed = false;
 
         ActionQueue<50> actionQueue;
         CardQueue cardQueue;
