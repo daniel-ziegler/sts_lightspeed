@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
+# Set the SDK path before the project command
+set(CMAKE_OSX_SYSROOT "/Library/Developer/CommandLineTools/SDKs/MacOSX15.2.sdk")
+
 project(
         sts_lightspeed
         VERSION 0.1

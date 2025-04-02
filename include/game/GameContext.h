@@ -222,6 +222,7 @@ namespace sts {
         int curHp = 80;
         int maxHp = 80;
         int gold = 99;
+        bool smokeBombUsed = false;
 
         int potionCount = 0;
         int potionCapacity = 0;
