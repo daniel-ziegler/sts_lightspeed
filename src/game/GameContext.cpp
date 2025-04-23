@@ -3106,9 +3106,10 @@ void GameContext::chooseEventOption(int idx) {
                 enterBattle(MonsterEncounter::MUSHROOMS_EVENT);
 
             } else if (idx == 1) {
-                obtainGold(unfavorable ? 50 : 99);
+                int healAmt = fractionMaxHp(0.25f);
+                playerHeal(healAmt);
+                deck.obtain(*this, CardId::PARASITE);
                 regainControl();
-
             } else {
                 assert(false);
             }
