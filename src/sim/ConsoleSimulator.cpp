@@ -569,6 +569,10 @@ void ConsoleSimulator::printCardSelectScreenActions(std::ostream &os) const {
             os << "Offer to the spirits.";
             break;
 
+        case CardSelectScreenType::DUPLICATE:
+            os << "Duplicate.";
+            break;
+
         default:
             assert(false);
             break;
