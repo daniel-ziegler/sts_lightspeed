@@ -306,7 +306,7 @@ def validate(valid_loader, net, device):
 
 def hyperparameter_sweep(train_df, valid_df):
     """Run hyperparameter sweep and save results."""
-    learning_rates = np.geomspace(3e-5, 1e-5, 1)
+    learning_rates = np.geomspace(5e-5, 1e-5, 5)
     weight_decays = np.geomspace(1e-5, 1e-5, 1)
     
     results = []

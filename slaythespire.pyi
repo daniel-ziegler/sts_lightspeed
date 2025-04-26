@@ -1,4 +1,4 @@
-from typing import List, Tuple, Callable, Any
+from typing import List, Tuple, Callable, Any, Optional
 from enum import Enum
 
 import numpy as np
@@ -70,6 +70,15 @@ class ScreenStateInfo:
     select_screen_type: CardSelectScreenType
     boss_relics: List[RelicId]
     rewards_container: Rewards
+    shop: Shop
+
+class Shop:
+    prices: list[int]
+    @property
+    def remove_cost(self) -> Optional[int]: ...
+    cards: list[Card]
+    potions: list[Potion]
+    relics: list[RelicId]
 
 class Relic:
     id: RelicId
@@ -244,6 +253,7 @@ class RelicId(Enum):
 class Potion:
     # Add Potion class definition if available
     pass
+
 
 def play(agent: Agent, gc: GameContext) -> None: ...
 def get_seed_str(seed: int) -> str: ...

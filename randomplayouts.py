@@ -337,67 +337,29 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 obs = sts.getNNRepresentation(gc)
             else:
                 obs = sts.getNNRepresentation(gc)
-                cards_offered: list[sts.NNCardRepresentation] = []
-                paths_offered: list[int] = []
-                relics_offered: list[sts.RelicId] = []
                 actions = sts.GameAction.getAllActionsInState(gc)
-                
-                # Use network for card/relic choices if available
-                if net is not None and (gc.screen_state == sts.ScreenState.REWARDS or 
-                                      gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS):
-                    cards_offered = gc.screen_state_info.rewards_container.cards if gc.screen_state == sts.ScreenState.REWARDS else []
-                    relics_offered = gc.screen_state_info.boss_relics if gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS else []
-                    assert isinstance(relics_offered, list)
-                    
-                    # Check if skip is allowed
-                    fixed_actions = []
-                    if any(a.rewards_action_type == sts.RewardsActionType.SKIP for a in actions):
-                        fixed_actions.append(FixedAction.SKIP)
-                    
-                    if cards_offered or relics_offered:
-                        choice = Choice(obs, cards_offered=cards_offered, paths_offered=[], 
-                                      fixed_actions=fixed_actions, relics_offered=relics_offered)
-                        action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
-                    else:
-                        action = agent.pick_gameaction(gc)
-                else:
-                    action = agent.pick_gameaction(gc)
-                
-                if action not in actions:
-                    print(gc)
-                    print("chose", action.getDesc(gc))
-                    print("options:")
-                    for a in actions:
-                        print(a.getDesc(gc))
-                    raise ValueError("chosen action not in list of actions")
+
+                cards_offered = []
+                relics_offered = []
+                fixed_actions = []
+                paths_offered = []
                 
                 if gc.screen_state == sts.ScreenState.REWARDS:
                     cards_offered = gc.screen_state_info.rewards_container.cards
-                    which_set, which_card = action.idx1, action.idx2
-                    
-                    # Determine choice type and index based on the action taken
-                    if action.rewards_action_type == sts.RewardsActionType.SKIP:
-                        choice_type = ActionType.FIXED
-                        chosen_idx = 0
-                    elif cards_offered and which_card < len(cards_offered[which_set].cards):
-                        choice_type = ActionType.CARD
-                        chosen_idx = sum([len(s.cards) for s in cards_offered[:which_set]]) + which_card
-                    else:
-                        choice_type = ActionType.INVALID
-                        chosen_idx = -1
-
+                    if any(a.rewards_action_type == sts.RewardsActionType.SKIP for a in actions):
+                        fixed_actions.append(FixedAction.SKIP)
+                        
+                elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
+                    cards_offered = gc.screen_state_info.shop.cards
+                    relics_offered = gc.screen_state_info.shop.relics
+                    fixed_actions = [FixedAction.SKIP]
+                    if gc.screen_state_info.shop.remove_cost is not None:
+                        fixed_actions.append(FixedAction.REMOVE)
+                        
                 elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
                     relics_offered = gc.screen_state_info.boss_relics
                     fixed_actions = [FixedAction.SKIP]
-                    which_relic = action.idx1
-                    if which_relic == 3:
-                        # skip
-                        choice_type = ActionType.FIXED
-                        chosen_idx = 0
-                    else:
-                        choice_type = ActionType.RELIC
-                        chosen_idx = which_relic
-
+                    
                 elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
                     def xy_to_roomid(x, y):
                         roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
@@ -408,21 +370,66 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                             raise
                         return roomid
                     paths_offered = [xy_to_roomid(a.idx1, gc.cur_map_node_y+1) for a in actions]
+
+                # Pick action using either network or agent
+                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS):
+                    choice = Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, 
+                                  fixed_actions=fixed_actions, relics_offered=relics_offered)
+                    action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
+                else:
+                    action = agent.pick_gameaction(gc)
+                
+                if action not in actions:
+                    print(gc)
+                    print("chose", action.getDesc(gc))
+                    print("options:")
+                    for a in actions:
+                        print(a.getDesc(gc))
+                    raise ValueError("chosen action not in list of actions")
+
+                # Translate action into choice_type and chosen_idx
+                choice_type = ActionType.INVALID
+                chosen_idx = -1
+                
+                if gc.screen_state == sts.ScreenState.REWARDS:
+                    which_set, which_card = action.idx1, action.idx2
+                    if action.rewards_action_type == sts.RewardsActionType.SKIP:
+                        choice_type = ActionType.FIXED
+                        chosen_idx = 0
+                    elif cards_offered and which_card < len(cards_offered[which_set].cards):
+                        choice_type = ActionType.CARD
+                        chosen_idx = sum([len(s.cards) for s in cards_offered[:which_set]]) + which_card
+                        
+                elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
+                    if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
+                        choice_type = ActionType.FIXED
+                        chosen_idx = 1
+                    elif action.rewards_action_type == sts.RewardsActionType.CARD:
+                        choice_type = ActionType.CARD
+                        chosen_idx = sum([len(s.cards) for s in cards_offered[:action.idx1]]) + action.idx2
+                    elif action.rewards_action_type == sts.RewardsActionType.RELIC:
+                        choice_type = ActionType.RELIC
+                        chosen_idx = action.idx1
+                        
+                elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
+                    which_relic = action.idx1
+                    if which_relic == 3:  # skip
+                        choice_type = ActionType.FIXED
+                        chosen_idx = 0
+                    else:
+                        choice_type = ActionType.RELIC
+                        chosen_idx = which_relic
+                        
+                elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
                     choice_type = ActionType.PATH
                     chosen_idx, = [ix for ix, a in enumerate(actions) if a.idx1 == action.idx1]
-                else:
-                    choice_type = ActionType.INVALID
-                    chosen_idx = -1
+
+                # Record choice if valid
                 if choice_type != ActionType.INVALID:
-                    # Create Choice with all available options
-                    fixed_actions = []
-                    if gc.screen_state == sts.ScreenState.REWARDS:
-                        if any(a.rewards_action_type == sts.RewardsActionType.SKIP for a in actions):
-                            fixed_actions.append(FixedAction.SKIP)
-                    
                     choice = Choice(obs, cards_offered=cards_offered, paths_offered=paths_offered, 
                                   fixed_actions=fixed_actions, relics_offered=relics_offered)
                     choices.append(ChoiceOutcome(choice, choice_type=choice_type, chosen_idx=chosen_idx))
+                    
                 if verbose:
                     print(action.getDesc(gc))
                 action.execute(gc)

@@ -206,9 +206,29 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_property_readonly("boss_relics", [](const ScreenStateInfo &s) {
             return std::vector<RelicId>(s.bossRelics, s.bossRelics+3);
         })
+        .def_property_readonly("shop", [](const ScreenStateInfo& info) -> const Shop& {
+            return info.shop;
+        })
         // .def_property_readonly("to_select_cards", )
         // .def_property_readonly("have_selected_cards", )
         .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer);
+
+    pybind11::class_<Shop>(m, "Shop")
+        .def_property_readonly("prices", [](const Shop& s) {
+            return std::vector<int>(s.prices, s.prices + 13);
+        })
+        .def_property_readonly("remove_cost", [](const Shop& s) -> std::optional<int> {
+            return s.removeCost == -1 ? std::nullopt : std::make_optional(s.removeCost);
+        })
+        .def_property_readonly("cards", [](const Shop& s) {
+            return std::vector<Card>(s.cards, s.cards + 7);
+        })
+        .def_property_readonly("potions", [](const Shop& s) {
+            return std::vector<Potion>(s.potions, s.potions + 3);
+        })
+        .def_property_readonly("relics", [](const Shop& s) {
+            return std::vector<RelicId>(s.relics, s.relics + 3);
+        });
 
     pybind11::class_<RelicInstance> relic(m, "Relic");
     relic.def_readwrite("id", &RelicInstance::id)

@@ -47,6 +47,7 @@ class InputType(IntEnum):
 class FixedAction(IntEnum):
     INVALID = -1
     SKIP = 0
+    REMOVE = 1
 
 class SinusoidalEmbedding(nn.Module):
     def __init__(self, dim: int, n_features: int):
