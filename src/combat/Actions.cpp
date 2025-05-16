@@ -145,7 +145,6 @@ void _VampireAttack::operator()(BattleContext &bc) const {
 }
 
 void _PlayerLoseHp::operator()(BattleContext &bc) const {
-    // TODO this doesn't take into account intangible or relics
     bc.player.loseHp(bc, hp, selfDamage);
 }
 

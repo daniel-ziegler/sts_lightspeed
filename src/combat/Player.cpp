@@ -323,11 +323,17 @@ void Player::loseHp(BattleContext &bc, int amount, bool selfDamage) {
         amount = 1;
     }
 
+    if (hasStatus<PS::BUFFER>()) {
+        decrementStatus<PS::BUFFER>();
+        amount = 0;
+    }
+
     if (amount > 0 && hasRelic<RelicId::TUNGSTEN_ROD>()) {
         amount -= 1;
-        if (amount == 0) {
-            return;
-        }
+    }
+
+    if (amount == 0) {
+        return;
     }
 
     hpWasLost(bc, amount, selfDamage);
