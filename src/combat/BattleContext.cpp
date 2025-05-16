@@ -2870,7 +2870,7 @@ void BattleContext::mummifiedHandOnUsePower() {
 
     for (int i = matchingIdxList.size()-1; i >= 0; --i) {
         const auto uniqueId = cards.hand[matchingIdxList[i]].getUniqueId();
-        if (cardQueue.containsCardWithId(uniqueId)) {
+        if (uniqueId == curCardQueueItem.card.getUniqueId() || cardQueue.containsCardWithId(uniqueId)) {
             matchingIdxList.remove(i);
         }
     }
