@@ -5,7 +5,7 @@ For tree search and simulation of the popular rogue-like deckbuilder game Slay T
 **Features**
 * c++ 17 compiled with gcc
 * Standalone
-* Designed to be 100% RNG accurate*
+* Optimized for machine learning training and data generation
 * Playable in console
 * Speed: 1M random playouts in 5s with 16 threads
 * Loading from save files (loading into combat currently only supported)
