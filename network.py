@@ -1,20 +1,19 @@
-import numpy as np
+from collections import abc
+from dataclasses import dataclass
+from enum import IntEnum, auto
 
+import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from enum import IntEnum, auto
+
 import slaythespire as sts
-
-
-from dataclasses import dataclass
-from typing import Optional
-
+from inputs import SinusoidalEmbedding, FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace
 
 @dataclass
 class ModelHP:
     dim: int = 256
-    ffn_dim_mult: int = 4
+    mlp_dim_mult: int = 4
     n_layers: int = 4
     n_heads: int = 8
     norm_eps: float = 1e-5
@@ -25,6 +24,7 @@ class ModelHP:
 # Constants for data processing
 MAX_DECK_SIZE = 64  # Should be enough for most decks
 MAX_CHOICES = 10    # Usually 3-4, but can be more in edge cases
+MAX_UPGRADE = 21
 
 
 class ActionType(IntEnum):
@@ -33,7 +33,7 @@ class ActionType(IntEnum):
     PATH = auto()
     RELIC = auto()
     EVENT_OPTION = auto()
-    FIXED = auto()  # New type for fixed actions like SKIP
+    FIXED = auto()  # for fixed actions like SKIP
 
 class InputType(IntEnum):
     # TODO maybe should unify with ActionType
@@ -49,30 +49,18 @@ class FixedAction(IntEnum):
     SKIP = 0
     REMOVE = 1
 
-class SinusoidalEmbedding(nn.Module):
-    def __init__(self, dim: int, n_features: int):
-        super().__init__()
-        assert dim % 2 == 0, "Embedding dimension must be even"
-        self.dim = dim
-        half_dim = dim // 2
-        emb = torch.log(torch.tensor(10000.0)) / (half_dim - 1)
-        self.register_buffer('inv_freq', torch.exp(torch.arange(half_dim) * -emb) * 10)
-        self.out_dim = dim * n_features
+obs_space = DictSpace({
+    'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
+    'relics': SequenceSpace(EnumSpace(sts.RelicId)),
+    'fixed_obs': FixedVecSpace(sts.getFixedObservationMaximums()),
+})
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Create sinusoidal embeddings for numerical values.
-        x: tensor of integers to embed [batch_size, n_features]
-        Returns: [batch_size, n_features * dim] tensor
-        """
-        # [batch_size, n_features, half_dim]
-        emb = x.float().unsqueeze(-1) * self.inv_freq.unsqueeze(0).unsqueeze(0)
+action_logit_space = DictSpace({
+    'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
+    'relics': SequenceSpace(EnumSpace(sts.RelicId)),
+    'fixed': SequenceSpace(EnumSpace(FixedAction)),
+})
 
-        # [batch_size, n_features, dim]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-
-        # [batch_size, n_features * dim]
-        return emb.reshape(x.shape[0], -1)
 
 
 class RMSNorm(nn.Module):
@@ -89,7 +77,7 @@ class RMSNorm(nn.Module):
         return normed * self.w
 
 
-class FFN(nn.Module):
+class MLP(nn.Module):
     def __init__(self, dim: int, hidden_dim: int):
         super().__init__()
         self.w1 = nn.Linear(dim, hidden_dim, bias=True)
@@ -108,13 +96,13 @@ class TransformerBlock(nn.Module):
         self.norm1 = RMSNorm(H.dim, eps=H.norm_eps)
         self.attn = nn.MultiheadAttention(H.dim, H.n_heads, batch_first=True)
         self.norm2 = RMSNorm(H.dim, eps=H.norm_eps)
-        self.ffn = FFN(H.dim, H.dim * H.ffn_dim_mult)
+        self.mlp = MLP(H.dim, H.dim * H.mlp_dim_mult)
 
     def forward(self, x, pos_mask):
         xn = self.norm1(x)
         xatt, _ = self.attn(xn, xn, xn, attn_mask=None, key_padding_mask=pos_mask)
         x1 = x + xatt
-        x2 = x1 + self.ffn(self.norm2(x1))
+        x2 = x1 + self.mlp(self.norm2(x1))
         return x2
 
 
@@ -124,6 +112,7 @@ class NN(nn.Module):
         self.H = H
 
         self.input_type_embed = nn.Embedding(len(InputType), H.dim)
+        self.num_embed = SinusoidalEmbedding(H.dim)
         self.card_embed = nn.Embedding(len(sts.CardId), H.dim, padding_idx=sts.CardId.INVALID.value)
         self.upgrade_embed = nn.Embedding(21, H.dim, padding_idx=0)
         
