@@ -12,8 +12,6 @@ PathOrRemainder = Union[Path, int]
 T = TypeVar('T')
 
 class Space(Generic[T], nn.Module, ABC):
-    """Unified Space class that combines data structure definition with neural network embedding."""
-    
     def __init__(self, dim: int):
         super().__init__()
         self.dim = dim
@@ -23,9 +21,27 @@ class Space(Generic[T], nn.Module, ABC):
         """Sample a random value from this space."""
         pass
 
+
+class ScalarSpace(Generic[T], Space[T]):
+    """Embeds a scalar tensor into a tensor."""
+
     @abstractmethod
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Embed input tensor into representation space."""
+        pass
+
+
+class MaskedSpace(Generic[T], Space[T]):
+    """
+    Embeds an object into an (embedding, mask) pair of tensors and supports finding
+    the path to a specific index.
+    """
+
+    @abstractmethod
+    def forward(self, x) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns (embedding, mask).
+        Both tensors have shape (batch, seq, dim).
+        """
         pass
 
     @abstractmethod
@@ -56,7 +72,7 @@ class Space(Generic[T], nn.Module, ABC):
 
 TEnum = TypeVar('TEnum', bound=IntEnum)
 
-class EnumSpace(Space[TEnum]):
+class EnumSpace(ScalarSpace[TEnum]):
     def __init__(self, enum_class: Type[TEnum], dim: int):
         self.enum_class = enum_class
         super().__init__(dim)
@@ -68,19 +84,7 @@ class EnumSpace(Space[TEnum]):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.embedding(x)
 
-    def try_ix_to_path(self, x: TEnum, ix: int) -> PathOrRemainder:
-        if ix == 0:
-            return []
-        else:
-            return ix - 1
-
-    def path_to_ix(self, x: TEnum, path: Path) -> int:
-        if len(path) == 0:
-            return 0
-        else:
-            raise IndexError(f"Path {path} is out of bounds")
-
-class IntSpace(Space[int]):
+class IntSpace(ScalarSpace[int]):
     def __init__(self, limit: int, dim: int):
         self.limit = limit
         super().__init__(dim)
@@ -92,21 +96,9 @@ class IntSpace(Space[int]):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.embedding(x)
 
-    def try_ix_to_path(self, x: int, ix: int) -> PathOrRemainder:
-        if ix == 0:
-            return []
-        else:
-            return ix - 1
 
-    def path_to_ix(self, x: int, path: Path) -> int:
-        if len(path) == 0:
-            return 0
-        else:
-            raise IndexError(f"Path {path} is out of bounds")
-
-
-class SequenceSpace(Space[Sequence[T]]):
-    def __init__(self, element_space: Space[T], dim: int):
+class SequenceSpace(MaskedSpace[Sequence[T]]):
+    def __init__(self, element_space: ScalarSpace[T], dim: int):
         self.element_space = element_space
         super().__init__(dim)
         self.element_embedding = self.element_space
@@ -115,24 +107,20 @@ class SequenceSpace(Space[Sequence[T]]):
         length = int(rng.exponential(10))
         return [self.element_space.sample(rng) for _ in range(length)]
 
-    def forward(self, xs: torch.Tensor) -> torch.Tensor:
-        return self.element_embedding(xs)
+    def forward(self, xs: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.element_embedding(xs["value"]), xs["mask"]
 
     def try_ix_to_path(self, xs: Sequence[T], ix: int) -> PathOrRemainder:
-        for i, x in enumerate(xs):
-            p = self.element_space.try_ix_to_path(x, ix)
-            if isinstance(p, int):
-                ix -= p
-            else:
-                return [i] + p
-        return ix
+        if ix < len(xs):
+            return [ix]
+        else:
+            return ix - len(xs)
 
     def path_to_ix(self, xs: Sequence[T], path: Path) -> int:
-        i, *subpath = path
-        ix = 0
-        for x in xs[:i]:
-            ix += self.element_space.length(x)
-        return ix + self.element_space.path_to_ix(xs[i], subpath)
+        (i,) = path
+        if i >= len(xs):
+            raise IndexError(f"Path index {i} out of bounds")
+        return i
 
 class SinusoidalEmbedding(nn.Module):
     """Standalone sinusoidal embedding for numerical features."""
@@ -160,7 +148,7 @@ class SinusoidalEmbedding(nn.Module):
         # [batch_size, n_features * dim]
         return emb.reshape(x.shape[0], -1)
 
-class FixedVecSpace(Space[np.ndarray]):
+class FixedVecSpace(MaskedSpace[np.ndarray]):
     def __init__(self, limits: list[int], dim: int):
         self.limits = limits
         super().__init__(dim)
@@ -170,8 +158,8 @@ class FixedVecSpace(Space[np.ndarray]):
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         return np.array([rng.randint(0, limit) for limit in self.limits])
 
-    def forward(self, xs: torch.Tensor) -> torch.Tensor:
-        return self.proj(self.num_embed(xs))
+    def forward(self, xs) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.proj(self.num_embed(xs)), torch.ones_like(xs)
 
     def try_ix_to_path(self, x: np.ndarray, ix: int) -> PathOrRemainder:
         if ix == 0:
@@ -185,8 +173,8 @@ class FixedVecSpace(Space[np.ndarray]):
         else:
             raise IndexError(f"Path {path} is out of bounds")
 
-class TupleAddSpace(Space[tuple]):
-    def __init__(self, *spaces: Space[Any], dim: int):
+class TupleAddSpace(ScalarSpace[tuple]):
+    def __init__(self, *spaces: ScalarSpace[Any], dim: int):
         self.spaces = spaces
         super().__init__(dim)
         self.component_spaces = nn.ModuleList(self.spaces)
@@ -197,27 +185,8 @@ class TupleAddSpace(Space[tuple]):
     def forward(self, xs: tuple) -> torch.Tensor:
         return torch.sum(torch.stack([space(x) for space, x in zip(self.spaces, xs)], dim=0), dim=0)
 
-    def try_ix_to_path(self, x: tuple, ix: int) -> PathOrRemainder:
-        for i, (space, elem) in enumerate(zip(self.spaces, x)):
-            p = space.try_ix_to_path(elem, ix)
-            if isinstance(p, int):
-                ix -= p
-            else:
-                return [i] + p
-        return ix
-
-    def path_to_ix(self, x: tuple, path: Path) -> int:
-        i, *subpath = path
-        ix = 0
-        for j, (space, elem) in enumerate(zip(self.spaces, x)):
-            if j < i:
-                ix += space.length(elem)
-            elif j == i:
-                return ix + space.path_to_ix(elem, subpath)
-        raise IndexError(f"Path index {i} out of bounds")
-
-class TupleConcatSpace(Space[tuple]):
-    def __init__(self, *spaces: Space[Any], dim: int):
+class TupleConcatSpace(MaskedSpace[tuple]):
+    def __init__(self, *spaces: MaskedSpace[Any], dim: int):
         self.spaces = spaces
         super().__init__(dim)
         self.component_spaces = nn.ModuleList(self.spaces)
@@ -225,8 +194,9 @@ class TupleConcatSpace(Space[tuple]):
     def sample(self, rng: np.random.Generator) -> tuple:
         return tuple(space.sample(rng) for space in self.spaces)
 
-    def forward(self, xs: tuple) -> torch.Tensor:
-        return torch.cat([space(x) for space, x in zip(self.spaces, xs)], dim=-2)
+    def forward(self, xs: tuple) -> tuple[torch.Tensor, torch.Tensor]:
+        embeddings, masks = zip(*[space(x) for space, x in zip(self.spaces, xs)])
+        return torch.cat(embeddings, dim=-2), torch.cat(masks, dim=-2)
 
     def try_ix_to_path(self, x: tuple, ix: int) -> PathOrRemainder:
         for i, (space, elem) in enumerate(zip(self.spaces, x)):
@@ -237,18 +207,17 @@ class TupleConcatSpace(Space[tuple]):
                 return [i] + p
         return ix
 
-    def path_to_ix(self, x: tuple, path: Path) -> int:
+    def path_to_ix(self, xs: tuple, path: Path) -> int:
         i, *subpath = path
+        if i >= len(xs):
+            raise IndexError(f"Path index {i} out of bounds")
         ix = 0
-        for j, (space, elem) in enumerate(zip(self.spaces, x)):
-            if j < i:
-                ix += space.length(elem)
-            elif j == i:
-                return ix + space.path_to_ix(elem, subpath)
-        raise IndexError(f"Path index {i} out of bounds")
+        for (space, x) in zip(self.spaces[:i], xs[:i]):
+            ix += space.length(x)
+        return ix + self.spaces[i].path_to_ix(xs[i], subpath)
 
-class DictSpace(Space[dict[str, Any]]):
-    def __init__(self, spaces: dict[str, Space[Any]], dim: int):
+class DictSpace(MaskedSpace[dict[str, Any]]):
+    def __init__(self, spaces: dict[str, MaskedSpace[Any]], dim: int):
         self.spaces = spaces
         super().__init__(dim)
         self.component_spaces = nn.ModuleDict(self.spaces)
@@ -256,8 +225,10 @@ class DictSpace(Space[dict[str, Any]]):
     def sample(self, rng: np.random.Generator) -> dict[str, Any]:
         return {k: v.sample(rng) for k, v in self.spaces.items()}
 
-    def forward(self, xs: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.cat([self.spaces[k](x) for k, x in xs.items()], dim=-2)
+    def forward(self, xs: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        assert set(xs.keys()) == set(self.spaces.keys()), f"DictSpace keys {xs.keys()} do not match {self.spaces.keys()}"
+        embeddings, masks = zip(*[space(xs[k]) for k, space in self.spaces.items()])
+        return torch.cat(embeddings, dim=-2), torch.cat(masks, dim=-2)
 
     def try_ix_to_path(self, x: dict[str, Any], ix: int) -> PathOrRemainder:
         for k, v in x.items():
