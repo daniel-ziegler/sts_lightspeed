@@ -195,7 +195,7 @@ namespace sts {
         void mummifiedHandOnUsePower();
 
         // card select screens
-        void openDiscoveryScreen(std::array<CardId, 3> discoveryCards, int copyCount);
+        void openDiscoveryScreen(std::array<CardId, 3> discoveryCards, int copyCount, bool setCostToZero = true);
         void openSimpleCardSelectScreen(CardSelectTask task, int count);
 
         // single card select helpers

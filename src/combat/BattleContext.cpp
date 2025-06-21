@@ -2884,7 +2884,7 @@ void BattleContext::mummifiedHandOnUsePower() {
     cards.hand[selectedHandIdx].setCostForTurn(0);
 }
 
-void BattleContext::openDiscoveryScreen(std::array<CardId, 3> discoveryCards, int copyCount) {
+void BattleContext::openDiscoveryScreen(std::array<CardId, 3> discoveryCards, int copyCount, bool setCostToZero) {
     inputState = InputState::CARD_SELECT;
     cardSelectInfo.cardSelectTask = CardSelectTask::DISCOVERY;
     cardSelectInfo.pickCount = 1;
@@ -2892,6 +2892,7 @@ void BattleContext::openDiscoveryScreen(std::array<CardId, 3> discoveryCards, in
     cardSelectInfo.canPickZero = false;
     cardSelectInfo.cards = discoveryCards;
     cardSelectInfo.discovery_CopyCount() = copyCount;
+    cardSelectInfo.setCostToZero = setCostToZero;
 }
 
 void BattleContext::openSimpleCardSelectScreen(CardSelectTask task, int count) {
@@ -3004,7 +3005,9 @@ void BattleContext::chooseDiscardToHandCard(int discardIdx, bool forZeroCost) {
 void BattleContext::chooseDiscoveryCard(CardId id) {
     const auto discoveryAmount = cardSelectInfo.data0;
     CardInstance c(id);
-    c.setCostForTurn(0);
+    if (cardSelectInfo.setCostToZero) {
+        c.setCostForTurn(0);
+    }
 
     for (int i = 0; i < discoveryAmount; ++i) {
         if (cards.cardsInHand + 1 <= CardManager::MAX_HAND_SIZE) {

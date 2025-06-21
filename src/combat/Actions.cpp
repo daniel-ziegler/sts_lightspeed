@@ -896,6 +896,7 @@ void _ToolboxAction::operator()(BattleContext &bc) const {
     bc.inputState = InputState::CARD_SELECT;
     bc.cardSelectInfo.cardSelectTask = CardSelectTask::DISCOVERY;
     bc.cardSelectInfo.discovery_CopyCount() = 1;
+    bc.cardSelectInfo.setCostToZero = false;
     bc.cardSelectInfo.discovery_Cards() =
             generateDiscoveryCards(bc.cardRandomRng, bc.player.cc, CardType::STATUS); // status is mapped to colorless
 }

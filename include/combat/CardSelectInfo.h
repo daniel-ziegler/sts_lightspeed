@@ -65,6 +65,7 @@ namespace sts {
         bool canPickAnyNumber = false;
         int pickCount = 0;
         int data0 = 0;
+        bool setCostToZero = true;
 
         CardSelectTask cardSelectTask;
 
@@ -79,6 +80,7 @@ namespace sts {
                    canPickAnyNumber == rhs.canPickAnyNumber &&
                    pickCount == rhs.pickCount &&
                    data0 == rhs.data0 &&
+                   setCostToZero == rhs.setCostToZero &&
                    cardSelectTask == rhs.cardSelectTask;
         }
     };
