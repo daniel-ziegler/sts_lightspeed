@@ -537,6 +537,7 @@ namespace sts {
             case CardId::DISARM:
             case CardId::INFERNAL_BLADE:
             case CardId::INTIMIDATE:
+            case CardId::SEEING_RED:
             case CardId::PUMMEL:
             case CardId::SHOCKWAVE:
             case CardId::EXHUME:
