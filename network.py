@@ -127,14 +127,12 @@ class NN(nn.Module):
         Process a batch of inputs through the network.
         
         Args:
-            batch: Dictionary containing:
-                - deck: [batch_size, MAX_DECK_SIZE] tensor of card IDs
-                - deck_upgrades: [batch_size, MAX_DECK_SIZE] tensor of upgrade counts
-                - choices: [batch_size, MAX_CHOICES] tensor of card IDs
-                - choice_upgrades: [batch_size, MAX_CHOICES] tensor of upgrade counts
-                - fixed_obs: [batch_size, n_fixed_obs] tensor of fixed observations
-                - fixed_actions: [batch_size, n_fixed_actions] tensor of fixed action IDs
-                - relics: [batch_size, max_relics] tensor of relic IDs
+            batch: Dictionary containing observation data and choices data.
+                   The 'choices' key is popped and processed separately as action logits.
+        
+        Returns:
+            choice_logits: [batch_size, max_action_choices] tensor of flat logits.
+                          Use action_logit_space.ix_to_path to convert indices back to semantic actions.
         """
         device = batch['deck'].device
 
@@ -176,56 +174,114 @@ class SlayDataset(torch.utils.data.Dataset):
 
 
 def collate_fn(batch):
+    # Extract observation and choices data
+    obs_batch = []
+    choices_batch = []
+    chosen_idx_list = []
+    outcome_list = []
+    
     for x in batch:
-        n_card_choices = len(x['cards_offered.cards'])
-        n_fixed_actions = len(x['fixed_actions'])
-        chosen_idx = x['chosen_idx']
-        # Allow indices up to n_choices + n_fixed_actions
-        if x['choice_type'] == ActionType.CARD:
-            assert chosen_idx < n_card_choices, f"chosen_idx {chosen_idx} >= n_choices {n_card_choices}"
-            assert chosen_idx < MAX_CHOICES, f"chosen_idx {chosen_idx} >= MAX_CHOICES {MAX_CHOICES}"
-        elif x['choice_type'] == ActionType.FIXED:
-            assert chosen_idx < n_fixed_actions, f"chosen_idx {chosen_idx} >= n_fixed_actions {n_fixed_actions}"
-
-    # Prepare arrays
-    deck = torch.full((len(batch), MAX_DECK_SIZE), sts.CardId.INVALID.value, dtype=torch.int32)
-    deck_upgrades = torch.zeros((len(batch), MAX_DECK_SIZE), dtype=torch.int32)
-    choices = torch.full((len(batch), MAX_CHOICES), sts.CardId.INVALID.value, dtype=torch.int32)
-    choice_upgrades = torch.zeros((len(batch), MAX_CHOICES), dtype=torch.int32)
-    fixed_obs = torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
-    fixed_actions = torch.full((len(batch), len(FixedAction)-1), FixedAction.INVALID.value, dtype=torch.int32)
-    relics = torch.full((len(batch), ModelHP.max_relics), sts.RelicId.INVALID.value, dtype=torch.int32)
-    relics_offered = torch.full((len(batch), 3), sts.RelicId.INVALID.value, dtype=torch.int32)  # Max 3 boss relics
-    chosen_idx = torch.zeros(len(batch), dtype=torch.int64)
-    choice_type = torch.zeros(len(batch), dtype=torch.int64)
-    outcome = torch.zeros(len(batch), dtype=torch.float32)
-
-    # Fill arrays
-    for i, x in enumerate(batch):
-        deck[i, :min(len(x['obs.deck.cards']), MAX_DECK_SIZE)] = torch.tensor(x['obs.deck.cards'])[:MAX_DECK_SIZE]
-        deck_upgrades[i, :min(len(x['obs.deck.upgrades']), MAX_DECK_SIZE)] = torch.tensor(x['obs.deck.upgrades'])[:MAX_DECK_SIZE]
-        choices[i, :min(len(x['cards_offered.cards']), MAX_CHOICES)] = torch.tensor(x['cards_offered.cards'])[:MAX_CHOICES]
-        choice_upgrades[i, :min(len(x['cards_offered.upgrades']), MAX_CHOICES)] = torch.tensor(x['cards_offered.upgrades'])[:MAX_CHOICES]
-        fixed_obs[i] = torch.tensor(x['obs.fixed_observation'])
-        fixed_actions[i, :len(x['fixed_actions'])] = torch.tensor(x['fixed_actions'])
-        relics[i, :len(x['obs.relics.relics'])] = torch.tensor(x['obs.relics.relics'])
-        relics_offered[i, :len(x['relics_offered'])] = torch.tensor(x['relics_offered'])
-        chosen_idx[i] = x['chosen_idx']
-        choice_type[i] = x['choice_type']
-        outcome[i] = x['outcome']
-
+        # Build observation dict that matches obs_space structure
+        obs = {
+            'deck': {
+                'value': torch.tensor(list(zip(x['obs.deck.cards'], x['obs.deck.upgrades'])), dtype=torch.int32),
+                'mask': torch.ones(len(x['obs.deck.cards']), dtype=torch.bool)
+            },
+            'relics': {
+                'value': torch.tensor(x['obs.relics.relics'], dtype=torch.int32),
+                'mask': torch.ones(len(x['obs.relics.relics']), dtype=torch.bool)
+            },
+            'fixed_obs': torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
+        }
+        
+        # Build choices dict that matches action_logit_space structure
+        choices = {
+            'deck': {
+                'value': torch.tensor(list(zip(x['cards_offered.cards'], x['cards_offered.upgrades'])), dtype=torch.int32),
+                'mask': torch.ones(len(x['cards_offered.cards']), dtype=torch.bool)
+            },
+            'relics': {
+                'value': torch.tensor(x['relics_offered'], dtype=torch.int32),
+                'mask': torch.ones(len(x['relics_offered']), dtype=torch.bool)
+            },
+            'fixed': {
+                'value': torch.tensor(x['fixed_actions'], dtype=torch.int32),
+                'mask': torch.ones(len(x['fixed_actions']), dtype=torch.bool)
+            }
+        }
+        
+        obs_batch.append(obs)
+        choices_batch.append(choices)
+        chosen_idx_list.append(x['chosen_idx'])
+        outcome_list.append(x['outcome'])
+    
+    # Create batched tensors for observation
+    max_deck_len = max(len(obs['deck']['value']) for obs in obs_batch)
+    max_relics_len = max(len(obs['relics']['value']) for obs in obs_batch)
+    
+    batch_obs = {
+        'deck': {
+            'value': torch.full((len(batch), max_deck_len, 2), 0, dtype=torch.int32),
+            'mask': torch.zeros((len(batch), max_deck_len), dtype=torch.bool)
+        },
+        'relics': {
+            'value': torch.full((len(batch), max_relics_len), 0, dtype=torch.int32),
+            'mask': torch.zeros((len(batch), max_relics_len), dtype=torch.bool)
+        },
+        'fixed_obs': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
+    }
+    
+    # Create batched tensors for choices
+    max_choice_deck_len = max(len(choices['deck']['value']) for choices in choices_batch)
+    max_choice_relics_len = max(len(choices['relics']['value']) for choices in choices_batch)
+    max_choice_fixed_len = max(len(choices['fixed']['value']) for choices in choices_batch)
+    
+    batch_choices = {
+        'deck': {
+            'value': torch.full((len(batch), max_choice_deck_len, 2), 0, dtype=torch.int32),
+            'mask': torch.zeros((len(batch), max_choice_deck_len), dtype=torch.bool)
+        },
+        'relics': {
+            'value': torch.full((len(batch), max_choice_relics_len), 0, dtype=torch.int32),
+            'mask': torch.zeros((len(batch), max_choice_relics_len), dtype=torch.bool)
+        },
+        'fixed': {
+            'value': torch.full((len(batch), max_choice_fixed_len), FixedAction.INVALID.value, dtype=torch.int32),
+            'mask': torch.zeros((len(batch), max_choice_fixed_len), dtype=torch.bool)
+        }
+    }
+    
+    # Fill the batched tensors
+    for i, (obs, choices) in enumerate(zip(obs_batch, choices_batch)):
+        # Fill observation
+        deck_len = len(obs['deck']['value'])
+        batch_obs['deck']['value'][i, :deck_len] = obs['deck']['value']
+        batch_obs['deck']['mask'][i, :deck_len] = obs['deck']['mask']
+        
+        relics_len = len(obs['relics']['value'])
+        batch_obs['relics']['value'][i, :relics_len] = obs['relics']['value']
+        batch_obs['relics']['mask'][i, :relics_len] = obs['relics']['mask']
+        
+        batch_obs['fixed_obs'][i] = obs['fixed_obs']
+        
+        # Fill choices
+        choice_deck_len = len(choices['deck']['value'])
+        batch_choices['deck']['value'][i, :choice_deck_len] = choices['deck']['value']
+        batch_choices['deck']['mask'][i, :choice_deck_len] = choices['deck']['mask']
+        
+        choice_relics_len = len(choices['relics']['value'])
+        batch_choices['relics']['value'][i, :choice_relics_len] = choices['relics']['value']
+        batch_choices['relics']['mask'][i, :choice_relics_len] = choices['relics']['mask']
+        
+        choice_fixed_len = len(choices['fixed']['value'])
+        batch_choices['fixed']['value'][i, :choice_fixed_len] = choices['fixed']['value']
+        batch_choices['fixed']['mask'][i, :choice_fixed_len] = choices['fixed']['mask']
+    
     return {
-        'deck': deck,
-        'deck_upgrades': deck_upgrades,
-        'choices': choices,
-        'choice_upgrades': choice_upgrades,
-        'fixed_obs': fixed_obs,
-        'fixed_actions': fixed_actions,
-        'relics': relics,
-        'relics_offered': relics_offered,
-        'chosen_idx': chosen_idx,
-        'choice_type': choice_type,
-        'outcome': outcome,
+        **batch_obs,
+        'choices': batch_choices,
+        'chosen_idx': torch.tensor(chosen_idx_list, dtype=torch.int64),
+        'outcome': torch.tensor(outcome_list, dtype=torch.float32),
     }
 
 def process_batch(batch, net):
@@ -234,33 +290,33 @@ def process_batch(batch, net):
     batch = {k: v.to(device) for k, v in batch.items()}
     return net(batch)
 
-def output_to_cpu(output: dict[str, torch.Tensor], batch: dict) -> list[dict[str, np.ndarray]]:
+def output_to_cpu(output: torch.Tensor, batch: dict) -> list[np.ndarray]:
     """
-    Moves tensors to CPU and trims them to valid lengths.
+    Moves flat logits tensor to CPU and trims to valid lengths for each batch item.
+    
+    Args:
+        output: [batch_size, max_action_choices] tensor of flat logits
+        batch: Dictionary containing choices data with masks
     
     Returns:
-        List of dictionaries containing trimmed numpy arrays of logits, one per batch item
+        List of numpy arrays containing trimmed logits, one per batch item
     """
-    batch_size = output['card_logits'].size(0)
+    batch_size = output.size(0)
     results = []
     
-    # Move tensors to CPU once
-    card_logits = output['card_logits'].cpu().numpy()
-    relic_logits = output['relic_logits'].cpu().numpy()
-    fixed_logits = output['fixed_logits'].cpu().numpy()
+    # Move tensor to CPU once
+    logits = output.cpu().numpy()
     
     for i in range(batch_size):
-        # Use boolean masks to select valid entries
-        card_mask = batch['choices'][i].cpu().numpy() != sts.CardId.INVALID.value
-        relic_mask = batch['relics_offered'][i].cpu().numpy() != sts.RelicId.INVALID.value
-        fixed_mask = batch['fixed_actions'][i].cpu().numpy() != FixedAction.INVALID.value
+        # Count valid choices by looking at masks
+        deck_valid = batch['choices']['deck']['mask'][i].sum().item()
+        relics_valid = batch['choices']['relics']['mask'][i].sum().item()
+        fixed_valid = batch['choices']['fixed']['mask'][i].sum().item()
         
-        # Trim logits to valid entries
-        results.append({
-            'card_logits': card_logits[i][card_mask],
-            'relic_logits': relic_logits[i][relic_mask],
-            'fixed_logits': fixed_logits[i][fixed_mask],
-        })
+        total_valid = deck_valid + relics_valid + fixed_valid
+        
+        # Trim logits to valid entries only
+        results.append(logits[i][:total_valid])
     
     return results
 

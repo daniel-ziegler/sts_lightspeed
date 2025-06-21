@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List
 import argparse
 
-from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch
+from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch, action_logit_space
 import numpy as np
 import pandas as pd
 import torch
@@ -136,29 +136,11 @@ def train_step(net, opt, batch):
     """
     device = net.device
     batch = {k: v.to(device) for k, v in batch.items()}
-    output = process_batch(batch, net)
+    output = process_batch(batch, net)  # output is [batch_size, max_choices] flat logits
     
-    # Get logits for chosen actions based on choice type
+    # Get logits for chosen actions using flat indices
     batch_indices = torch.arange(len(batch['chosen_idx']), device=device)
-    
-    # Initialize chosen logits
-    chosen_logits = torch.zeros(len(batch['chosen_idx']), device=device)
-    
-    # Handle card choices
-    card_mask = batch['choice_type'] == ActionType.CARD
-    if card_mask.any():
-        chosen_logits[card_mask] = output['card_logits'][
-            batch_indices[card_mask],
-            batch['chosen_idx'][card_mask]
-        ]
-    
-    # Handle fixed actions
-    fixed_mask = batch['choice_type'] == ActionType.FIXED
-    if fixed_mask.any():
-        chosen_logits[fixed_mask] = output['fixed_logits'][
-            batch_indices[fixed_mask],
-            batch['chosen_idx'][fixed_mask]
-        ]
+    chosen_logits = output[batch_indices, batch['chosen_idx']]
     
     # Clip logits to avoid numerical issues
     chosen_logits = torch.clamp(chosen_logits, min=-20, max=20)
@@ -166,8 +148,8 @@ def train_step(net, opt, batch):
     # Check for NaN before loss
     if torch.isnan(chosen_logits).any():
         print("Warning: NaN in logits")
-        print("Card logits:", output['card_logits'])
-        print("Fixed logits:", output['fixed_logits'])
+        print("Output shape:", output.shape)
+        print("Chosen indices:", batch['chosen_idx'])
         print("Chosen logits:", chosen_logits)
         raise ValueError("NaN in logits")
     
@@ -260,42 +242,17 @@ def validate(valid_loader, net, device):
     valid_targets = []
     with torch.no_grad():
         for batch in valid_loader:
-            output = process_batch(batch, net)
+            batch = {k: v.to(device) for k, v in batch.items()}
+            output = process_batch(batch, net)  # output is [batch_size, max_choices] flat logits
             
-            # Get logits for chosen actions based on choice type
+            # Get logits for chosen actions using flat indices
             batch_indices = torch.arange(len(batch['chosen_idx']), device=device)
-            
-            # Initialize chosen logits
-            chosen_logits = torch.zeros(len(batch['chosen_idx']), device=device)
-            
-            # Handle card choices
-            card_mask = batch['choice_type'] == ActionType.CARD
-            if card_mask.any():
-                chosen_logits[card_mask] = output['card_logits'][
-                    batch_indices[card_mask],
-                    batch['chosen_idx'][card_mask]
-                ]
-            
-            # Handle relic choices
-            relic_mask = batch['choice_type'] == ActionType.RELIC
-            if relic_mask.any():
-                chosen_logits[relic_mask] = output['relic_logits'][
-                    batch_indices[relic_mask],
-                    batch['chosen_idx'][relic_mask]
-                ]
-            
-            # Handle fixed actions
-            fixed_mask = batch['choice_type'] == ActionType.FIXED
-            if fixed_mask.any():
-                chosen_logits[fixed_mask] = output['fixed_logits'][
-                    batch_indices[fixed_mask],
-                    batch['chosen_idx'][fixed_mask]
-                ]
+            chosen_logits = output[batch_indices, batch['chosen_idx']]
             
             # Clip logits to avoid numerical issues
             chosen_logits = torch.clamp(chosen_logits, min=-20, max=20)
             
-            loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'].to(device))
+            loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
             pred = chosen_logits >= 0
             valid_losses.append(loss.item())
             valid_targets.append(batch['outcome'].cpu().numpy())
@@ -377,11 +334,10 @@ len(batch.iloc[0]['obs.deck.cards'])
 # %%
 with torch.no_grad():
     batch_data = collate_fn([SlayDataset(batch).__getitem__(i) for i in range(len(batch))])
-    output = process_batch(batch_data, net)
+    output = process_batch(batch_data, net)  # output is [batch_size, max_choices] flat logits
 
-    # Get win probabilities for all cards and mark chosen ones
-    card_probs = torch.sigmoid(output['card_logits'])
-    fixed_probs = torch.sigmoid(output['fixed_logits'])
+    # Get win probabilities for all choices
+    all_probs = torch.sigmoid(output)
     chosen_indices = batch_data['chosen_idx']
     batch_indices = torch.arange(len(batch), device=device)
 
@@ -389,44 +345,79 @@ with torch.no_grad():
 
 # Print probabilities for each example in batch
 for i in range(len(batch)):
-    choice_type = batch_data['choice_type'][i].item()
     chosen_idx = chosen_indices[i].item()
     
-    # Print card choices
+    # Get probabilities for this batch item 
+    probs = all_probs[i].cpu().numpy()
+    
+    # Reconstruct the choices structure for this batch item
+    choices_dict = {
+        'deck': [(card_id, upgrade) for card_id, upgrade in zip(
+            batch.iloc[i]['cards_offered.cards'], 
+            batch.iloc[i]['cards_offered.upgrades']
+        )],
+        'relics': list(batch.iloc[i]['relics_offered']),
+        'fixed': list(batch.iloc[i]['fixed_actions'])
+    }
+    
+    # Build probability strings by category
     card_prob_strs = []
-    probs = card_probs[i].cpu().numpy()
-    cards_offered = batch.iloc[i]['cards_offered.cards']
-    upgrades = batch.iloc[i]['cards_offered.upgrades']
-    
-    for j, (card_id, upgrade) in enumerate(zip(cards_offered, upgrades)):
-        if probs[j] == float('-inf'):  # Skip masked values
-            continue
-        card = sts.Card(sts.CardId(card_id), upgrade)
-        prob_str = f"{card}({probs[j]:.3f})"
-        if choice_type == ActionType.CARD and j == chosen_idx:
-            prob_str = f"[{prob_str}]"  # Mark chosen card with brackets
-        card_prob_strs.append(prob_str)
-    
-    # Print fixed actions
+    relic_prob_strs = []
     fixed_prob_strs = []
-    probs = fixed_probs[i].cpu().numpy()
-    fixed_actions = batch.iloc[i]['fixed_actions']
     
-    for j, action in enumerate(fixed_actions):
-        if probs[j] == float('-inf'):  # Skip masked values
+    # Go through each valid logit and convert back to semantic choice
+    for logit_idx in range(len(probs)):
+        if logit_idx >= action_logit_space.length(choices_dict):
+            break
+            
+        try:
+            path = action_logit_space.ix_to_path(choices_dict, logit_idx)
+            prob = probs[logit_idx]
+            
+            if path[0] == 'deck':
+                # Card choice
+                card_idx = path[1]
+                if card_idx < len(choices_dict['deck']):
+                    card_id, upgrade = choices_dict['deck'][card_idx]
+                    card = sts.Card(sts.CardId(card_id), upgrade)
+                    prob_str = f"{card}({prob:.3f})"
+                    if logit_idx == chosen_idx:
+                        prob_str = f"[{prob_str}]"
+                    card_prob_strs.append(prob_str)
+            
+            elif path[0] == 'relics':
+                # Relic choice
+                relic_idx = path[1]
+                if relic_idx < len(choices_dict['relics']):
+                    relic_id = choices_dict['relics'][relic_idx]
+                    relic_name = sts.RelicId(relic_id).name
+                    prob_str = f"{relic_name}({prob:.3f})"
+                    if logit_idx == chosen_idx:
+                        prob_str = f"[{prob_str}]"
+                    relic_prob_strs.append(prob_str)
+            
+            elif path[0] == 'fixed':
+                # Fixed action choice
+                action_idx = path[1]
+                if action_idx < len(choices_dict['fixed']):
+                    action = choices_dict['fixed'][action_idx]
+                    action_name = FixedAction(action).name
+                    prob_str = f"{action_name}({prob:.3f})"
+                    if logit_idx == chosen_idx:
+                        prob_str = f"[{prob_str}]"
+                    fixed_prob_strs.append(prob_str)
+                    
+        except (IndexError, KeyError):
+            # Skip invalid indices
             continue
-        action_name = FixedAction(action).name
-        prob_str = f"{action_name}({probs[j]:.3f})"
-        if choice_type == ActionType.FIXED and j == chosen_idx:
-            prob_str = f"[{prob_str}]"  # Mark chosen action with brackets
-        fixed_prob_strs.append(prob_str)
     
-    print(f"Example {i} ({ActionType(choice_type).name}):")
+    print(f"Example {i}:")
     if card_prob_strs:
         print(f"  Cards: {', '.join(card_prob_strs)}")
+    if relic_prob_strs:
+        print(f"  Relics: {', '.join(relic_prob_strs)}")
     if fixed_prob_strs:
         print(f"  Fixed: {', '.join(fixed_prob_strs)}")
-    print(batch.iloc[i])
     print()
     
 
@@ -455,37 +446,11 @@ relic_predictions = {}
 with torch.no_grad():
     for batch in valid_loader:
         batch = {k: v.to(device) for k, v in batch.items()}
-        output = process_batch(batch, net)
+        output = process_batch(batch, net)  # output is [batch_size, max_choices] flat logits
         
         # Get chosen action predictions for ROC curve
         batch_indices = torch.arange(len(batch['chosen_idx']), device=device)
-        
-        # Initialize chosen logits
-        chosen_logits = torch.zeros(len(batch['chosen_idx']), device=device)
-        
-        # Handle card choices
-        card_mask = batch['choice_type'] == ActionType.CARD
-        if card_mask.any():
-            chosen_logits[card_mask] = output['card_logits'][
-                batch_indices[card_mask],
-                batch['chosen_idx'][card_mask]
-            ]
-        
-        # Handle relic choices
-        relic_mask = batch['choice_type'] == ActionType.RELIC
-        if relic_mask.any():
-            chosen_logits[relic_mask] = output['relic_logits'][
-                batch_indices[relic_mask],
-                batch['chosen_idx'][relic_mask]
-            ]
-        
-        # Handle fixed actions
-        fixed_mask = batch['choice_type'] == ActionType.FIXED
-        if fixed_mask.any():
-            chosen_logits[fixed_mask] = output['fixed_logits'][
-                batch_indices[fixed_mask],
-                batch['chosen_idx'][fixed_mask]
-            ]
+        chosen_logits = output[batch_indices, batch['chosen_idx']]
         
         probs = torch.sigmoid(chosen_logits).cpu().numpy()
         valid_preds.extend(probs)
@@ -494,62 +459,88 @@ with torch.no_grad():
         responses = output_to_cpu(output, batch)
         
         for i, response in enumerate(responses):
-            all_valid_probs = []
-            all_valid_probs.extend(1 / (1 + np.exp(-response['card_logits'])))
-            all_valid_probs.extend(1 / (1 + np.exp(-response['relic_logits'])))
-            all_valid_probs.extend(1 / (1 + np.exp(-response['fixed_logits'])))
-            all_valid_probs = np.array(all_valid_probs)
+            all_valid_probs = 1 / (1 + np.exp(-response))  # Sigmoid activation
             
-            # Process card choices
-            logit_idx = 0
-            choices = batch['choices'][i]
-            upgrades = batch['choice_upgrades'][i]
-            valid_mask = choices != sts.CardId.INVALID.value
+            # Reconstruct the choices structure for this batch item
+            # We need to get the original data to reconstruct choices
+            batch_size = len(batch['chosen_idx'])
             
-            for j, (card_id, upgrade) in enumerate(zip(choices[valid_mask], upgrades[valid_mask])):
-                card = sts.Card(sts.CardId(card_id), upgrade)
-                card_key = str(card)
-                
-                # Calculate relative probability compared to all other options
-                other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
-                relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
-                
-                if card_key not in card_predictions:
-                    card_predictions[card_key] = []
-                card_predictions[card_key].append(relative_prob)
-                logit_idx += 1
+            # Count valid choices by category for this batch item
+            deck_valid = batch['choices']['deck']['mask'][i].sum().item()
+            relics_valid = batch['choices']['relics']['mask'][i].sum().item()  
+            fixed_valid = batch['choices']['fixed']['mask'][i].sum().item()
             
-            # Process relic choices
-            relics = batch['relics_offered'][i]
-            valid_mask = relics != sts.RelicId.INVALID.value
+            # Extract choices from batch tensors
+            deck_choices = []
+            for j in range(deck_valid):
+                card_id, upgrade = batch['choices']['deck']['value'][i, j].tolist()
+                deck_choices.append((card_id, upgrade))
             
-            for j, relic_id in enumerate(relics[valid_mask]):
-                relic_name = sts.RelicId(relic_id.item()).name
-                
-                # Calculate relative probability compared to all other options
-                other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
-                relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
-                
-                if relic_name not in relic_predictions:
-                    relic_predictions[relic_name] = []
-                relic_predictions[relic_name].append(relative_prob)
-                logit_idx += 1
+            relic_choices = []
+            for j in range(relics_valid):
+                relic_id = batch['choices']['relics']['value'][i, j].item()
+                relic_choices.append(relic_id)
             
-            # Process fixed actions
-            fixed_actions = batch['fixed_actions'][i]
-            valid_mask = fixed_actions != FixedAction.INVALID.value
+            fixed_choices = []
+            for j in range(fixed_valid):
+                action = batch['choices']['fixed']['value'][i, j].item()
+                fixed_choices.append(action)
             
-            for j, action in enumerate(fixed_actions[valid_mask]):
-                action_name = FixedAction(action.item()).name
-                
-                # Calculate relative probability compared to all other options
-                other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
-                relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
-                
-                if action_name not in fixed_predictions:
-                    fixed_predictions[action_name] = []
-                fixed_predictions[action_name].append(relative_prob)
-                logit_idx += 1
+            choices_dict = {
+                'deck': deck_choices,
+                'relics': relic_choices,
+                'fixed': fixed_choices
+            }
+            
+            # Process each valid logit
+            for logit_idx in range(len(all_valid_probs)):
+                if logit_idx >= action_logit_space.length(choices_dict):
+                    break
+                    
+                try:
+                    path = action_logit_space.ix_to_path(choices_dict, logit_idx)
+                    
+                    # Calculate relative probability compared to all other options
+                    other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])
+                    relative_prob = all_valid_probs[logit_idx] - np.mean(other_probs) if len(other_probs) > 0 else 0.0
+                    
+                    if path[0] == 'deck':
+                        # Card choice
+                        card_idx = path[1]
+                        if card_idx < len(choices_dict['deck']):
+                            card_id, upgrade = choices_dict['deck'][card_idx]
+                            card = sts.Card(sts.CardId(card_id), upgrade)
+                            card_key = str(card)
+                            
+                            if card_key not in card_predictions:
+                                card_predictions[card_key] = []
+                            card_predictions[card_key].append(relative_prob)
+                    
+                    elif path[0] == 'relics':
+                        # Relic choice
+                        relic_idx = path[1]
+                        if relic_idx < len(choices_dict['relics']):
+                            relic_id = choices_dict['relics'][relic_idx]
+                            relic_name = sts.RelicId(relic_id).name
+                            
+                            if relic_name not in relic_predictions:
+                                relic_predictions[relic_name] = []
+                            relic_predictions[relic_name].append(relative_prob)
+                    
+                    elif path[0] == 'fixed':
+                        # Fixed action choice
+                        action_idx = path[1]
+                        if action_idx < len(choices_dict['fixed']):
+                            action = choices_dict['fixed'][action_idx]
+                            action_name = FixedAction(action).name
+                            
+                            if action_name not in fixed_predictions:
+                                fixed_predictions[action_name] = []
+                            fixed_predictions[action_name].append(relative_prob)
+                            
+                except (IndexError, KeyError):
+                    # Skip invalid indices
+                    continue
 
 # Calculate and plot ROC curve
 fpr, tpr, _ = roc_curve(valid_targets, valid_preds)

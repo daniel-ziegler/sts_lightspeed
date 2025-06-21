@@ -10,12 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Standard build process
-mkdir build && cd build
-cmake ..
-make
+cmake .
+make -j8
 
 # Python bindings (install development dependencies first)
-pip install pyarrow tqdm
+pyenv shell 3.10.14 && pip install pyarrow tqdm
 ```
 
 This creates four executables:
@@ -82,6 +81,8 @@ The codebase includes Python files for ML training and data generation:
 - **`inputs.py`** - Generic input space framework with embedding builders for sequences, enums, fixed vectors, and composite types. Provides abstraction layer for neural network input processing
 - **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
 - Various `.parquet` files contain training data rollouts from different experiments
+
+To use the right Python environment, prefix all python commands with `pyenv shell 3.10.14 &&`
 
 ## Development Notes
 

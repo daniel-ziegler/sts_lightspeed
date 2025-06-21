@@ -20,7 +20,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu
+from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, action_logit_space
 import slaythespire as sts
 
 # %%
@@ -74,10 +74,10 @@ class Choice:
         )
 
 
-def process_choice(net: NN, choice: Choice) -> dict:
+def process_choice(net: NN, choice: Choice) -> np.ndarray:
     """
     Process a single Choice through the neural network.
-    Returns the network output dictionary for this choice.
+    Returns the flat logits array for this choice.
     """
     # Create a minimal batch with just this choice
     batch = [{
@@ -92,7 +92,8 @@ def process_choice(net: NN, choice: Choice) -> dict:
     # Process through network
     output = process_batch(batch_tensors, net)
     
-    return output
+    # Convert to CPU and return first (and only) item
+    return output_to_cpu(output, batch_tensors)[0]
 
 
 @dataclass
@@ -201,8 +202,8 @@ class NNService:
                 for req in requests:
                     req.response_queue.put(e)
     
-    def get_logits(self, choice: Choice) -> dict[str, np.ndarray]:
-        """Get raw logits from the network. Thread-safe."""
+    def get_logits(self, choice: Choice) -> np.ndarray:
+        """Get flat logits array from the network. Thread-safe."""
         response_queue = Queue()
         self.request_queue.put(NNRequest(choice, response_queue))
         response = response_queue.get()
@@ -247,52 +248,65 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
     logits = service.get_logits(choice)
     
-    # Combine logits for sampling
-    all_logits = np.concatenate([
-        logits['card_logits'],
-        logits['relic_logits'],
-        logits['fixed_logits']
-    ])
-    probs = get_card_probs(all_logits)
+    # Convert logits to probabilities
+    probs = get_card_probs(logits)
     
     if stats is not None:
         stats.add_choice(probs, temperature)
         
     chosen_idx = sample_boltzmann(probs, temperature, rng)
     
-    # Find the GameAction that corresponds to this index
-    total = 0
+    # Create choices data structure for action_logit_space.ix_to_path
+    choices_dict = {
+        'deck': [(card_id, upgrade) for card_set in choice.cards_offered for card_id, upgrade in zip(card_set.cards, card_set.upgrades)],
+        'relics': list(choice.relics_offered),
+        'fixed': list(choice.fixed_actions)
+    }
     
-    # Check card choices first
-    for which_set, card_set in enumerate(choice.cards_offered):
-        if chosen_idx < total + len(card_set.cards):
-            which_card = chosen_idx - total
+    try:
+        # Convert flat index back to semantic path using action_logit_space
+        path = action_logit_space.ix_to_path(choices_dict, chosen_idx)
+        
+        if path[0] == 'deck':
+            # path is ['deck', card_index]
+            card_index = path[1]
+            # Find which set and which card within set
+            total_cards = 0
+            for which_set, card_set in enumerate(choice.cards_offered):
+                if card_index < total_cards + len(card_set.cards):
+                    which_card = card_index - total_cards
+                    # Find matching action in actions list
+                    for action in actions:
+                        if (action.idx1 == which_set and action.idx2 == which_card):
+                            return action
+                    break
+                total_cards += len(card_set.cards)
+        
+        elif path[0] == 'relics':
+            # path is ['relics', relic_index]
+            relic_index = path[1]
             # Find matching action in actions list
             for action in actions:
-                if (action.idx1 == which_set and 
-                    action.idx2 == which_card):
+                if action.idx1 == relic_index:
                     return action
-            break
-        total += len(card_set.cards)
+        
+        elif path[0] == 'fixed':
+            # path is ['fixed', action_index]
+            action_index = path[1]
+            fixed_action = choice.fixed_actions[action_index]
+            if fixed_action == FixedAction.SKIP:
+                # Find the skip action
+                for action in actions:
+                    if action.rewards_action_type == sts.RewardsActionType.SKIP:
+                        return action
+            elif fixed_action == FixedAction.REMOVE:
+                # Find the remove action
+                for action in actions:
+                    if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
+                        return action
     
-    # Check relic choices
-    if choice.relics_offered:
-        n_relics = len(choice.relics_offered)
-        if chosen_idx < total + n_relics:
-            which_relic = chosen_idx - total
-            # Find matching action in actions list
-            for action in actions:
-                if action.idx1 == which_relic:
-                    return action
-            total += n_relics
-    
-    # Check fixed actions
-    if choice.fixed_actions and chosen_idx == total:
-        if FixedAction.SKIP in choice.fixed_actions:
-            # Find the skip action
-            for action in actions:
-                if action.rewards_action_type == sts.RewardsActionType.SKIP:
-                    return action
+    except (IndexError, KeyError) as e:
+        print(f"Warning: Error converting index {chosen_idx} to action: {e}")
     
     # Fallback to random choice if something went wrong
     print(f"Warning: Could not find action for index {chosen_idx}")
@@ -561,13 +575,13 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run Slay the Spire simulations with neural network guidance')
-    parser.add_argument('--model-path', type=str, default="net.outcome.pt",
+    parser.add_argument('--model-path', type=str, default="-",
                         help='Path to the neural network model file')
-    parser.add_argument('--num-threads', type=int, default=30,
+    parser.add_argument('--num-threads', type=int, default=4,
                         help='Number of parallel threads to use')
-    parser.add_argument('--start-seed', type=int, default=200_000,
+    parser.add_argument('--start-seed', type=int, default=0,
                         help='Starting seed for simulations')
-    parser.add_argument('--num-games', type=int, default=50_000,
+    parser.add_argument('--num-games', type=int, default=1000,
                         help='Number of games to simulate')
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for neural network inference')
