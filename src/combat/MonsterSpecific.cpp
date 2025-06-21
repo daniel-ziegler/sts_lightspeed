@@ -1845,11 +1845,11 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
             bc.player.debuff<PS::VULNERABLE>(2, true);
             bc.player.debuff<PS::WEAK>(2, true);
             bc.player.debuff<PS::FRAIL>(2, true);
-            _ShuffleTempCardIntoDrawPile { CardId::DAZED }(bc);
-            _ShuffleTempCardIntoDrawPile { CardId::SLIMED }(bc);
-            _ShuffleTempCardIntoDrawPile { CardId::WOUND }(bc);
-            _ShuffleTempCardIntoDrawPile { CardId::BURN }(bc);
-            _ShuffleTempCardIntoDrawPile { CardId::VOID }(bc);
+            _ShuffleTempCardIntoDrawPile { CardId::DAZED, 1 }(bc);
+            _ShuffleTempCardIntoDrawPile { CardId::SLIMED, 1 }(bc);
+            _ShuffleTempCardIntoDrawPile { CardId::WOUND, 1 }(bc);
+            _ShuffleTempCardIntoDrawPile { CardId::BURN, 1 }(bc);
+            _ShuffleTempCardIntoDrawPile { CardId::VOID, 1 }(bc);
             rollMove(bc);
             break;
 
