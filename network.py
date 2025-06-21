@@ -62,7 +62,6 @@ action_logit_space = DictSpace({
 })
 
 
-
 class RMSNorm(nn.Module):
     def __init__(self, dim, eps: float):
         super().__init__()
@@ -111,35 +110,19 @@ class NN(nn.Module):
         super().__init__()
         self.H = H
 
-        self.input_type_embed = nn.Embedding(len(InputType), H.dim)
-        self.num_embed = SinusoidalEmbedding(H.dim)
-        self.card_embed = nn.Embedding(len(sts.CardId), H.dim, padding_idx=sts.CardId.INVALID.value)
-        self.upgrade_embed = nn.Embedding(21, H.dim, padding_idx=0)
+        self.obs_embed = obs_space.build_embed(H.dim)
+        self.action_logit_embed = action_logit_space.build_embed(H.dim)
         
-        # Add fixed action embedding
-        self.fixed_action_embed = nn.Embedding(len(FixedAction)-1, H.dim)
-
-        # Add sinusoidal embedding and projection
-        n_fixed_obs = len(sts.getFixedObservationMaximums())
-        self.fixed_obs_embed = SinusoidalEmbedding(H.dim, n_fixed_obs)
-        self.fixed_obs_proj = nn.Linear(self.fixed_obs_embed.out_dim, H.dim)
-
-        # Single relic embedding layer used for both owned and offered relics
-        self.relic_embed = nn.Embedding(len(sts.RelicId), H.dim, padding_idx=sts.RelicId.INVALID.value)
-        
-        # Add relic winprob head
-        self.relic_winprob = nn.Linear(H.dim, 1, bias=True)
-        nn.init.uniform_(self.relic_winprob.weight, -0.01, 0.01)
-        nn.init.zeros_(self.relic_winprob.bias)
-
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
         self.norm = RMSNorm(H.dim, H.norm_eps)
-        self.card_winprob = nn.Linear(H.dim, 1, bias=True)
-        nn.init.uniform_(self.card_winprob.weight, -0.01, 0.01)
-        nn.init.zeros_(self.card_winprob.bias)
 
-    def forward(self, batch: dict[str, torch.Tensor]):
+        self.choice_logits = nn.Linear(H.dim, 1, bias=True)
+        nn.init.uniform_(self.choice_logits.weight, -0.01, 0.01)
+        nn.init.zeros_(self.choice_logits.bias)
+
+
+    def forward(self, batch: dict):
         """
         Process a batch of inputs through the network.
         
@@ -154,85 +137,22 @@ class NN(nn.Module):
                 - relics: [batch_size, max_relics] tensor of relic IDs
         """
         device = batch['deck'].device
-        max_deck_len = batch['deck'].size(1)
-        max_choices_len = batch['choices'].size(1)
 
-        # Create embeddings list to concatenate
-        embeddings = []
+        choices = batch.pop('choices')
+        obs_embed, obs_mask = self.obs_embed(batch)
+        action_logit_embed, action_logit_mask = self.action_logit_embed(choices)
 
-        # Add fixed observations
-        fixed_obs_x = self.fixed_obs_proj(self.fixed_obs_embed(batch['fixed_obs']))
-        embeddings.append(fixed_obs_x.unsqueeze(1))  # [batch, 1, dim]
-
-        # Embed cards
-        cards = torch.cat((batch['deck'], batch['choices']), dim=1)
-        upgrades = torch.cat((batch['deck_upgrades'], batch['choice_upgrades']), dim=1)
-        card_mask = cards == sts.CardId.INVALID.value
-
-        card_x = (self.card_embed(cards) +
-                 self.upgrade_embed(upgrades.clamp(max=20)) +
-                 self.input_type_embed(torch.tensor([int(InputType.Card)], device=device)))
-        card_x[:, max_deck_len:, :] += self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
-        embeddings.append(card_x)
-
-        # Add relic embeddings
-        relic_x = self.relic_embed(batch['relics'])
-        relic_x = relic_x + self.input_type_embed(torch.tensor([int(InputType.Relic)], device=device))
-        embeddings.append(relic_x)
-        relic_mask = batch['relics'] == sts.RelicId.INVALID.value
-
-        # Add fixed action embeddings
-        fixed_x = self.fixed_action_embed(batch['fixed_actions'])
-        fixed_x = fixed_x + self.input_type_embed(torch.tensor([int(InputType.Fixed)], device=device))
-        embeddings.append(fixed_x)
-
-        # Add relic choice embeddings using same embedding layer
-        relic_choice_x = self.relic_embed(batch['relics_offered'])
-        relic_choice_x = relic_choice_x + self.input_type_embed(torch.tensor([int(InputType.Choice)], device=device))
-        embeddings.append(relic_choice_x)
-        relic_choice_mask = batch['relics_offered'] == sts.RelicId.INVALID.value
-
-        # Combine all embeddings
-        x = torch.cat(embeddings, dim=1)
-
-        # Combine masks
-        pos_mask = torch.cat([
-            torch.zeros(card_mask.size(0), 1, device=device, dtype=card_mask.dtype),  # fixed obs
-            card_mask,  # cards
-            relic_mask,  # owned relics
-            relic_choice_mask,  # relic choices
-            batch['fixed_actions'] == FixedAction.INVALID.value,  # fixed actions
-        ], dim=1)
+        x = torch.cat([obs_embed, action_logit_embed], dim=-2)
+        pos_mask = torch.cat([obs_mask, action_logit_mask], dim=-2)
 
         for l in self.layers:
             x = l(x, pos_mask)
         xn = self.norm(x)
 
-        # Get logits for both cards and fixed actions
-        choice_x = xn[:, 1+max_deck_len:1+max_deck_len+max_choices_len, :]  # card choices
-        fixed_x = xn[:, -batch['fixed_actions'].size(1):, :]  # fixed actions
-        
-        # Get win probabilities for both
-        card_logits = self.card_winprob(choice_x).squeeze(-1).float()
-        fixed_action_logits = self.card_winprob(fixed_x).squeeze(-1).float()
-        
-        # Mask invalid card choices and fixed actions
-        card_logits = card_logits.masked_fill(card_mask[:, max_deck_len:], float('-inf'))
-        fixed_action_logits = fixed_action_logits.masked_fill(
-            batch['fixed_actions'] == FixedAction.INVALID.value, 
-            float('-inf')
-        )
-
-        # Get logits for relics
-        relic_choice_x = xn[:, 1+max_deck_len+ModelHP.max_relics:1+max_deck_len+ModelHP.max_relics+batch['relics_offered'].size(1), :]
-        relic_logits = self.relic_winprob(relic_choice_x).squeeze(-1).float()
-        relic_logits = relic_logits.masked_fill(relic_choice_mask, float('-inf'))
-
-        return dict(
-            card_logits=card_logits,
-            fixed_logits=fixed_action_logits,
-            relic_logits=relic_logits,
-        )
+        action_xs = xn[:, obs_mask.size(1):, :]
+        choice_logits = self.choice_logits(action_xs).squeeze(-1).float()
+        choice_logits = choice_logits.masked_fill(action_logit_mask == 0, float('-inf'))
+        return choice_logits
     
     @property
     def device(self):
