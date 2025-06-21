@@ -2390,10 +2390,6 @@ void GameContext::chooseNeowOption(const Neow::Option &o) {
         case Neow::Bonus::TRANSFORM_TWO_CARDS:
             info.transformRng = NEOW_RNG;
             openCardSelectScreen(CardSelectScreenType::TRANSFORM, 2);
-            {
-                int roll = cardRng.random(static_cast<int>(9));
-                deck.obtain(*this, curseCardPool[roll]);
-            }
             regainControlAction = returnToMapAction;
             break;
 
