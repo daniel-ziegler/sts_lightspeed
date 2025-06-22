@@ -206,53 +206,8 @@ class SlayDataset(torch.utils.data.Dataset):
 
 def collate_fn(batch):
     # Extract observation and choices data
-    obs_batch = []
-    choices_batch = []
     chosen_idx_list = []
     outcome_list = []
-    
-    for x in batch:
-        # Build observation dict that matches obs_space structure
-        obs = {
-            'deck': {
-                'value': torch.tensor(list(zip(x['obs.deck.cards'], x['obs.deck.upgrades'])), dtype=torch.int32),
-                'mask': torch.zeros(len(x['obs.deck.cards']), dtype=torch.bool)
-            },
-            'relics': {
-                'value': torch.tensor(x['obs.relics.relics'], dtype=torch.int32),
-                'mask': torch.zeros(len(x['obs.relics.relics']), dtype=torch.bool)
-            },
-            'potions': {
-                'value': torch.tensor(x['obs.potions'], dtype=torch.int32),
-                'mask': torch.zeros(len(x['obs.potions']), dtype=torch.bool)
-            },
-            'fixed_obs': torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
-        }
-        
-        # Build choices dict that matches action_logit_space structure
-        choices = {
-            'cards': {
-                'value': torch.tensor(list(zip(x['cards_offered.cards'], x['cards_offered.upgrades'])), dtype=torch.int32).reshape(-1, 2) if len(x['cards_offered.cards']) > 0 else torch.empty((0, 2), dtype=torch.int32),
-                'mask': torch.zeros(len(x['cards_offered.cards']), dtype=torch.bool)
-            },
-            'relics': {
-                'value': torch.tensor(x['relics_offered'], dtype=torch.int32),
-                'mask': torch.zeros(len(x['relics_offered']), dtype=torch.bool)
-            },
-            'potions': {
-                'value': torch.tensor(x['potions_offered'], dtype=torch.int32),
-                'mask': torch.zeros(len(x['potions_offered']), dtype=torch.bool)
-            },
-            'fixed': {
-                'value': torch.tensor(x['fixed_actions'], dtype=torch.int32),
-                'mask': torch.zeros(len(x['fixed_actions']), dtype=torch.bool)
-            }
-        }
-        
-        obs_batch.append(obs)
-        choices_batch.append(choices)
-        chosen_idx_list.append(x['chosen_idx'])
-        outcome_list.append(x['outcome'])
     
     # Create batched tensors for observation using fixed maximum sizes
     batch_obs = {
@@ -292,45 +247,58 @@ def collate_fn(batch):
     }
     
     # Fill the batched tensors with assertions to ensure data fits
-    for i, (obs, choices) in enumerate(zip(obs_batch, choices_batch)):
-        # Fill observation with size checks
-        deck_len = len(obs['deck']['value'])
+    for i, x in enumerate(batch):
+        # Build observation data inline
+        deck_cards = x['obs.deck.cards']
+        deck_upgrades = x['obs.deck.upgrades']
+        deck_len = len(deck_cards)
         assert deck_len <= MAX_DECK_SIZE, f"Deck size {deck_len} exceeds maximum {MAX_DECK_SIZE}"
-        batch_obs['deck']['value'][i, :deck_len] = obs['deck']['value']
-        batch_obs['deck']['mask'][i, :deck_len] = obs['deck']['mask']
+        batch_obs['deck']['value'][i, :deck_len] = torch.tensor(list(zip(deck_cards, deck_upgrades)), dtype=torch.int32)
+        batch_obs['deck']['mask'][i, :deck_len] = torch.zeros(deck_len, dtype=torch.bool)
         
-        relics_len = len(obs['relics']['value'])
+        relics = x['obs.relics.relics']
+        relics_len = len(relics)
         assert relics_len <= MAX_RELICS, f"Relics count {relics_len} exceeds maximum {MAX_RELICS}"
-        batch_obs['relics']['value'][i, :relics_len] = obs['relics']['value']
-        batch_obs['relics']['mask'][i, :relics_len] = obs['relics']['mask']
+        batch_obs['relics']['value'][i, :relics_len] = torch.tensor(relics, dtype=torch.int32)
+        batch_obs['relics']['mask'][i, :relics_len] = torch.zeros(relics_len, dtype=torch.bool)
         
-        potions_len = len(obs['potions']['value'])
+        potions = x['obs.potions']
+        potions_len = len(potions)
         assert potions_len <= sts.MAX_POTION_CAPACITY, f"Potions count {potions_len} exceeds maximum {sts.MAX_POTION_CAPACITY}"
-        batch_obs['potions']['value'][i, :potions_len] = obs['potions']['value']
-        batch_obs['potions']['mask'][i, :potions_len] = obs['potions']['mask']
+        batch_obs['potions']['value'][i, :potions_len] = torch.tensor(potions, dtype=torch.int32)
+        batch_obs['potions']['mask'][i, :potions_len] = torch.zeros(potions_len, dtype=torch.bool)
         
-        batch_obs['fixed_obs'][i] = obs['fixed_obs']
+        batch_obs['fixed_obs'][i] = torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
         
-        # Fill choices with size checks
-        choice_cards_len = len(choices['cards']['value'])
-        assert choice_cards_len <= MAX_CHOICES, f"Choice cards count {choice_cards_len} exceeds maximum {MAX_CHOICES}"
-        batch_choices['cards']['value'][i, :choice_cards_len] = choices['cards']['value']
-        batch_choices['cards']['mask'][i, :choice_cards_len] = choices['cards']['mask']
+        # Build choices data inline
+        cards_offered = x['cards_offered.cards']
+        cards_upgrades = x['cards_offered.upgrades']
+        choice_cards_len = len(cards_offered)
+        assert choice_cards_len <= MAX_CHOICES, f"Choice cards count {choice_cards_len} exceeds maximum {MAX_CHOICES}; {cards_offered}; {relics}"
+        if choice_cards_len > 0:
+            batch_choices['cards']['value'][i, :choice_cards_len] = torch.tensor(list(zip(cards_offered, cards_upgrades)), dtype=torch.int32).reshape(-1, 2)
+        batch_choices['cards']['mask'][i, :choice_cards_len] = torch.zeros(choice_cards_len, dtype=torch.bool)
         
-        choice_relics_len = len(choices['relics']['value'])
+        relics_offered = x['relics_offered']
+        choice_relics_len = len(relics_offered)
         assert choice_relics_len <= MAX_CHOICES, f"Choice relics count {choice_relics_len} exceeds maximum {MAX_CHOICES}"
-        batch_choices['relics']['value'][i, :choice_relics_len] = choices['relics']['value']
-        batch_choices['relics']['mask'][i, :choice_relics_len] = choices['relics']['mask']
+        batch_choices['relics']['value'][i, :choice_relics_len] = torch.tensor(relics_offered, dtype=torch.int32)
+        batch_choices['relics']['mask'][i, :choice_relics_len] = torch.zeros(choice_relics_len, dtype=torch.bool)
         
-        choice_potions_len = len(choices['potions']['value'])
+        potions_offered = x['potions_offered']
+        choice_potions_len = len(potions_offered)
         assert choice_potions_len <= sts.MAX_POTION_CAPACITY, f"Choice potions count {choice_potions_len} exceeds maximum {sts.MAX_POTION_CAPACITY}"
-        batch_choices['potions']['value'][i, :choice_potions_len] = choices['potions']['value']
-        batch_choices['potions']['mask'][i, :choice_potions_len] = choices['potions']['mask']
+        batch_choices['potions']['value'][i, :choice_potions_len] = torch.tensor(potions_offered, dtype=torch.int32)
+        batch_choices['potions']['mask'][i, :choice_potions_len] = torch.zeros(choice_potions_len, dtype=torch.bool)
         
-        choice_fixed_len = len(choices['fixed']['value'])
+        fixed_actions = x['fixed_actions']
+        choice_fixed_len = len(fixed_actions)
         assert choice_fixed_len <= MAX_FIXED_ACTIONS, f"Choice fixed actions count {choice_fixed_len} exceeds maximum {MAX_FIXED_ACTIONS}"
-        batch_choices['fixed']['value'][i, :choice_fixed_len] = choices['fixed']['value']
-        batch_choices['fixed']['mask'][i, :choice_fixed_len] = choices['fixed']['mask']
+        batch_choices['fixed']['value'][i, :choice_fixed_len] = torch.tensor(fixed_actions, dtype=torch.int32)
+        batch_choices['fixed']['mask'][i, :choice_fixed_len] = torch.zeros(choice_fixed_len, dtype=torch.bool)
+        
+        chosen_idx_list.append(x['chosen_idx'])
+        outcome_list.append(x['outcome'])
     
     return {
         **batch_obs,
