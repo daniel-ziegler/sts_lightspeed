@@ -42,7 +42,7 @@ class Choice:
     obs: sts.NNRepresentation
 
     # ActionType.CARD
-    cards_offered: list[sts.NNCardRepresentation]
+    cards_offered: list[list[sts.Card]]  # List of card sets
     card_actions: list[sts.GameAction]
 
     # ActionType.PATH
@@ -58,19 +58,20 @@ class Choice:
     fixed_actions_list: list[sts.GameAction]
 
     def as_dict(self):
+        # Extract card IDs and upgrades from the Card objects
+        all_card_ids = []
+        all_upgrades = []
+        
+        for card_set in self.cards_offered:
+            for card in card_set:
+                all_card_ids.append(int(card.id))
+                all_upgrades.append(card.upgrade_count)
+        
         return dict(
             obs=self.obs.as_dict(),
             cards_offered=dict(
-                cards=(
-                    np.concatenate([s.cards for s in self.cards_offered], axis=0, dtype=np.int32)
-                    if self.cards_offered
-                    else np.array([], dtype=np.int32)
-                ),
-                upgrades=(
-                    np.concatenate([s.upgrades for s in self.cards_offered], axis=0, dtype=np.int32)
-                    if self.cards_offered
-                    else np.array([], dtype=np.int32)
-                ),
+                cards=np.array(all_card_ids, dtype=np.int32),
+                upgrades=np.array(all_upgrades, dtype=np.int32),
             ),
             relics_offered=np.array(self.relics_offered, dtype=np.int32),
             fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
@@ -131,7 +132,7 @@ def load_net(model_path, device=None):
     return net
 
 class NNRequest(NamedTuple):
-    choice: Choice
+    choice_dict: dict
     response_queue: Queue
 
 class NNService:
@@ -178,15 +179,15 @@ class NNService:
                         requests.append(requests[-1])
                 
                 # Process batch
-                choices = [req.choice for req in requests]
+                choice_dicts = [req.choice_dict for req in requests]
                 
                 # Create batch
                 batch = [{
-                    **flatten_dict(choice.as_dict()),
+                    **flatten_dict(choice_dict),
                     'choice_type': 0,  # Dummy value
                     'chosen_idx': 0,  # Dummy value
                     'outcome': 0.0,   # Dummy value
-                } for choice in choices]
+                } for choice_dict in choice_dicts]
                 
                 # Process through network
                 batch_tensors = collate_fn(batch)
@@ -206,10 +207,10 @@ class NNService:
                 for req in requests:
                     req.response_queue.put(e)
     
-    def get_logits(self, choice: Choice) -> np.ndarray:
+    def get_logits(self, choice_dict: dict) -> np.ndarray:
         """Get flat logits array from the network. Thread-safe."""
         response_queue = Queue()
-        self.request_queue.put(NNRequest(choice, response_queue))
+        self.request_queue.put(NNRequest(choice_dict, response_queue))
         response = response_queue.get()
         
         if isinstance(response, Exception):
@@ -250,7 +251,8 @@ def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random =
 def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
                       temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> sts.GameAction:
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
-    logits = service.get_logits(choice)
+    choice_dict = choice.as_dict()
+    logits = service.get_logits(choice_dict)
     assert logits.size > 0, logits.shape
     
     # Convert logits to probabilities
@@ -261,15 +263,8 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
         
     chosen_idx = sample_boltzmann(probs, temperature, rng)
     
-    # Create choices data structure for action_logit_space.ix_to_path
-    choices_dict = {
-        'cards': [(card_id, upgrade) for card_set in choice.cards_offered for card_id, upgrade in zip(card_set.cards, card_set.upgrades)],
-        'relics': list(choice.relics_offered),
-        'fixed': list(choice.fixed_actions)
-    }
-
     # Convert flat index back to semantic path using action_logit_space
-    path = action_logit_space.ix_to_path(choices_dict, chosen_idx)
+    path = action_logit_space.ix_to_path(choice_dict, chosen_idx)
     
     if path[0] == 'cards':
         # path is ['cards', card_index]
@@ -349,11 +344,11 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                             fixed_actions_list.append(action)
                         
                 elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
-                    all_shop_cards = gc.screen_state_info.shop.cards
+                    # Shop cards are now returned as [card_set] where card_set contains all shop cards
+                    cards_offered = gc.screen_state_info.shop.cards  # This is now vector<vector<Card>>
                     all_shop_relics = gc.screen_state_info.shop.relics
                     for action in actions:
                         if action.rewards_action_type == sts.RewardsActionType.CARD:
-                            cards_offered.append(all_shop_cards[0].cards[action.idx2])
                             card_actions.append(action)
                         elif action.rewards_action_type == sts.RewardsActionType.RELIC:
                             relics_offered.append(all_shop_relics[action.idx1])
@@ -415,9 +410,9 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     if action.rewards_action_type == sts.RewardsActionType.SKIP:
                         choice_type = ActionType.FIXED
                         chosen_idx = 0
-                    elif cards_offered and which_card < len(cards_offered[which_set].cards):
+                    elif cards_offered and which_card < len(cards_offered[which_set]):
                         choice_type = ActionType.CARD
-                        chosen_idx = sum([len(s.cards) for s in cards_offered[:which_set]]) + which_card
+                        chosen_idx = sum([len(s) for s in cards_offered[:which_set]]) + which_card
                         
                 elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
                     if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
@@ -425,7 +420,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         chosen_idx = 1
                     elif action.rewards_action_type == sts.RewardsActionType.CARD:
                         choice_type = ActionType.CARD
-                        chosen_idx = sum([len(s.cards) for s in cards_offered[:action.idx1]]) + action.idx2
+                        chosen_idx = sum([len(s) for s in cards_offered[:action.idx1]]) + action.idx2
                     elif action.rewards_action_type == sts.RewardsActionType.RELIC:
                         choice_type = ActionType.RELIC
                         chosen_idx = action.idx1

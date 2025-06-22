@@ -175,18 +175,16 @@ PYBIND11_MODULE(slaythespire, m) {
     });
     rewards.def_property_readonly("cards", [](const Rewards &r) {
         // filter out invalid
-        std::vector<sts::py::NNCardsRepresentation> ret;
+        std::vector<std::vector<Card>> ret;
         for (int i = 0; i < r.cardRewardCount; ++i) {
             const auto &cardReward = r.cardRewards[i];
-            std::vector<CardId> cards;
-            std::vector<int> upgrades;
+            std::vector<Card> cards;
             for (int j = 0; j < cardReward.size(); ++j) {
                 if (cardReward[j] != CardId::INVALID) {
-                    cards.push_back(cardReward[j].id);
-                    upgrades.push_back(cardReward[j].getUpgraded());
+                    cards.push_back(cardReward[j]);
                 }
             }
-            ret.push_back({sts::py::to_numpy(cards), sts::py::to_numpy(upgrades)});
+            ret.push_back(cards);
         }
         return ret;
     });
@@ -221,18 +219,16 @@ PYBIND11_MODULE(slaythespire, m) {
             return s.removeCost == -1 ? std::nullopt : std::make_optional(s.removeCost);
         })
         .def_property_readonly("cards", [](const Shop& s) {
-            // Create NNCardsRepresentation like the Rewards binding does
-            std::vector<CardId> cards;
-            std::vector<int> upgrades;
+            // Create vector of Card objects
+            std::vector<Card> cards;
             for (int i = 0; i < 7; ++i) {
                 if (s.cards[i] != CardId::INVALID) {
-                    cards.push_back(s.cards[i].id);
-                    upgrades.push_back(s.cards[i].getUpgraded());
+                    cards.push_back(s.cards[i]);
                 }
             }
-            // Return as a single-element vector containing one NNCardsRepresentation
-            std::vector<sts::py::NNCardsRepresentation> ret;
-            ret.push_back({sts::py::to_numpy(cards), sts::py::to_numpy(upgrades)});
+            // Return as a single-element vector containing one vector of Cards
+            std::vector<std::vector<Card>> ret;
+            ret.push_back(cards);
             return ret;
         })
         .def_property_readonly("potions", [](const Shop& s) {
