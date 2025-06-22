@@ -84,7 +84,8 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
     data_df = df[
         df.apply(lambda r: (
             r["choice_type"] == ActionType.FIXED or
-            r["choice_type"] == ActionType.RELIC or 
+            r["choice_type"] == ActionType.RELIC or
+            r["choice_type"] == ActionType.POTION or
             (r["choice_type"] == ActionType.CARD and 
              r["chosen_idx"] >= 0 and 
              r["chosen_idx"] < len(r["cards_offered.cards"]) and
@@ -357,12 +358,14 @@ for i in range(len(batch)):
             batch.iloc[i]['cards_offered.upgrades']
         )],
         'relics': list(batch.iloc[i]['relics_offered']),
+        'potions': list(batch.iloc[i]['potions_offered']),
         'fixed': list(batch.iloc[i]['fixed_actions'])
     }
     
     # Build probability strings by category
     card_prob_strs = []
     relic_prob_strs = []
+    potion_prob_strs = []
     fixed_prob_strs = []
     
     # Go through each valid logit and convert back to semantic choice
@@ -396,6 +399,17 @@ for i in range(len(batch)):
                         prob_str = f"[{prob_str}]"
                     relic_prob_strs.append(prob_str)
             
+            elif path[0] == 'potions':
+                # Potion choice
+                potion_idx = path[1]
+                if potion_idx < len(choices_dict['potions']):
+                    potion_id = choices_dict['potions'][potion_idx]
+                    potion_name = sts.Potion(potion_id).name
+                    prob_str = f"{potion_name}({prob:.3f})"
+                    if logit_idx == chosen_idx:
+                        prob_str = f"[{prob_str}]"
+                    potion_prob_strs.append(prob_str)
+            
             elif path[0] == 'fixed':
                 # Fixed action choice
                 action_idx = path[1]
@@ -416,6 +430,8 @@ for i in range(len(batch)):
         print(f"  Cards: {', '.join(card_prob_strs)}")
     if relic_prob_strs:
         print(f"  Relics: {', '.join(relic_prob_strs)}")
+    if potion_prob_strs:
+        print(f"  Potions: {', '.join(potion_prob_strs)}")
     if fixed_prob_strs:
         print(f"  Fixed: {', '.join(fixed_prob_strs)}")
     print()
@@ -441,6 +457,7 @@ valid_targets = []
 card_predictions = {}
 fixed_predictions = {}
 relic_predictions = {}
+potion_predictions = {}
 
 # Get predictions for validation set
 with torch.no_grad():
@@ -467,7 +484,8 @@ with torch.no_grad():
             
             # Count valid choices by category for this batch item
             deck_valid = batch['choices']['deck']['mask'][i].sum().item()
-            relics_valid = batch['choices']['relics']['mask'][i].sum().item()  
+            relics_valid = batch['choices']['relics']['mask'][i].sum().item()
+            potions_valid = batch['choices']['potions']['mask'][i].sum().item()
             fixed_valid = batch['choices']['fixed']['mask'][i].sum().item()
             
             # Extract choices from batch tensors
@@ -481,6 +499,11 @@ with torch.no_grad():
                 relic_id = batch['choices']['relics']['value'][i, j].item()
                 relic_choices.append(relic_id)
             
+            potion_choices = []
+            for j in range(potions_valid):
+                potion_id = batch['choices']['potions']['value'][i, j].item()
+                potion_choices.append(potion_id)
+            
             fixed_choices = []
             for j in range(fixed_valid):
                 action = batch['choices']['fixed']['value'][i, j].item()
@@ -489,6 +512,7 @@ with torch.no_grad():
             choices_dict = {
                 'deck': deck_choices,
                 'relics': relic_choices,
+                'potions': potion_choices,
                 'fixed': fixed_choices
             }
             
@@ -526,6 +550,17 @@ with torch.no_grad():
                             if relic_name not in relic_predictions:
                                 relic_predictions[relic_name] = []
                             relic_predictions[relic_name].append(relative_prob)
+                    
+                    elif path[0] == 'potions':
+                        # Potion choice
+                        potion_idx = path[1]
+                        if potion_idx < len(choices_dict['potions']):
+                            potion_id = choices_dict['potions'][potion_idx]
+                            potion_name = sts.Potion(potion_id).name
+                            
+                            if potion_name not in potion_predictions:
+                                potion_predictions[potion_name] = []
+                            potion_predictions[potion_name].append(relative_prob)
                     
                     elif path[0] == 'fixed':
                         # Fixed action choice
@@ -591,6 +626,23 @@ sorted_relics = sorted(relic_stats.items(), key=lambda x: x[1]['mean'], reverse=
 for relic, stats in sorted_relics:
     if stats['count'] >= 10:  # Only show relics with enough samples
         print(f"{relic:25} {stats['mean']:+.3f} ±{stats['std']:.3f} (n={stats['count']})")
+
+# Calculate and print potion statistics
+print("\nPotion Win Probability Statistics (relative to alternatives):")
+potion_stats = {}
+for potion_name, preds in potion_predictions.items():
+    preds = np.array(preds)
+    potion_stats[potion_name] = {
+        'mean': np.mean(preds),
+        'std': np.std(preds),
+        'count': len(preds)
+    }
+
+# Sort and print potion statistics
+sorted_potions = sorted(potion_stats.items(), key=lambda x: x[1]['mean'], reverse=True)
+for potion, stats in sorted_potions:
+    if stats['count'] >= 10:  # Only show potions with enough samples
+        print(f"{potion:25} {stats['mean']:+.3f} ±{stats['std']:.3f} (n={stats['count']})")
 
 # Calculate and print fixed action statistics
 print("\nFixed Action Win Probability Statistics (relative to alternatives):")
