@@ -98,3 +98,4 @@ To use the right Python environment, prefix all python commands with `pyenv shel
 - Always make everything *uniform*! Never handle multiple possible input data types or formats. Instead refactor at least one of the sources of input so that they are the same.
 - Do not assume warnings are not a problem. They are a problem! Figure out why they are being produced.
 - Fail fast and hard! Do not just swallow errors or surprising states - add in asserts and throw exceptions liberally.
+- Never leave comments like "# Changed to new thing". Only leave comments that describe the current state of the code. And do so sparingly - prefer not to comment, unless the code would be unclear without.
