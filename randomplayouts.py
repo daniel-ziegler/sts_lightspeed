@@ -21,6 +21,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, action_logit_space
+from inputs import Path
 import slaythespire as sts
 
 # %%
@@ -248,7 +249,7 @@ def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random =
     return int(rng.choices(range(len(probs)), weights=softmax_probs, k=1)[0])
 
 def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
-                      temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> sts.GameAction:
+                      temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> tuple[sts.GameAction, Path]:
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
     collated_input, logits = service.get_logits(choice)
     assert logits.size > 0, logits.shape
@@ -272,18 +273,18 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
             print(f"{collated_input['choices']=}")
             import ipdb; ipdb.set_trace()
             raise ValueError(f"Chosen index {chosen_idx} out of bounds for {path}")
-        return choice.card_actions[card_index]
+        return choice.card_actions[card_index], path
     
     elif path[0] == 'relics':
         # path is ['relics', relic_index]
         relic_index = path[1]
 
-        return choice.relic_actions[relic_index]
+        return choice.relic_actions[relic_index], path
     
     elif path[0] == 'fixed':
         # path is ['fixed', action_index]
         action_index = path[1]
-        return choice.fixed_actions_list[action_index]
+        return choice.fixed_actions_list[action_index], path
     
     raise ValueError(f"Could not find action for index {chosen_idx}")
 
@@ -395,17 +396,39 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
                         path_actions.append(action)
                 
+
+                choice = Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
+                                paths_offered=paths_offered, path_actions=path_actions,
+                                fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
+                                relics_offered=relics_offered, relic_actions=relic_actions)
                 # Pick action using either network or agent
                 if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS):
                     assert cards_offered or paths_offered or relics_offered or fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
-
-                    choice = Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
-                                  paths_offered=paths_offered, path_actions=path_actions,
-                                  fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
-                                  relics_offered=relics_offered, relic_actions=relic_actions)
-                    action = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
+                    action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
+                    
+                    # Use path information to determine choice_type and chosen_idx
+                    if action_path[0] == 'cards':
+                        choice_type = ActionType.CARD
+                        chosen_idx = action_path[1]
+                    elif action_path[0] == 'relics':
+                        choice_type = ActionType.RELIC
+                        chosen_idx = action_path[1]
+                    elif action_path[0] == 'fixed':
+                        choice_type = ActionType.FIXED
+                        chosen_idx = action_path[1]
+                    else:
+                        choice_type = ActionType.INVALID
+                        chosen_idx = -1
                 else:
                     action = agent.pick_gameaction(gc)
+                    
+                    # For non-network actions (like map choices), use the old logic
+                    choice_type = ActionType.INVALID
+                    chosen_idx = -1
+                    
+                    if gc.screen_state == sts.ScreenState.MAP_SCREEN:
+                        choice_type = ActionType.PATH
+                        chosen_idx, = [ix for ix, a in enumerate(actions) if a.idx1 == action.idx1]
                 
                 if action not in actions:
                     print(gc)
@@ -415,50 +438,8 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         print(a.getDesc(gc))
                     raise ValueError("chosen action not in list of actions")
 
-                # Translate action into choice_type and chosen_idx
-                # TODO this is obsolete
-                choice_type = ActionType.INVALID
-                chosen_idx = -1
-                
-                if gc.screen_state == sts.ScreenState.REWARDS:
-                    which_set, which_card = action.idx1, action.idx2
-                    if action.rewards_action_type == sts.RewardsActionType.SKIP:
-                        choice_type = ActionType.FIXED
-                        chosen_idx = 0
-                    elif which_card < len(cards_offered):
-                        choice_type = ActionType.CARD
-                        chosen_idx = which_card
-                        
-                elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
-                    if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
-                        choice_type = ActionType.FIXED
-                        chosen_idx = 1
-                    elif action.rewards_action_type == sts.RewardsActionType.CARD:
-                        choice_type = ActionType.CARD
-                        chosen_idx = action.idx2
-                    elif action.rewards_action_type == sts.RewardsActionType.RELIC:
-                        choice_type = ActionType.RELIC
-                        chosen_idx = action.idx1
-                        
-                elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
-                    which_relic = action.idx1
-                    if which_relic == 3:  # skip
-                        choice_type = ActionType.FIXED
-                        chosen_idx = 0
-                    else:
-                        choice_type = ActionType.RELIC
-                        chosen_idx = which_relic
-                        
-                elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
-                    choice_type = ActionType.PATH
-                    chosen_idx, = [ix for ix, a in enumerate(actions) if a.idx1 == action.idx1]
-
                 # Record choice if valid
                 if choice_type != ActionType.INVALID:
-                    choice = Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
-                                  paths_offered=paths_offered, path_actions=path_actions,
-                                  fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
-                                  relics_offered=relics_offered, relic_actions=relic_actions)
                     choices.append(Decision(choice, choice_type=choice_type, chosen_idx=chosen_idx))
                     
                 if verbose:
