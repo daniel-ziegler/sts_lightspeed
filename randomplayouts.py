@@ -469,11 +469,11 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
             raise
 
     print(gc.outcome, gc.floor_num)
-    return (choices, gc.outcome)
+    return (choices, gc.outcome, gc.floor_num)
 
 def run_game_data(seed: int, net: NN = None, temperature: float = 0.01, stats: ChoiceStats = None):
     try:
-        choices, outcome = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
+        choices, outcome, final_floor = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
     except Exception as e:
         print(f"Error in run_game_data for seed {seed}: {e}")
         raise
@@ -485,6 +485,7 @@ def run_game_data(seed: int, net: NN = None, temperature: float = 0.01, stats: C
     } for c in choices])
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
+    df["final_floor"] = final_floor
     return df
 
 class ChoiceStats:
