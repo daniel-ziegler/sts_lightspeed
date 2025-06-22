@@ -259,7 +259,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     
     # Create choices data structure for action_logit_space.ix_to_path
     choices_dict = {
-        'deck': [(card_id, upgrade) for card_set in choice.cards_offered for card_id, upgrade in zip(card_set.cards, card_set.upgrades)],
+        'cards': [(card_id, upgrade) for card_set in choice.cards_offered for card_id, upgrade in zip(card_set.cards, card_set.upgrades)],
         'relics': list(choice.relics_offered),
         'fixed': list(choice.fixed_actions)
     }
@@ -267,8 +267,8 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     # Convert flat index back to semantic path using action_logit_space
     path = action_logit_space.ix_to_path(choices_dict, chosen_idx)
     
-    if path[0] == 'deck':
-        # path is ['deck', card_index]
+    if path[0] == 'cards':
+        # path is ['cards', card_index]
         card_index = path[1]
         # Find which set and which card within set
         total_cards = 0

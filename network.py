@@ -56,7 +56,7 @@ obs_space = DictSpace({
 })
 
 action_logit_space = DictSpace({
-    'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
+    'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'fixed': SequenceSpace(EnumSpace(FixedAction)),
 })
@@ -197,7 +197,7 @@ def collate_fn(batch):
         
         # Build choices dict that matches action_logit_space structure
         choices = {
-            'deck': {
+            'cards': {
                 'value': torch.tensor(list(zip(x['cards_offered.cards'], x['cards_offered.upgrades'])), dtype=torch.int32).reshape(-1, 2) if len(x['cards_offered.cards']) > 0 else torch.empty((0, 2), dtype=torch.int32),
                 'mask': torch.zeros(len(x['cards_offered.cards']), dtype=torch.bool)
             },
@@ -233,14 +233,14 @@ def collate_fn(batch):
     }
     
     # Create batched tensors for choices
-    max_choice_deck_len = max(len(choices['deck']['value']) for choices in choices_batch)
+    max_choice_cards_len = max(len(choices['cards']['value']) for choices in choices_batch)
     max_choice_relics_len = max(len(choices['relics']['value']) for choices in choices_batch)
     max_choice_fixed_len = max(len(choices['fixed']['value']) for choices in choices_batch)
     
     batch_choices = {
-        'deck': {
-            'value': torch.full((len(batch), max_choice_deck_len, 2), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_choice_deck_len), dtype=torch.bool)
+        'cards': {
+            'value': torch.full((len(batch), max_choice_cards_len, 2), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), max_choice_cards_len), dtype=torch.bool)
         },
         'relics': {
             'value': torch.full((len(batch), max_choice_relics_len), 0, dtype=torch.int32),
@@ -266,9 +266,9 @@ def collate_fn(batch):
         batch_obs['fixed_obs'][i] = obs['fixed_obs']
         
         # Fill choices
-        choice_deck_len = len(choices['deck']['value'])
-        batch_choices['deck']['value'][i, :choice_deck_len] = choices['deck']['value']
-        batch_choices['deck']['mask'][i, :choice_deck_len] = choices['deck']['mask']
+        choice_cards_len = len(choices['cards']['value'])
+        batch_choices['cards']['value'][i, :choice_cards_len] = choices['cards']['value']
+        batch_choices['cards']['mask'][i, :choice_cards_len] = choices['cards']['mask']
         
         choice_relics_len = len(choices['relics']['value'])
         batch_choices['relics']['value'][i, :choice_relics_len] = choices['relics']['value']
