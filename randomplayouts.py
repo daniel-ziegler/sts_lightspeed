@@ -341,8 +341,13 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 if gc.screen_state == sts.ScreenState.REWARDS:
                     for action in actions:
                         if action.rewards_action_type == sts.RewardsActionType.CARD:
-                            cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
-                            card_actions.append(action)
+                            # handle singing bowl
+                            if action.idx2 == 5:
+                                fixed_actions.append(FixedAction.SINGING_BOWL)
+                                fixed_actions_list.append(action)
+                            else:
+                                cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
+                                card_actions.append(action)
                         elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                             fixed_actions.append(FixedAction.SKIP)
                             fixed_actions_list.append(action)
@@ -467,7 +472,12 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
     return (choices, gc.outcome)
 
 def run_game_data(seed: int, net: NN = None, temperature: float = 0.01, stats: ChoiceStats = None):
-    choices, outcome = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
+    try:
+        choices, outcome = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
+    except Exception as e:
+        print(f"Error in run_game_data for seed {seed}: {e}")
+        raise
+
     df = pd.DataFrame([{
         **flatten_dict(c.choice.as_dict()),
         'choice_type': c.choice_type,

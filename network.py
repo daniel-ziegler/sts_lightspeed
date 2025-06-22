@@ -48,6 +48,7 @@ class FixedAction(IntEnum):
     INVALID = 0
     SKIP = auto()
     REMOVE = auto()
+    SINGING_BOWL = auto()
 
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
