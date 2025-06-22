@@ -198,7 +198,7 @@ def collate_fn(batch):
         # Build choices dict that matches action_logit_space structure
         choices = {
             'deck': {
-                'value': torch.tensor(list(zip(x['cards_offered.cards'], x['cards_offered.upgrades'])), dtype=torch.int32),
+                'value': torch.tensor(list(zip(x['cards_offered.cards'], x['cards_offered.upgrades'])), dtype=torch.int32).reshape(-1, 2) if len(x['cards_offered.cards']) > 0 else torch.empty((0, 2), dtype=torch.int32),
                 'mask': torch.zeros(len(x['cards_offered.cards']), dtype=torch.bool)
             },
             'relics': {

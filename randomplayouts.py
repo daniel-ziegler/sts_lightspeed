@@ -197,7 +197,6 @@ class NNService:
             except Empty:
                 continue
             except Exception as e:
-                raise
                 print(f"Error in NN service: {type(e)} {e}")
                 # Send error response to all waiting requests
                 for req in requests:
@@ -264,55 +263,49 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
         'relics': list(choice.relics_offered),
         'fixed': list(choice.fixed_actions)
     }
+
+    # Convert flat index back to semantic path using action_logit_space
+    path = action_logit_space.ix_to_path(choices_dict, chosen_idx)
     
-    try:
-        # Convert flat index back to semantic path using action_logit_space
-        path = action_logit_space.ix_to_path(choices_dict, chosen_idx)
-        
-        if path[0] == 'deck':
-            # path is ['deck', card_index]
-            card_index = path[1]
-            # Find which set and which card within set
-            total_cards = 0
-            for which_set, card_set in enumerate(choice.cards_offered):
-                if card_index < total_cards + len(card_set.cards):
-                    which_card = card_index - total_cards
-                    # Find matching action in actions list
-                    for action in actions:
-                        if (action.idx1 == which_set and action.idx2 == which_card):
-                            return action
-                    break
-                total_cards += len(card_set.cards)
-        
-        elif path[0] == 'relics':
-            # path is ['relics', relic_index]
-            relic_index = path[1]
-            # Find matching action in actions list
+    if path[0] == 'deck':
+        # path is ['deck', card_index]
+        card_index = path[1]
+        # Find which set and which card within set
+        total_cards = 0
+        for which_set, card_set in enumerate(choice.cards_offered):
+            if card_index < total_cards + len(card_set.cards):
+                which_card = card_index - total_cards
+                # Find matching action in actions list
+                for action in actions:
+                    if (action.idx1 == which_set and action.idx2 == which_card):
+                        return action
+                break
+            total_cards += len(card_set.cards)
+    
+    elif path[0] == 'relics':
+        # path is ['relics', relic_index]
+        relic_index = path[1]
+        # Find matching action in actions list
+        for action in actions:
+            if action.idx1 == relic_index:
+                return action
+    
+    elif path[0] == 'fixed':
+        # path is ['fixed', action_index]
+        action_index = path[1]
+        fixed_action = choice.fixed_actions[action_index]
+        if fixed_action == FixedAction.SKIP:
+            # Find the skip action
             for action in actions:
-                if action.idx1 == relic_index:
+                if action.rewards_action_type == sts.RewardsActionType.SKIP:
                     return action
-        
-        elif path[0] == 'fixed':
-            # path is ['fixed', action_index]
-            action_index = path[1]
-            fixed_action = choice.fixed_actions[action_index]
-            if fixed_action == FixedAction.SKIP:
-                # Find the skip action
-                for action in actions:
-                    if action.rewards_action_type == sts.RewardsActionType.SKIP:
-                        return action
-            elif fixed_action == FixedAction.REMOVE:
-                # Find the remove action
-                for action in actions:
-                    if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
-                        return action
+        elif fixed_action == FixedAction.REMOVE:
+            # Find the remove action
+            for action in actions:
+                if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
+                    return action
     
-    except (IndexError, KeyError) as e:
-        print(f"Warning: Error converting index {chosen_idx} to action: {e}")
-    
-    # Fallback to random choice if something went wrong
-    print(f"Warning: Could not find action for index {chosen_idx}")
-    return rng.choice(actions) if rng else random.choice(actions)
+    raise ValueError(f"Could not find action for index {chosen_idx}")
 
 def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)

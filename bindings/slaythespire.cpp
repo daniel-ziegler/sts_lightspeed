@@ -221,7 +221,19 @@ PYBIND11_MODULE(slaythespire, m) {
             return s.removeCost == -1 ? std::nullopt : std::make_optional(s.removeCost);
         })
         .def_property_readonly("cards", [](const Shop& s) {
-            return std::vector<Card>(s.cards, s.cards + 7);
+            // Create NNCardsRepresentation like the Rewards binding does
+            std::vector<CardId> cards;
+            std::vector<int> upgrades;
+            for (int i = 0; i < 7; ++i) {
+                if (s.cards[i] != CardId::INVALID) {
+                    cards.push_back(s.cards[i].id);
+                    upgrades.push_back(s.cards[i].getUpgraded());
+                }
+            }
+            // Return as a single-element vector containing one NNCardsRepresentation
+            std::vector<sts::py::NNCardsRepresentation> ret;
+            ret.push_back({sts::py::to_numpy(cards), sts::py::to_numpy(upgrades)});
+            return ret;
         })
         .def_property_readonly("potions", [](const Shop& s) {
             return std::vector<Potion>(s.potions, s.potions + 3);
