@@ -33,6 +33,9 @@ class MaskedSpace(Generic[T], Space[T]):
     """
     Embeds an object into an (embedding, mask) pair of tensors and supports finding
     the path to a specific index.
+
+    embedding has shape [batch, seq, dim]
+    mask has shape [batch, seq]
     """
 
     @abstractmethod
@@ -132,8 +135,16 @@ class TupleAddEmbedding(nn.Module):
         super().__init__()
         self.component_embeddings = component_embeddings
     
-    def forward(self, xs: tuple) -> torch.Tensor:
-        return torch.sum(torch.stack([emb(x) for emb, x in zip(self.component_embeddings, xs)], dim=0), dim=0)
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        # xs shape: [batch, seq, n_components] or [batch, n_components]
+        # Split along last dimension and apply embeddings
+        component_outputs = []
+        for i, emb in enumerate(self.component_embeddings):
+            component_input = xs[..., i]  # [batch, seq] or [batch]
+            component_outputs.append(emb(component_input))
+        
+        # Sum the embeddings
+        return torch.sum(torch.stack(component_outputs, dim=0), dim=0)
 
 class TupleConcatEmbedding(nn.Module):
     """Module for embedding tuples by concatenating component embeddings."""
@@ -143,7 +154,7 @@ class TupleConcatEmbedding(nn.Module):
     
     def forward(self, xs: tuple) -> tuple[torch.Tensor, torch.Tensor]:
         embeddings, masks = zip(*[emb(x) for emb, x in zip(self.component_embeddings, xs)])
-        return torch.cat(embeddings, dim=-2), torch.cat(masks, dim=-2)
+        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
 
 class DictEmbedding(nn.Module):
     """Module for embedding dictionaries by concatenating component embeddings."""
@@ -153,9 +164,8 @@ class DictEmbedding(nn.Module):
         self.spaces = spaces
     
     def forward(self, xs: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
-        assert set(xs.keys()) == set(self.spaces.keys()), f"DictSpace keys {xs.keys()} do not match {self.spaces.keys()}"
         embeddings, masks = zip(*[self.component_embeddings[k](xs[k]) for k in self.spaces.keys()])
-        return torch.cat(embeddings, dim=-2), torch.cat(masks, dim=-2)
+        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
 
 class SinusoidalEmbedding(nn.Module):
     """Standalone sinusoidal embedding for numerical features."""
@@ -201,7 +211,7 @@ class FixedVecSpace(MaskedSpace[np.ndarray]):
                 # xs is [batch_size, n_features]
                 embedded = self.proj(self.num_embed(xs))  # [batch_size, dim]
                 embedded = embedded.unsqueeze(1)  # [batch_size, 1, dim]
-                mask = torch.ones(embedded.shape[0], 1, dtype=torch.bool, device=embedded.device)
+                mask = torch.zeros(embedded.shape[0], 1, dtype=torch.bool, device=embedded.device)
                 return embedded, mask
         
         return FixedVecEmbedding()

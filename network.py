@@ -134,14 +134,15 @@ class NN(nn.Module):
             choice_logits: [batch_size, max_action_choices] tensor of flat logits.
                           Use action_logit_space.ix_to_path to convert indices back to semantic actions.
         """
-        device = batch['deck'].device
-
         choices = batch.pop('choices')
         obs_embed, obs_mask = self.obs_embed(batch)
         action_logit_embed, action_logit_mask = self.action_logit_embed(choices)
 
-        x = torch.cat([obs_embed, action_logit_embed], dim=-2)
-        pos_mask = torch.cat([obs_mask, action_logit_mask], dim=-2)
+        assert (~obs_mask).any()
+        assert (~action_logit_mask).any()
+
+        x = torch.cat([obs_embed, action_logit_embed], dim=1)
+        pos_mask = torch.cat([obs_mask, action_logit_mask], dim=1)
 
         for l in self.layers:
             x = l(x, pos_mask)
@@ -149,7 +150,7 @@ class NN(nn.Module):
 
         action_xs = xn[:, obs_mask.size(1):, :]
         choice_logits = self.choice_logits(action_xs).squeeze(-1).float()
-        choice_logits = choice_logits.masked_fill(action_logit_mask == 0, float('-inf'))
+        choice_logits = choice_logits.masked_fill(action_logit_mask, float('-inf'))
         return choice_logits
     
     @property
@@ -185,11 +186,11 @@ def collate_fn(batch):
         obs = {
             'deck': {
                 'value': torch.tensor(list(zip(x['obs.deck.cards'], x['obs.deck.upgrades'])), dtype=torch.int32),
-                'mask': torch.ones(len(x['obs.deck.cards']), dtype=torch.bool)
+                'mask': torch.zeros(len(x['obs.deck.cards']), dtype=torch.bool)
             },
             'relics': {
                 'value': torch.tensor(x['obs.relics.relics'], dtype=torch.int32),
-                'mask': torch.ones(len(x['obs.relics.relics']), dtype=torch.bool)
+                'mask': torch.zeros(len(x['obs.relics.relics']), dtype=torch.bool)
             },
             'fixed_obs': torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
         }
@@ -198,15 +199,15 @@ def collate_fn(batch):
         choices = {
             'deck': {
                 'value': torch.tensor(list(zip(x['cards_offered.cards'], x['cards_offered.upgrades'])), dtype=torch.int32),
-                'mask': torch.ones(len(x['cards_offered.cards']), dtype=torch.bool)
+                'mask': torch.zeros(len(x['cards_offered.cards']), dtype=torch.bool)
             },
             'relics': {
                 'value': torch.tensor(x['relics_offered'], dtype=torch.int32),
-                'mask': torch.ones(len(x['relics_offered']), dtype=torch.bool)
+                'mask': torch.zeros(len(x['relics_offered']), dtype=torch.bool)
             },
             'fixed': {
                 'value': torch.tensor(x['fixed_actions'], dtype=torch.int32),
-                'mask': torch.ones(len(x['fixed_actions']), dtype=torch.bool)
+                'mask': torch.zeros(len(x['fixed_actions']), dtype=torch.bool)
             }
         }
         
@@ -222,11 +223,11 @@ def collate_fn(batch):
     batch_obs = {
         'deck': {
             'value': torch.full((len(batch), max_deck_len, 2), 0, dtype=torch.int32),
-            'mask': torch.zeros((len(batch), max_deck_len), dtype=torch.bool)
+            'mask': torch.ones((len(batch), max_deck_len), dtype=torch.bool)
         },
         'relics': {
             'value': torch.full((len(batch), max_relics_len), 0, dtype=torch.int32),
-            'mask': torch.zeros((len(batch), max_relics_len), dtype=torch.bool)
+            'mask': torch.ones((len(batch), max_relics_len), dtype=torch.bool)
         },
         'fixed_obs': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
     }
@@ -239,15 +240,15 @@ def collate_fn(batch):
     batch_choices = {
         'deck': {
             'value': torch.full((len(batch), max_choice_deck_len, 2), 0, dtype=torch.int32),
-            'mask': torch.zeros((len(batch), max_choice_deck_len), dtype=torch.bool)
+            'mask': torch.ones((len(batch), max_choice_deck_len), dtype=torch.bool)
         },
         'relics': {
             'value': torch.full((len(batch), max_choice_relics_len), 0, dtype=torch.int32),
-            'mask': torch.zeros((len(batch), max_choice_relics_len), dtype=torch.bool)
+            'mask': torch.ones((len(batch), max_choice_relics_len), dtype=torch.bool)
         },
         'fixed': {
             'value': torch.full((len(batch), max_choice_fixed_len), FixedAction.INVALID.value, dtype=torch.int32),
-            'mask': torch.zeros((len(batch), max_choice_fixed_len), dtype=torch.bool)
+            'mask': torch.ones((len(batch), max_choice_fixed_len), dtype=torch.bool)
         }
     }
     
@@ -300,34 +301,7 @@ def process_batch(batch, net):
     return net(batch)
 
 def output_to_cpu(output: torch.Tensor, batch: dict) -> list[np.ndarray]:
-    """
-    Moves flat logits tensor to CPU and trims to valid lengths for each batch item.
-    
-    Args:
-        output: [batch_size, max_action_choices] tensor of flat logits
-        batch: Dictionary containing choices data with masks
-    
-    Returns:
-        List of numpy arrays containing trimmed logits, one per batch item
-    """
-    batch_size = output.size(0)
-    results = []
-    
-    # Move tensor to CPU once
-    logits = output.cpu().numpy()
-    
-    for i in range(batch_size):
-        # Count valid choices by looking at masks
-        deck_valid = batch['choices']['deck']['mask'][i].sum().item()
-        relics_valid = batch['choices']['relics']['mask'][i].sum().item()
-        fixed_valid = batch['choices']['fixed']['mask'][i].sum().item()
-        
-        total_valid = deck_valid + relics_valid + fixed_valid
-        
-        # Trim logits to valid entries only
-        results.append(logits[i][:total_valid])
-    
-    return results
+    return output.cpu().numpy()
 
 
 

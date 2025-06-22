@@ -248,6 +248,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
                       temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> sts.GameAction:
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
     logits = service.get_logits(choice)
+    assert logits.size > 0, logits.shape
     
     # Convert logits to probabilities
     probs = get_card_probs(logits)
