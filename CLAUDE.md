@@ -94,5 +94,7 @@ To use the right Python environment, prefix all python commands with `pyenv shel
 
 # Important instructions
 
-Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.
-
+- Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.
+- Always make everything *uniform*! Never handle multiple possible input data types or formats. Instead refactor at least one of the sources of input so that they are the same.
+- Do not assume warnings are not a problem. They are a problem! Figure out why they are being produced.
+- Fail fast and hard! Do not just swallow errors or surprising states - add in asserts and throw exceptions liberally.
