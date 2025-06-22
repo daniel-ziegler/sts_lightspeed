@@ -91,3 +91,8 @@ To use the right Python environment, prefix all python commands with `pyenv shel
 - All Ironclad cards and colorless cards implemented
 - Complete enemy roster and relic system
 - Console playable with full overworld/map system
+
+# Important instructions
+
+Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.
+
