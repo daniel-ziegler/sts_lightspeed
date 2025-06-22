@@ -19,6 +19,8 @@ class ModelHP:
     norm_eps: float = 1e-5
     n_fixed_obs: int = len(sts.getFixedObservationMaximums())
     max_relics: int = 25  # Maximum number of relics a player typically has
+    use_value_head: bool = True  # Add value head for PPO training
+    separate_networks: bool = False  # Use separate networks for policy and value
 
 
 # Constants for data processing
@@ -126,6 +128,12 @@ class NN(nn.Module):
         self.choice_logits = nn.Linear(H.dim, 1, bias=True)
         nn.init.uniform_(self.choice_logits.weight, -0.01, 0.01)
         nn.init.zeros_(self.choice_logits.bias)
+        
+        # Add value head if enabled
+        if H.use_value_head:
+            self.value_head = nn.Linear(H.dim, 1, bias=True)
+            nn.init.uniform_(self.value_head.weight, -0.01, 0.01)
+            nn.init.zeros_(self.value_head.bias)
 
 
     def forward(self, batch: dict):
@@ -137,8 +145,11 @@ class NN(nn.Module):
                    The 'choices' key is popped and processed separately as action logits.
         
         Returns:
-            choice_logits: [batch_size, max_action_choices] tensor of flat logits.
-                          Use action_logit_space.ix_to_path to convert indices back to semantic actions.
+            If value_head enabled: (choice_logits, values) tuple where:
+                - choice_logits: [batch_size, max_action_choices] tensor of flat logits
+                - values: [batch_size] tensor of state value estimates
+            If value_head disabled: choice_logits tensor only
+            Use action_logit_space.ix_to_path to convert indices back to semantic actions.
         """
         choices = batch.pop('choices')
         
@@ -181,7 +192,17 @@ class NN(nn.Module):
         action_xs = xn[:, obs_mask.size(1):, :]
         choice_logits = self.choice_logits(action_xs).squeeze(-1).float()
         choice_logits = choice_logits.masked_fill(action_logit_mask, float('-inf'))
-        return choice_logits
+        
+        # Compute value if value head is enabled
+        if hasattr(self, 'value_head'):
+            # Pool over non-masked elements for value prediction
+            # xn: [batch_size, seq_len, dim], pos_mask: [batch_size, seq_len]
+            seq_lengths = (~pos_mask).sum(dim=1, keepdim=True).float()  # [batch_size, 1]
+            pooled = xn.masked_fill(pos_mask.unsqueeze(-1), 0).sum(dim=1) / seq_lengths  # [batch_size, dim]
+            values = self.value_head(pooled).squeeze(-1).float()  # [batch_size]
+            return choice_logits, values
+        else:
+            return choice_logits
     
     @property
     def device(self):
@@ -322,8 +343,15 @@ def process_batch(batch, net):
     batch = move_to_device(batch, device)
     return net(batch)
 
-def output_to_cpu(output: torch.Tensor, batch: dict) -> list[np.ndarray]:
-    return output.cpu().numpy()
+def output_to_cpu(output, batch: dict):
+    """Convert network output to CPU numpy arrays."""
+    if isinstance(output, tuple):
+        # Handle (choice_logits, values) tuple
+        choice_logits, values = output
+        return choice_logits.cpu().numpy(), values.cpu().numpy()
+    else:
+        # Handle single choice_logits tensor
+        return output.cpu().numpy()
 
 
 

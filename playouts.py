@@ -200,9 +200,17 @@ class NNService:
                     output = process_batch(batch_tensors, self.net)
                     responses = output_to_cpu(output, batch_tensors)
                 
-                # Send responses as (batch_tensors, logits) pairs
-                for i, req in enumerate(requests[:unpadded_len]):
-                    req.response_queue.put((batch_tensors, responses[i]))
+                # Send responses as (batch_tensors, output) pairs
+                # output can be logits only, or (logits, values) tuple
+                if isinstance(responses, tuple):
+                    # Handle (logits, values) from value head
+                    logits, values = responses
+                    for i, req in enumerate(requests[:unpadded_len]):
+                        req.response_queue.put((batch_tensors, (logits[i], values[i])))
+                else:
+                    # Handle logits only
+                    for i, req in enumerate(requests[:unpadded_len]):
+                        req.response_queue.put((batch_tensors, responses[i]))
                 
             except Empty:
                 continue
@@ -254,9 +262,17 @@ def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random =
     return int(rng.choices(range(len(probs)), weights=softmax_probs, k=1)[0])
 
 def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
-                      temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> tuple[sts.GameAction, Path]:
+                      temperature: float = 1.0, stats: ChoiceStats = None, rng: random.Random = None) -> tuple[sts.GameAction, Path]:
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
-    collated_input, logits = service.get_logits(choice)
+    collated_input, output = service.get_logits(choice)
+    
+    # Handle both single logits and (logits, values) tuple
+    if isinstance(output, tuple):
+        logits, values = output
+    else:
+        logits = output
+        values = None
+    
     assert logits.size > 0, logits.shape
     
     # Convert logits to probabilities
@@ -380,7 +396,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                   relics_offered=relics_offered, relic_actions=relic_actions,
                   potions_offered=potions_offered, potion_actions=potion_actions)
 
-def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
+def run_game(seed: int, net: NN = None, temperature: float = 1.0, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     # Create seeded RNG instance for this game
     rng = random.Random(seed)
@@ -476,7 +492,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome, gc.floor_num)
 
-def run_game_data(seed: int, net: NN = None, temperature: float = 0.01, stats: ChoiceStats = None):
+def run_game_data(seed: int, net: NN = None, temperature: float = 1.0, stats: ChoiceStats = None):
     try:
         choices, outcome, final_floor = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
     except Exception as e:
@@ -618,8 +634,8 @@ if __name__ == "__main__":
                         help='Plot statistics')
     parser.add_argument('--no-save', action='store_true',
                         help='Disable saving results to parquet file')
-    parser.add_argument('--temperature', type=float, default=0.05,
-                        help='Temperature for Boltzmann sampling (default: 0.05)')
+    parser.add_argument('--temperature', type=float, default=1.0,
+                        help='Temperature for Boltzmann sampling (default: 1.0)')
     
     args = parser.parse_args()
     main(args)
