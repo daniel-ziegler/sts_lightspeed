@@ -278,7 +278,7 @@ def hyperparameter_sweep(train_df, valid_df):
         H = ModelHP()
         net = NN(H)
         net = net.to(device)
-        net = torch.compile(net, mode="reduce-overhead")
+        net = torch.compile(net, mode="default")
         
         # Update hyperparameters
         T = dataclasses.replace(base_T,

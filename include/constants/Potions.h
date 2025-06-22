@@ -273,6 +273,8 @@ namespace sts {
         }
     }
 
+    static constexpr int MAX_POTION_CAPACITY = 5;
+
 }
 
 #endif //STS_LIGHTSPEED_POTIONS_H

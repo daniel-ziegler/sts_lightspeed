@@ -83,7 +83,7 @@ namespace sts {
 
         int potionCount = 0;
         int potionCapacity = 3;
-        std::array<Potion, 5> potions;
+        std::array<Potion, MAX_POTION_CAPACITY> potions;
 
         int turn = 0;
         Player player;

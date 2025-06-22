@@ -1081,6 +1081,8 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("SWIFT_POTION", Potion::SWIFT_POTION)
         .value("WEAK_POTION", Potion::WEAK_POTION);
 
+    m.attr("MAX_POTION_CAPACITY") = MAX_POTION_CAPACITY;
+
 #ifdef VERSION_INFO
     m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);
 #else

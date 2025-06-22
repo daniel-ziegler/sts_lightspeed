@@ -25,6 +25,8 @@ class ModelHP:
 MAX_DECK_SIZE = 64  # Should be enough for most decks
 MAX_CHOICES = 10    # Usually 3-4, but can be more in edge cases
 MAX_UPGRADE = 21
+MAX_RELICS = 25     # Maximum number of relics a player typically has
+MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
 
 
 class ActionType(IntEnum):
@@ -139,6 +141,30 @@ class NN(nn.Module):
                           Use action_logit_space.ix_to_path to convert indices back to semantic actions.
         """
         choices = batch.pop('choices')
+        
+        # Debug: Check for invalid tensor values
+        deck_max = batch['deck']['value'].max()
+        deck_min = batch['deck']['value'].min()
+        if deck_min < 0:
+            print(f"DEBUG: Negative deck card ID: {deck_min}")
+            print(f"DEBUG: Deck values: {batch['deck']['value']}")
+            raise ValueError(f"Negative deck card ID: {deck_min}")
+        if deck_max >= len(sts.CardId):
+            print(f"DEBUG: Deck card ID too large: {deck_max}, max valid: {len(sts.CardId)-1}")
+            print(f"DEBUG: Deck values: {batch['deck']['value']}")
+            raise ValueError(f"Invalid deck card ID: {deck_max}")
+        
+        cards_max = choices['cards']['value'].max()
+        cards_min = choices['cards']['value'].min()
+        if cards_min < 0:
+            print(f"DEBUG: Negative choice card ID: {cards_min}")
+            print(f"DEBUG: Choice card values: {choices['cards']['value']}")
+            raise ValueError(f"Negative choice card ID: {cards_min}")
+        if cards_max >= len(sts.CardId):
+            print(f"DEBUG: Choice card ID too large: {cards_max}, max valid: {len(sts.CardId)-1}")
+            print(f"DEBUG: Choice card values: {choices['cards']['value']}")
+            raise ValueError(f"Invalid choice card ID: {cards_max}")
+        
         obs_embed, obs_mask = self.obs_embed(batch)
         action_logit_embed, action_logit_mask = self.action_logit_embed(choices)
 
@@ -228,83 +254,81 @@ def collate_fn(batch):
         chosen_idx_list.append(x['chosen_idx'])
         outcome_list.append(x['outcome'])
     
-    # Create batched tensors for observation
-    max_deck_len = max(len(obs['deck']['value']) for obs in obs_batch)
-    max_relics_len = max(len(obs['relics']['value']) for obs in obs_batch)
-    max_potions_len = max(len(obs['potions']['value']) for obs in obs_batch)
-    
+    # Create batched tensors for observation using fixed maximum sizes
     batch_obs = {
         'deck': {
-            'value': torch.full((len(batch), max_deck_len, 2), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_deck_len), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_DECK_SIZE, 2), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_DECK_SIZE), dtype=torch.bool)
         },
         'relics': {
-            'value': torch.full((len(batch), max_relics_len), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_relics_len), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_RELICS), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_RELICS), dtype=torch.bool)
         },
         'potions': {
-            'value': torch.full((len(batch), max_potions_len), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_potions_len), dtype=torch.bool)
+            'value': torch.full((len(batch), sts.MAX_POTION_CAPACITY), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), sts.MAX_POTION_CAPACITY), dtype=torch.bool)
         },
         'fixed_obs': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
     }
     
-    # Create batched tensors for choices
-    max_choice_cards_len = max(len(choices['cards']['value']) for choices in choices_batch)
-    max_choice_relics_len = max(len(choices['relics']['value']) for choices in choices_batch)
-    max_choice_potions_len = max(len(choices['potions']['value']) for choices in choices_batch)
-    max_choice_fixed_len = max(len(choices['fixed']['value']) for choices in choices_batch)
-    
+    # Create batched tensors for choices using fixed maximum sizes
     batch_choices = {
         'cards': {
-            'value': torch.full((len(batch), max_choice_cards_len, 2), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_choice_cards_len), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_CHOICES, 2), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
         },
         'relics': {
-            'value': torch.full((len(batch), max_choice_relics_len), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_choice_relics_len), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_CHOICES), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
         },
         'potions': {
-            'value': torch.full((len(batch), max_choice_potions_len), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_choice_potions_len), dtype=torch.bool)
+            'value': torch.full((len(batch), sts.MAX_POTION_CAPACITY), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), sts.MAX_POTION_CAPACITY), dtype=torch.bool)
         },
         'fixed': {
-            'value': torch.full((len(batch), max_choice_fixed_len), FixedAction.INVALID.value, dtype=torch.int32),
-            'mask': torch.ones((len(batch), max_choice_fixed_len), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_FIXED_ACTIONS), FixedAction.INVALID.value, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         }
     }
     
-    # Fill the batched tensors
+    # Fill the batched tensors with assertions to ensure data fits
     for i, (obs, choices) in enumerate(zip(obs_batch, choices_batch)):
-        # Fill observation
+        # Fill observation with size checks
         deck_len = len(obs['deck']['value'])
+        assert deck_len <= MAX_DECK_SIZE, f"Deck size {deck_len} exceeds maximum {MAX_DECK_SIZE}"
         batch_obs['deck']['value'][i, :deck_len] = obs['deck']['value']
         batch_obs['deck']['mask'][i, :deck_len] = obs['deck']['mask']
         
         relics_len = len(obs['relics']['value'])
+        assert relics_len <= MAX_RELICS, f"Relics count {relics_len} exceeds maximum {MAX_RELICS}"
         batch_obs['relics']['value'][i, :relics_len] = obs['relics']['value']
         batch_obs['relics']['mask'][i, :relics_len] = obs['relics']['mask']
         
         potions_len = len(obs['potions']['value'])
+        assert potions_len <= sts.MAX_POTION_CAPACITY, f"Potions count {potions_len} exceeds maximum {sts.MAX_POTION_CAPACITY}"
         batch_obs['potions']['value'][i, :potions_len] = obs['potions']['value']
         batch_obs['potions']['mask'][i, :potions_len] = obs['potions']['mask']
         
         batch_obs['fixed_obs'][i] = obs['fixed_obs']
         
-        # Fill choices
+        # Fill choices with size checks
         choice_cards_len = len(choices['cards']['value'])
+        assert choice_cards_len <= MAX_CHOICES, f"Choice cards count {choice_cards_len} exceeds maximum {MAX_CHOICES}"
         batch_choices['cards']['value'][i, :choice_cards_len] = choices['cards']['value']
         batch_choices['cards']['mask'][i, :choice_cards_len] = choices['cards']['mask']
         
         choice_relics_len = len(choices['relics']['value'])
+        assert choice_relics_len <= MAX_CHOICES, f"Choice relics count {choice_relics_len} exceeds maximum {MAX_CHOICES}"
         batch_choices['relics']['value'][i, :choice_relics_len] = choices['relics']['value']
         batch_choices['relics']['mask'][i, :choice_relics_len] = choices['relics']['mask']
         
         choice_potions_len = len(choices['potions']['value'])
+        assert choice_potions_len <= sts.MAX_POTION_CAPACITY, f"Choice potions count {choice_potions_len} exceeds maximum {sts.MAX_POTION_CAPACITY}"
         batch_choices['potions']['value'][i, :choice_potions_len] = choices['potions']['value']
         batch_choices['potions']['mask'][i, :choice_potions_len] = choices['potions']['mask']
         
         choice_fixed_len = len(choices['fixed']['value'])
+        assert choice_fixed_len <= MAX_FIXED_ACTIONS, f"Choice fixed actions count {choice_fixed_len} exceeds maximum {MAX_FIXED_ACTIONS}"
         batch_choices['fixed']['value'][i, :choice_fixed_len] = choices['fixed']['value']
         batch_choices['fixed']['mask'][i, :choice_fixed_len] = choices['fixed']['mask']
     
