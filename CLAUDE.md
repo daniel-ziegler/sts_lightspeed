@@ -63,6 +63,7 @@ The `test` executable provides various testing and simulation modes:
 - **Simulation** (`src/sim/`, `include/sim/`): ConsoleSimulator, BattleSimulator, debug utilities
 - **AI Agents** (`src/sim/search/`): ScumSearchAgent2 (MCTS), SimpleAgent, ExpertKnowledge heuristics
 - **Python Bindings** (`bindings/`): PyBind11 integration for ML workflows
+    - Main definitions: `bindings/slaythespire.cpp`
 
 ### Key Implementation Details
 
@@ -77,7 +78,7 @@ The codebase includes Python files for ML training and data generation:
 
 - **`network.py`** - Complete neural network architecture using transformer layers to predict win probabilities for card/relic choices and fixed actions. Includes custom embeddings, attention mechanisms, and data processing utilities
 - **`train.py`** - Training pipeline with hyperparameter sweeping, validation splits, and comprehensive evaluation including ROC curves and card/relic statistics. Supports command-line arguments for flexible training configuration
-- **`randomplayouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multi-threaded batched inference, choice statistics, and parallel game execution
+- **`playouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multi-threaded batched inference, choice statistics, and parallel game execution
 - **`inputs.py`** - Generic input space framework with embedding builders for sequences, enums, fixed vectors, and composite types. Provides abstraction layer for neural network input processing
 - **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
 - Various `.parquet` files contain training data rollouts from different experiments
