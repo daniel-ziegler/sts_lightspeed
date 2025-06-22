@@ -189,9 +189,22 @@ class FixedVecSpace(MaskedSpace[np.ndarray]):
         super().__init__()
     
     def build_embed(self, dim: int) -> nn.Module:
-        num_embed = SinusoidalEmbedding(dim, len(self.limits))
-        proj = nn.Linear(num_embed.out_dim, dim)
-        return nn.Sequential(num_embed, proj)
+        limits = self.limits  # Capture in closure
+        
+        class FixedVecEmbedding(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.num_embed = SinusoidalEmbedding(dim, len(limits))
+                self.proj = nn.Linear(self.num_embed.out_dim, dim)
+            
+            def forward(self, xs):
+                # xs is [batch_size, n_features]
+                embedded = self.proj(self.num_embed(xs))  # [batch_size, dim]
+                embedded = embedded.unsqueeze(1)  # [batch_size, 1, dim]
+                mask = torch.ones(embedded.shape[0], 1, dtype=torch.bool, device=embedded.device)
+                return embedded, mask
+        
+        return FixedVecEmbedding()
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         return np.array([rng.randint(0, limit) for limit in self.limits])

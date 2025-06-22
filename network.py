@@ -285,9 +285,18 @@ def collate_fn(batch):
     }
 
 def process_batch(batch, net):
-    # Move tensors to device
+    # Move tensors to device recursively
     device = net.device
-    batch = {k: v.to(device) for k, v in batch.items()}
+    
+    def move_to_device(obj):
+        if isinstance(obj, torch.Tensor):
+            return obj.to(device)
+        elif isinstance(obj, dict):
+            return {k: move_to_device(v) for k, v in obj.items()}
+        else:
+            return obj
+    
+    batch = move_to_device(batch)
     return net(batch)
 
 def output_to_cpu(output: torch.Tensor, batch: dict) -> list[np.ndarray]:

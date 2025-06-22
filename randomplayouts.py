@@ -117,7 +117,7 @@ def load_net(model_path, device=None):
     
     net = NN(ModelHP())
     net = net.to(device)
-    net = torch.compile(net, mode="reduce-overhead")
+    # net = torch.compile(net, mode="reduce-overhead")
     
     if model_path is not None:
         state = torch.load(model_path, map_location=device, weights_only=True)
@@ -197,7 +197,8 @@ class NNService:
             except Empty:
                 continue
             except Exception as e:
-                print(f"Error in NN service: {e}")
+                raise
+                print(f"Error in NN service: {type(e)} {e}")
                 # Send error response to all waiting requests
                 for req in requests:
                     req.response_queue.put(e)
