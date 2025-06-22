@@ -54,6 +54,10 @@ class Choice:
     relics_offered: list[sts.RelicId]
     relic_actions: list[sts.GameAction]
 
+    # ActionType.POTION
+    potions_offered: list[sts.Potion]
+    potion_actions: list[sts.GameAction]
+
     # ActionType.FIXED
     fixed_actions: list[FixedAction]  # Actions like SKIP
     fixed_actions_list: list[sts.GameAction]
@@ -74,6 +78,7 @@ class Choice:
                 upgrades=np.array(all_upgrades, dtype=np.int32),
             ),
             relics_offered=np.array(self.relics_offered, dtype=np.int32),
+            potions_offered=np.array(self.potions_offered, dtype=np.int32),
             fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
         )
@@ -271,15 +276,18 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
         if card_index >= len(choice.card_actions) or card_index < 0:
             print(f"Chosen index: {chosen_idx} from logits {logits}")
             print(f"{collated_input['choices']=}")
-            import ipdb; ipdb.set_trace()
             raise ValueError(f"Chosen index {chosen_idx} out of bounds for {path}")
         return choice.card_actions[card_index], path
     
     elif path[0] == 'relics':
         # path is ['relics', relic_index]
         relic_index = path[1]
-
         return choice.relic_actions[relic_index], path
+    
+    elif path[0] == 'potions':
+        # path is ['potions', potion_index]
+        potion_index = path[1]
+        return choice.potion_actions[potion_index], path
     
     elif path[0] == 'fixed':
         # path is ['fixed', action_index]
@@ -294,6 +302,8 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
     card_actions = []
     relics_offered = []
     relic_actions = []
+    potions_offered = []
+    potion_actions = []
     fixed_actions = []
     fixed_actions_list = []
     paths_offered = []
@@ -310,6 +320,9 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                 else:
                     cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
                     card_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.POTION:
+                potions_offered.append(gc.screen_state_info.rewards_container.potions[action.idx1])
+                potion_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                 fixed_actions.append(FixedAction.SKIP)
                 fixed_actions_list.append(action)
@@ -317,6 +330,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
     elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
         # Shop cards are now returned as [card_set] where card_set contains all shop cards
         all_shop_relics = gc.screen_state_info.shop.relics
+        all_shop_potions = gc.screen_state_info.shop.potions
         for action in actions:
             assert action.isValidAction(gc), f"Invalid shop action: {action.getDesc(gc)}"
             if action.rewards_action_type == sts.RewardsActionType.CARD:
@@ -325,6 +339,9 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             elif action.rewards_action_type == sts.RewardsActionType.RELIC:
                 relics_offered.append(all_shop_relics[action.idx1])
                 relic_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.POTION:
+                potions_offered.append(all_shop_potions[action.idx1])
+                potion_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                 fixed_actions.append(FixedAction.SKIP)
                 fixed_actions_list.append(action)
@@ -360,7 +377,8 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
     return Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
                   paths_offered=paths_offered, path_actions=path_actions,
                   fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
-                  relics_offered=relics_offered, relic_actions=relic_actions)
+                  relics_offered=relics_offered, relic_actions=relic_actions,
+                  potions_offered=potions_offered, potion_actions=potion_actions)
 
 def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
@@ -406,7 +424,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 choice = construct_choice(gc, obs, actions)
                 # Pick action using either network or agent
                 if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS):
-                    assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
+                    assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.potions_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
                     action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     
                     # Use path information to determine choice_type and chosen_idx
@@ -415,6 +433,9 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         chosen_idx = action_path[1]
                     elif action_path[0] == 'relics':
                         choice_type = ActionType.RELIC
+                        chosen_idx = action_path[1]
+                    elif action_path[0] == 'potions':
+                        choice_type = ActionType.POTION
                         chosen_idx = action_path[1]
                     elif action_path[0] == 'fixed':
                         choice_type = ActionType.FIXED

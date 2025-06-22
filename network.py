@@ -32,6 +32,7 @@ class ActionType(IntEnum):
     CARD = auto()
     PATH = auto()
     RELIC = auto()
+    POTION = auto()
     EVENT_OPTION = auto()
     FIXED = auto()  # for fixed actions like SKIP
 
@@ -59,6 +60,7 @@ obs_space = DictSpace({
 action_logit_space = DictSpace({
     'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
+    'potions': SequenceSpace(EnumSpace(sts.Potion)),
     'fixed': SequenceSpace(EnumSpace(FixedAction)),
 })
 
@@ -206,6 +208,10 @@ def collate_fn(batch):
                 'value': torch.tensor(x['relics_offered'], dtype=torch.int32),
                 'mask': torch.zeros(len(x['relics_offered']), dtype=torch.bool)
             },
+            'potions': {
+                'value': torch.tensor(x['potions_offered'], dtype=torch.int32),
+                'mask': torch.zeros(len(x['potions_offered']), dtype=torch.bool)
+            },
             'fixed': {
                 'value': torch.tensor(x['fixed_actions'], dtype=torch.int32),
                 'mask': torch.zeros(len(x['fixed_actions']), dtype=torch.bool)
@@ -236,6 +242,7 @@ def collate_fn(batch):
     # Create batched tensors for choices
     max_choice_cards_len = max(len(choices['cards']['value']) for choices in choices_batch)
     max_choice_relics_len = max(len(choices['relics']['value']) for choices in choices_batch)
+    max_choice_potions_len = max(len(choices['potions']['value']) for choices in choices_batch)
     max_choice_fixed_len = max(len(choices['fixed']['value']) for choices in choices_batch)
     
     batch_choices = {
@@ -246,6 +253,10 @@ def collate_fn(batch):
         'relics': {
             'value': torch.full((len(batch), max_choice_relics_len), 0, dtype=torch.int32),
             'mask': torch.ones((len(batch), max_choice_relics_len), dtype=torch.bool)
+        },
+        'potions': {
+            'value': torch.full((len(batch), max_choice_potions_len), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), max_choice_potions_len), dtype=torch.bool)
         },
         'fixed': {
             'value': torch.full((len(batch), max_choice_fixed_len), FixedAction.INVALID.value, dtype=torch.int32),
@@ -274,6 +285,10 @@ def collate_fn(batch):
         choice_relics_len = len(choices['relics']['value'])
         batch_choices['relics']['value'][i, :choice_relics_len] = choices['relics']['value']
         batch_choices['relics']['mask'][i, :choice_relics_len] = choices['relics']['mask']
+        
+        choice_potions_len = len(choices['potions']['value'])
+        batch_choices['potions']['value'][i, :choice_potions_len] = choices['potions']['value']
+        batch_choices['potions']['mask'][i, :choice_potions_len] = choices['potions']['mask']
         
         choice_fixed_len = len(choices['fixed']['value'])
         batch_choices['fixed']['value'][i, :choice_fixed_len] = choices['fixed']['value']

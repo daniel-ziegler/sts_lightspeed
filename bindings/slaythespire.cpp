@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include "constants/MonsterEncounters.h"
+#include "constants/Potions.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/ScumSearchAgent2.h"
 #include "sim/SimHelpers.h"
@@ -1030,6 +1031,52 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("CIRCLET", RelicId::CIRCLET)
         .value("RED_CIRCLET", RelicId::RED_CIRCLET)
         .value("INVALID", RelicId::INVALID);
+
+    pybind11::enum_<Potion> potionEnum(m, "Potion", pybind11::metaclass(enum_metaclass));
+    potionEnum.value("INVALID", Potion::INVALID)
+        .value("EMPTY_POTION_SLOT", Potion::EMPTY_POTION_SLOT)
+        .value("AMBROSIA", Potion::AMBROSIA)
+        .value("ANCIENT_POTION", Potion::ANCIENT_POTION)
+        .value("ATTACK_POTION", Potion::ATTACK_POTION)
+        .value("BLESSING_OF_THE_FORGE", Potion::BLESSING_OF_THE_FORGE)
+        .value("BLOCK_POTION", Potion::BLOCK_POTION)
+        .value("BLOOD_POTION", Potion::BLOOD_POTION)
+        .value("BOTTLED_MIRACLE", Potion::BOTTLED_MIRACLE)
+        .value("COLORLESS_POTION", Potion::COLORLESS_POTION)
+        .value("CULTIST_POTION", Potion::CULTIST_POTION)
+        .value("CUNNING_POTION", Potion::CUNNING_POTION)
+        .value("DEXTERITY_POTION", Potion::DEXTERITY_POTION)
+        .value("DISTILLED_CHAOS", Potion::DISTILLED_CHAOS)
+        .value("DUPLICATION_POTION", Potion::DUPLICATION_POTION)
+        .value("ELIXIR_POTION", Potion::ELIXIR_POTION)
+        .value("ENERGY_POTION", Potion::ENERGY_POTION)
+        .value("ENTROPIC_BREW", Potion::ENTROPIC_BREW)
+        .value("ESSENCE_OF_DARKNESS", Potion::ESSENCE_OF_DARKNESS)
+        .value("ESSENCE_OF_STEEL", Potion::ESSENCE_OF_STEEL)
+        .value("EXPLOSIVE_POTION", Potion::EXPLOSIVE_POTION)
+        .value("FAIRY_POTION", Potion::FAIRY_POTION)
+        .value("FEAR_POTION", Potion::FEAR_POTION)
+        .value("FIRE_POTION", Potion::FIRE_POTION)
+        .value("FLEX_POTION", Potion::FLEX_POTION)
+        .value("FOCUS_POTION", Potion::FOCUS_POTION)
+        .value("FRUIT_JUICE", Potion::FRUIT_JUICE)
+        .value("GAMBLERS_BREW", Potion::GAMBLERS_BREW)
+        .value("GHOST_IN_A_JAR", Potion::GHOST_IN_A_JAR)
+        .value("HEART_OF_IRON", Potion::HEART_OF_IRON)
+        .value("LIQUID_BRONZE", Potion::LIQUID_BRONZE)
+        .value("LIQUID_MEMORIES", Potion::LIQUID_MEMORIES)
+        .value("POISON_POTION", Potion::POISON_POTION)
+        .value("POTION_OF_CAPACITY", Potion::POTION_OF_CAPACITY)
+        .value("POWER_POTION", Potion::POWER_POTION)
+        .value("REGEN_POTION", Potion::REGEN_POTION)
+        .value("SKILL_POTION", Potion::SKILL_POTION)
+        .value("SMOKE_BOMB", Potion::SMOKE_BOMB)
+        .value("SNECKO_OIL", Potion::SNECKO_OIL)
+        .value("SPEED_POTION", Potion::SPEED_POTION)
+        .value("STANCE_POTION", Potion::STANCE_POTION)
+        .value("STRENGTH_POTION", Potion::STRENGTH_POTION)
+        .value("SWIFT_POTION", Potion::SWIFT_POTION)
+        .value("WEAK_POTION", Potion::WEAK_POTION);
 
 #ifdef VERSION_INFO
     m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);
