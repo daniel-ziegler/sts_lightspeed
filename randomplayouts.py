@@ -101,7 +101,7 @@ def process_choice(net: NN, choice: Choice) -> np.ndarray:
 
 
 @dataclass
-class ChoiceOutcome:
+class Decision:
     """A Choice and what was chosen from it"""
     choice: Choice
 
@@ -294,7 +294,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
 
     agent = sts.Agent()
     agent.simulation_count_base = 1000
-    choices: list[ChoiceOutcome] = []
+    choices: list[Decision] = []
 
     # Create an event to signal timeout
     timeout_event = threading.Event()
@@ -459,7 +459,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                                   paths_offered=paths_offered, path_actions=path_actions,
                                   fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
                                   relics_offered=relics_offered, relic_actions=relic_actions)
-                    choices.append(ChoiceOutcome(choice, choice_type=choice_type, chosen_idx=chosen_idx))
+                    choices.append(Decision(choice, choice_type=choice_type, chosen_idx=chosen_idx))
                     
                 if verbose:
                     print(action.getDesc(gc))
