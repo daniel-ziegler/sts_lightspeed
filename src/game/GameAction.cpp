@@ -325,7 +325,7 @@ bool isValidRewardsAction(const GameContext &gc, const GameAction a) {
 bool isValidShopAction(const GameContext &gc, const GameAction a) {
     const auto &s = gc.info.shop;
 
-    const auto select = a.getIdx1();
+    const auto select = a.getIdx2();
     switch (a.getRewardsActionType()) {
         case GameAction::RewardsActionType::CARD:
             if (select > 6) {
@@ -494,7 +494,7 @@ void executeShopAction(GameContext &gc, const GameAction a) {
 
     switch (a.getRewardsActionType()) {
         case GameAction::RewardsActionType::CARD:
-            s.buyCard(gc, a.getIdx1());
+            s.buyCard(gc, a.getIdx2());
             break;
 
         case GameAction::RewardsActionType::POTION:
@@ -615,7 +615,7 @@ std::vector<GameAction> getAllShopActions(const sts::GameContext &gc) {
     for (int i = 0; i < 7; ++i) {
         auto price = s.cardPrice(i);
         if (price != -1 && gc.gold >= price) {
-            actions.emplace_back(GameAction::RewardsActionType::CARD, i);
+            actions.emplace_back(GameAction::RewardsActionType::CARD, 0, i);
         }
     }
 
