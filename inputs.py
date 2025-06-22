@@ -94,6 +94,14 @@ class IntSpace(ScalarSpace[int]):
         return rng.integers(0, self.limit)
 
 
+class SequenceEmbedding(nn.Module):
+    """Module for embedding sequences using an element embedding."""
+    def __init__(self, element_embedding: nn.Module):
+        super().__init__()
+        self.element_embedding = element_embedding
+    
+    def forward(self, xs: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.element_embedding(xs["value"]), xs["mask"]
 
 class SequenceSpace(MaskedSpace[Sequence[T]]):
     def __init__(self, element_space: ScalarSpace[T]):
@@ -108,64 +116,18 @@ class SequenceSpace(MaskedSpace[Sequence[T]]):
         return [self.element_space.sample(rng) for _ in range(length)]
 
 
-    def try_ix_to_path(self, xs: Sequence[T], ix: int) -> PathOrRemainder:
-        if ix < len(xs):
+    def try_ix_to_path(self, xs: dict, ix: int) -> PathOrRemainder:
+        l = xs["value"].size(1)
+        if ix < l:
             return [ix]
         else:
-            return ix - len(xs)
+            return ix - l
 
-    def path_to_ix(self, xs: Sequence[T], path: Path) -> int:
+    def path_to_ix(self, xs: dict, path: Path) -> int:
         (i,) = path
-        if i >= len(xs):
+        if i >= xs["value"].size(1):
             raise IndexError(f"Path index {i} out of bounds")
         return i
-
-class SequenceEmbedding(nn.Module):
-    """Module for embedding sequences using an element embedding."""
-    def __init__(self, element_embedding: nn.Module):
-        super().__init__()
-        self.element_embedding = element_embedding
-    
-    def forward(self, xs: dict) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.element_embedding(xs["value"]), xs["mask"]
-
-class TupleAddEmbedding(nn.Module):
-    """Module for embedding tuples by adding component embeddings."""
-    def __init__(self, component_embeddings: nn.ModuleList):
-        super().__init__()
-        self.component_embeddings = component_embeddings
-    
-    def forward(self, xs: torch.Tensor) -> torch.Tensor:
-        # xs shape: [batch, seq, n_components] or [batch, n_components]
-        # Split along last dimension and apply embeddings
-        component_outputs = []
-        for i, emb in enumerate(self.component_embeddings):
-            component_input = xs[..., i]  # [batch, seq] or [batch]
-            component_outputs.append(emb(component_input))
-        
-        # Sum the embeddings
-        return torch.sum(torch.stack(component_outputs, dim=0), dim=0)
-
-class TupleConcatEmbedding(nn.Module):
-    """Module for embedding tuples by concatenating component embeddings."""
-    def __init__(self, component_embeddings: nn.ModuleList):
-        super().__init__()
-        self.component_embeddings = component_embeddings
-    
-    def forward(self, xs: tuple) -> tuple[torch.Tensor, torch.Tensor]:
-        embeddings, masks = zip(*[emb(x) for emb, x in zip(self.component_embeddings, xs)])
-        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
-
-class DictEmbedding(nn.Module):
-    """Module for embedding dictionaries by concatenating component embeddings."""
-    def __init__(self, component_embeddings: nn.ModuleDict, spaces: dict):
-        super().__init__()
-        self.component_embeddings = component_embeddings
-        self.spaces = spaces
-    
-    def forward(self, xs: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
-        embeddings, masks = zip(*[self.component_embeddings[k](xs[k]) for k in self.spaces.keys()])
-        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
 
 class SinusoidalEmbedding(nn.Module):
     """Standalone sinusoidal embedding for numerical features."""
@@ -232,6 +194,22 @@ class FixedVecSpace(MaskedSpace[np.ndarray]):
         else:
             raise IndexError(f"Path {path} is out of bounds")
 
+class TupleAddEmbedding(nn.Module):
+    """Module for embedding tuples by adding component embeddings."""
+    def __init__(self, component_embeddings: nn.ModuleList):
+        super().__init__()
+        self.component_embeddings = component_embeddings
+    
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        # xs shape: [batch, seq, n_components] or [batch, n_components]
+        # Split along last dimension and apply embeddings
+        component_outputs = []
+        for i, emb in enumerate(self.component_embeddings):
+            component_input = xs[..., i]  # [batch, seq] or [batch]
+            component_outputs.append(emb(component_input))
+        
+        # Sum the embeddings
+        return torch.sum(torch.stack(component_outputs, dim=0), dim=0)
 class TupleAddSpace(ScalarSpace[tuple]):
     def __init__(self, *spaces: ScalarSpace[Any]):
         self.spaces = spaces
@@ -243,6 +221,26 @@ class TupleAddSpace(ScalarSpace[tuple]):
     def sample(self, rng: np.random.Generator) -> tuple:
         return tuple(space.sample(rng) for space in self.spaces)
 
+class TupleConcatEmbedding(nn.Module):
+    """Module for embedding tuples by concatenating component embeddings."""
+    def __init__(self, component_embeddings: nn.ModuleList):
+        super().__init__()
+        self.component_embeddings = component_embeddings
+    
+    def forward(self, xs: tuple) -> tuple[torch.Tensor, torch.Tensor]:
+        embeddings, masks = zip(*[emb(x) for emb, x in zip(self.component_embeddings, xs)])
+        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
+
+class DictEmbedding(nn.Module):
+    """Module for embedding dictionaries by concatenating component embeddings."""
+    def __init__(self, component_embeddings: nn.ModuleDict, spaces: dict):
+        super().__init__()
+        self.component_embeddings = component_embeddings
+        self.spaces = spaces
+    
+    def forward(self, xs: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        embeddings, masks = zip(*[self.component_embeddings[k](xs[k]) for k in self.spaces.keys()])
+        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
 
 class TupleConcatSpace(MaskedSpace[tuple]):
     def __init__(self, *spaces: MaskedSpace[Any]):

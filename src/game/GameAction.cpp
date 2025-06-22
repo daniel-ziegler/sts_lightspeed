@@ -94,7 +94,14 @@ std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) con
             }
 
         case ScreenState::BOSS_RELIC_REWARDS:
-            return os << "boss relic reward " << getIdx1();
+            switch (getRewardsActionType()) {
+                case GameAction::RewardsActionType::RELIC:
+                    return os << "boss relic reward " << getIdx1();
+                case GameAction::RewardsActionType::SKIP:
+                    return os << "skip boss relic reward";
+                default:
+                    return os << "invalid boss relic reward action";
+            }
 
         case ScreenState::CARD_SELECT:
             return os << "card select " << getIdx1();
@@ -387,6 +394,17 @@ bool isValidCardSelectScreenAction(const GameContext &gc, const GameAction a) {
     return a.getIdx1() >= 0 && a.getIdx1() < gc.info.toSelectCards.size();
 }
 
+bool isValidBossRelicRewardAction(const GameContext &gc, const GameAction a) {
+    switch (a.getRewardsActionType()) {
+        case GameAction::RewardsActionType::RELIC:
+            return a.getIdx1() < 3;
+        case GameAction::RewardsActionType::SKIP:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool GameAction::isValidAction(const sts::GameContext &gc) const {
     if (gc.outcome != GameOutcome::UNDECIDED) {
         return false;
@@ -408,7 +426,7 @@ bool GameAction::isValidAction(const sts::GameContext &gc) const {
             return isValidRewardsAction(gc, *this);
 
         case ScreenState::BOSS_RELIC_REWARDS:
-            return getIdx1() < 4;
+            return isValidBossRelicRewardAction(gc, *this);
 
         case ScreenState::CARD_SELECT:
             return isValidCardSelectScreenAction(gc, *this);
@@ -553,7 +571,11 @@ void GameAction::execute(GameContext &gc) const {
             break;
 
         case ScreenState::BOSS_RELIC_REWARDS:
-            gc.chooseBossRelic(getIdx1());
+            if (getRewardsActionType() == GameAction::RewardsActionType::RELIC) {
+                gc.chooseBossRelic(getIdx1());
+            } else {
+                gc.regainControl();
+            }
             break;
 
         case ScreenState::CARD_SELECT:
@@ -732,6 +754,15 @@ std::vector<GameAction> getAllMapActions(const sts::GameContext &gc) {
     return actions;
 }
 
+std::vector<GameAction> getAllBossRelicRewardActions(const sts::GameContext &gc) {
+    return {
+        GameAction(GameAction::RewardsActionType::RELIC, 0),
+        GameAction(GameAction::RewardsActionType::RELIC, 1),
+        GameAction(GameAction::RewardsActionType::RELIC, 2),
+        GameAction(GameAction::RewardsActionType::SKIP),
+    };
+}
+
 std::vector<GameAction> GameAction::getAllActionsInState(const sts::GameContext &gc) {
     if (gc.outcome != GameOutcome::UNDECIDED) {
         return {};
@@ -750,7 +781,7 @@ std::vector<GameAction> GameAction::getAllActionsInState(const sts::GameContext 
             return getAllRewardActions(gc);
 
         case ScreenState::BOSS_RELIC_REWARDS:
-            return {0,1,2,3};
+            return getAllBossRelicRewardActions(gc);
 
         case ScreenState::CARD_SELECT: {
             std::vector<GameAction> actions;

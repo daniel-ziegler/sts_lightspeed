@@ -2414,12 +2414,9 @@ void GameContext::chooseNeowOption(const Neow::Option &o) {
 }
 
 void GameContext::chooseBossRelic(int idx) {
-    if (idx >= 0 && idx < 3) {
-        bool screenUp = obtainRelic(info.bossRelics[idx]);
-        if (!screenUp) {
-            regainControl();
-        }
-    } else if (idx == 3) {
+    assert (idx >= 0 && idx < 3);
+    bool screenUp = obtainRelic(info.bossRelics[idx]);
+    if (!screenUp) {
         regainControl();
     }
 }

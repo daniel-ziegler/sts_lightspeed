@@ -42,7 +42,7 @@ class Choice:
     obs: sts.NNRepresentation
 
     # ActionType.CARD
-    cards_offered: list[list[sts.Card]]  # List of card sets
+    cards_offered: list[sts.Card]
     card_actions: list[sts.GameAction]
 
     # ActionType.PATH
@@ -62,10 +62,9 @@ class Choice:
         all_card_ids = []
         all_upgrades = []
         
-        for card_set in self.cards_offered:
-            for card in card_set:
-                all_card_ids.append(int(card.id))
-                all_upgrades.append(card.upgrade_count)
+        for card in self.cards_offered:
+            all_card_ids.append(int(card.id))
+            all_upgrades.append(card.upgrade_count)
         
         return dict(
             obs=self.obs.as_dict(),
@@ -132,7 +131,7 @@ def load_net(model_path, device=None):
     return net
 
 class NNRequest(NamedTuple):
-    choice_dict: dict
+    choice: Choice
     response_queue: Queue
 
 class NNService:
@@ -179,15 +178,15 @@ class NNService:
                         requests.append(requests[-1])
                 
                 # Process batch
-                choice_dicts = [req.choice_dict for req in requests]
+                choices = [req.choice for req in requests]
                 
                 # Create batch
                 batch = [{
-                    **flatten_dict(choice_dict),
+                    **flatten_dict(choice.as_dict()),
                     'choice_type': 0,  # Dummy value
                     'chosen_idx': 0,  # Dummy value
                     'outcome': 0.0,   # Dummy value
-                } for choice_dict in choice_dicts]
+                } for choice in choices]
                 
                 # Process through network
                 batch_tensors = collate_fn(batch)
@@ -195,9 +194,9 @@ class NNService:
                     output = process_batch(batch_tensors, self.net)
                     responses = output_to_cpu(output, batch_tensors)
                 
-                # Send responses
+                # Send responses as (batch_tensors, logits) pairs
                 for i, req in enumerate(requests[:unpadded_len]):
-                    req.response_queue.put(responses[i])
+                    req.response_queue.put((batch_tensors, responses[i]))
                 
             except Empty:
                 continue
@@ -207,10 +206,10 @@ class NNService:
                 for req in requests:
                     req.response_queue.put(e)
     
-    def get_logits(self, choice_dict: dict) -> np.ndarray:
-        """Get flat logits array from the network. Thread-safe."""
+    def get_logits(self, choice: Choice) -> tuple[dict, np.ndarray]:
+        """Get (batch_tensors, logits) from the network. Thread-safe."""
         response_queue = Queue()
-        self.request_queue.put(NNRequest(choice_dict, response_queue))
+        self.request_queue.put(NNRequest(choice, response_queue))
         response = response_queue.get()
         
         if isinstance(response, Exception):
@@ -251,8 +250,7 @@ def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random =
 def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
                       temperature: float = 0.01, stats: ChoiceStats = None, rng: random.Random = None) -> sts.GameAction:
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
-    choice_dict = choice.as_dict()
-    logits = service.get_logits(choice_dict)
+    collated_input, logits = service.get_logits(choice)
     assert logits.size > 0, logits.shape
     
     # Convert logits to probabilities
@@ -264,16 +262,22 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     chosen_idx = sample_boltzmann(probs, temperature, rng)
     
     # Convert flat index back to semantic path using action_logit_space
-    path = action_logit_space.ix_to_path(choice_dict, chosen_idx)
+    path = action_logit_space.ix_to_path(collated_input['choices'], chosen_idx)
     
     if path[0] == 'cards':
         # path is ['cards', card_index]
         card_index = path[1]
+        if card_index >= len(choice.card_actions) or card_index < 0:
+            print(f"Chosen index: {chosen_idx} from logits {logits}")
+            print(f"{collated_input['choices']=}")
+            import ipdb; ipdb.set_trace()
+            raise ValueError(f"Chosen index {chosen_idx} out of bounds for {path}")
         return choice.card_actions[card_index]
     
     elif path[0] == 'relics':
         # path is ['relics', relic_index]
         relic_index = path[1]
+
         return choice.relic_actions[relic_index]
     
     elif path[0] == 'fixed':
@@ -335,9 +339,9 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 
                 # Build from available game actions, maintaining correspondence
                 if gc.screen_state == sts.ScreenState.REWARDS:
-                    cards_offered = gc.screen_state_info.rewards_container.cards
                     for action in actions:
                         if action.rewards_action_type == sts.RewardsActionType.CARD:
+                            cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
                             card_actions.append(action)
                         elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                             fixed_actions.append(FixedAction.SKIP)
@@ -345,10 +349,10 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         
                 elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
                     # Shop cards are now returned as [card_set] where card_set contains all shop cards
-                    cards_offered = gc.screen_state_info.shop.cards  # This is now vector<vector<Card>>
                     all_shop_relics = gc.screen_state_info.shop.relics
                     for action in actions:
                         if action.rewards_action_type == sts.RewardsActionType.CARD:
+                            cards_offered.append(gc.screen_state_info.shop.cards[action.idx2])
                             card_actions.append(action)
                         elif action.rewards_action_type == sts.RewardsActionType.RELIC:
                             relics_offered.append(all_shop_relics[action.idx1])
@@ -369,6 +373,8 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                             fixed_actions.append(FixedAction.SKIP)
                             fixed_actions_list.append(action)
+                        else:
+                            raise ValueError(f"Invalid boss relic reward action: {action.getDesc(gc)}")
                     
                 elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
                     def xy_to_roomid(x, y):
@@ -382,9 +388,11 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     for action in actions:
                         paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
                         path_actions.append(action)
-
+                
                 # Pick action using either network or agent
                 if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS):
+                    assert cards_offered or paths_offered or relics_offered or fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
+
                     choice = Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
                                   paths_offered=paths_offered, path_actions=path_actions,
                                   fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
@@ -402,6 +410,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     raise ValueError("chosen action not in list of actions")
 
                 # Translate action into choice_type and chosen_idx
+                # TODO this is obsolete
                 choice_type = ActionType.INVALID
                 chosen_idx = -1
                 
@@ -410,9 +419,9 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     if action.rewards_action_type == sts.RewardsActionType.SKIP:
                         choice_type = ActionType.FIXED
                         chosen_idx = 0
-                    elif cards_offered and which_card < len(cards_offered[which_set]):
+                    elif which_card < len(cards_offered):
                         choice_type = ActionType.CARD
-                        chosen_idx = sum([len(s) for s in cards_offered[:which_set]]) + which_card
+                        chosen_idx = which_card
                         
                 elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
                     if action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
@@ -420,7 +429,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                         chosen_idx = 1
                     elif action.rewards_action_type == sts.RewardsActionType.CARD:
                         choice_type = ActionType.CARD
-                        chosen_idx = sum([len(s) for s in cards_offered[:action.idx1]]) + action.idx2
+                        chosen_idx = action.idx2
                     elif action.rewards_action_type == sts.RewardsActionType.RELIC:
                         choice_type = ActionType.RELIC
                         chosen_idx = action.idx1
@@ -572,7 +581,7 @@ def main(args):
     print(f"Winrate: {winrate:.1%}")
     
     # Plot choice statistics
-    if not args.no_plots:
+    if args.plots:
         stats.plot_stats()
 
 if __name__ == "__main__":
@@ -587,8 +596,8 @@ if __name__ == "__main__":
                         help='Number of games to simulate')
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for neural network inference')
-    parser.add_argument('--no-plots', action='store_true',
-                        help='Disable plotting of statistics')
+    parser.add_argument('--plots', action='store_true',
+                        help='Plot statistics')
     parser.add_argument('--no-save', action='store_true',
                         help='Disable saving results to parquet file')
     parser.add_argument('--temperature', type=float, default=0.05,

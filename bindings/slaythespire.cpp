@@ -219,17 +219,13 @@ PYBIND11_MODULE(slaythespire, m) {
             return s.removeCost == -1 ? std::nullopt : std::make_optional(s.removeCost);
         })
         .def_property_readonly("cards", [](const Shop& s) {
-            // Create vector of Card objects
             std::vector<Card> cards;
             for (int i = 0; i < 7; ++i) {
                 if (s.cards[i] != CardId::INVALID) {
                     cards.push_back(s.cards[i]);
                 }
             }
-            // Return as a single-element vector containing one vector of Cards
-            std::vector<std::vector<Card>> ret;
-            ret.push_back(cards);
-            return ret;
+            return cards;
         })
         .def_property_readonly("potions", [](const Shop& s) {
             return std::vector<Potion>(s.potions, s.potions + 3);
