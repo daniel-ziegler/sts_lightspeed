@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from enum import IntEnum
+from sympy import im
 import torch
 from torch import nn
 
@@ -70,13 +71,23 @@ class MaskedSpace(Generic[T], Space[T]):
 
 TEnum = TypeVar('TEnum', bound=IntEnum)
 
+class EnumEmbedding(nn.Module):
+    def __init__(self, enum_class: Type[TEnum], dim: int):
+        super().__init__()
+        self.enum_class = enum_class
+        self.embedding = nn.Embedding(len(enum_class), dim)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        assert ((0 <= x) & (x < len(self.enum_class))).all(), f"Enum values {x} out of bounds for {self.enum_class}"
+        return self.embedding(x)
+
 class EnumSpace(ScalarSpace[TEnum]):
     def __init__(self, enum_class: Type[TEnum]):
         self.enum_class = enum_class
         super().__init__()
     
     def build_embed(self, dim: int) -> nn.Module:
-        return nn.Embedding(len(self.enum_class), dim)
+        return EnumEmbedding(self.enum_class, dim)
 
     def sample(self, rng: np.random.Generator) -> TEnum:
         return rng.choice(list(self.enum_class))

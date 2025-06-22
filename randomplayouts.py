@@ -351,6 +351,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     # Shop cards are now returned as [card_set] where card_set contains all shop cards
                     all_shop_relics = gc.screen_state_info.shop.relics
                     for action in actions:
+                        assert action.isValidAction(gc), f"Invalid shop action: {action.getDesc(gc)}"
                         if action.rewards_action_type == sts.RewardsActionType.CARD:
                             cards_offered.append(gc.screen_state_info.shop.cards[action.idx2])
                             card_actions.append(action)
@@ -457,6 +458,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                     
                 if verbose:
                     print(action.getDesc(gc))
+                assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
                 action.execute(gc)
         except Exception:
             raise

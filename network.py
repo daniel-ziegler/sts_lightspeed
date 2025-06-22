@@ -45,9 +45,9 @@ class InputType(IntEnum):
 
 
 class FixedAction(IntEnum):
-    INVALID = -1
-    SKIP = 0
-    REMOVE = 1
+    INVALID = 0
+    SKIP = auto()
+    REMOVE = auto()
 
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),

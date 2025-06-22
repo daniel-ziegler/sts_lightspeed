@@ -154,6 +154,9 @@ PYBIND11_MODULE(slaythespire, m) {
         ga.printDesc(oss, gc);
         return oss.str();
     });
+    gameAction.def("isValidAction", [](const GameAction &ga, const GameContext &gc) {
+        return ga.isValidAction(gc);
+    });
     gameAction.def_property_readonly("rewards_action_type", [](const GameAction &ga) {
         return ga.getRewardsActionType();
     });
