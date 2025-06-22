@@ -75,6 +75,7 @@ namespace sts {
             pybind11::array_t<int> fixedObservation;
             NNCardsRepresentation deck;
             NNRelicsRepresentation relics;
+            pybind11::array_t<Potion> potions;
             NNMapRepresentation map;
             int mapX, mapY;
             // todo history

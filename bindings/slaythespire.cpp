@@ -48,6 +48,7 @@ pybind11::dict py::NNRepresentation::as_dict() const {
     return pybind11::dict("fixed_observation"_a=fixedObservation,
                         "deck"_a=deck.as_dict(),
                         "relics"_a=relics.as_dict(),
+                        "potions"_a=potions,
                         "map"_a=map.as_dict());
 }
 
@@ -100,6 +101,7 @@ PYBIND11_MODULE(slaythespire, m) {
             },
              "remove a card at a idx in the deck"
         )
+        .def("obtain_potion", &GameContext::obtainPotion, "add a potion to the player")
         .def_property_readonly("relics",
                [] (const GameContext &gc) { return std::vector(gc.relics.relics); },
                "returns a copy of the list of relics"
@@ -140,7 +142,8 @@ PYBIND11_MODULE(slaythespire, m) {
 
         .def_readwrite("shop_remove_count", &GameContext::shopRemoveCount)
         .def_readwrite("speedrun_pace", &GameContext::speedrunPace)
-        .def_readwrite("note_for_yourself_card", &GameContext::noteForYourselfCard);
+        .def_readwrite("note_for_yourself_card", &GameContext::noteForYourselfCard)
+        .def_readwrite("potion_capacity", &GameContext::potionCapacity);
 
     pybind11::class_<GameAction> gameAction(m, "GameAction");
     gameAction.def("getAllActionsInState", &GameAction::getAllActionsInState);

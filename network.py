@@ -54,6 +54,7 @@ class FixedAction(IntEnum):
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
+    'potions': SequenceSpace(EnumSpace(sts.Potion)),
     'fixed_obs': FixedVecSpace(sts.getFixedObservationMaximums()),
 })
 
@@ -195,6 +196,10 @@ def collate_fn(batch):
                 'value': torch.tensor(x['obs.relics.relics'], dtype=torch.int32),
                 'mask': torch.zeros(len(x['obs.relics.relics']), dtype=torch.bool)
             },
+            'potions': {
+                'value': torch.tensor(x['obs.potions'], dtype=torch.int32),
+                'mask': torch.zeros(len(x['obs.potions']), dtype=torch.bool)
+            },
             'fixed_obs': torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
         }
         
@@ -226,6 +231,7 @@ def collate_fn(batch):
     # Create batched tensors for observation
     max_deck_len = max(len(obs['deck']['value']) for obs in obs_batch)
     max_relics_len = max(len(obs['relics']['value']) for obs in obs_batch)
+    max_potions_len = max(len(obs['potions']['value']) for obs in obs_batch)
     
     batch_obs = {
         'deck': {
@@ -235,6 +241,10 @@ def collate_fn(batch):
         'relics': {
             'value': torch.full((len(batch), max_relics_len), 0, dtype=torch.int32),
             'mask': torch.ones((len(batch), max_relics_len), dtype=torch.bool)
+        },
+        'potions': {
+            'value': torch.full((len(batch), max_potions_len), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), max_potions_len), dtype=torch.bool)
         },
         'fixed_obs': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
     }
@@ -274,6 +284,10 @@ def collate_fn(batch):
         relics_len = len(obs['relics']['value'])
         batch_obs['relics']['value'][i, :relics_len] = obs['relics']['value']
         batch_obs['relics']['mask'][i, :relics_len] = obs['relics']['mask']
+        
+        potions_len = len(obs['potions']['value'])
+        batch_obs['potions']['value'][i, :potions_len] = obs['potions']['value']
+        batch_obs['potions']['mask'][i, :potions_len] = obs['potions']['mask']
         
         batch_obs['fixed_obs'][i] = obs['fixed_obs']
         

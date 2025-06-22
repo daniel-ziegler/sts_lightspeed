@@ -69,12 +69,19 @@ namespace sts::py {
         };
     }
 
-
     NNRepresentation getNNRepresentation(const GameContext &gc) {
         NNRepresentation rep;
         rep.fixedObservation = getFixedObservation(gc);
         rep.deck = getCardRepresentation(gc.deck);
         rep.relics = getRelicRepresentation(gc.relics);
+        
+        // Get potion slots up to capacity (including empty ones) to preserve indices
+        std::vector<Potion> potions;
+        for (int i = 0; i < gc.potionCapacity; ++i) {
+            potions.push_back(gc.potions[i]);
+        }
+        rep.potions = to_numpy(potions);
+        
         rep.map = getNNMapRepresentation(*gc.map);
         rep.mapX = gc.curMapNodeX;
         rep.mapY = gc.curMapNodeY;
