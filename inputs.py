@@ -260,7 +260,7 @@ class TupleConcatSpace(MaskedSpace[tuple]):
         for i, (space, elem) in enumerate(zip(self.spaces, x)):
             p = space.try_ix_to_path(elem, ix)
             if isinstance(p, int):
-                ix -= p
+                ix = p
             else:
                 return [i] + p
         return ix
@@ -290,7 +290,7 @@ class DictSpace(MaskedSpace[dict[str, Any]]):
         for k, v in x.items():
             p = self.spaces[k].try_ix_to_path(v, ix)
             if isinstance(p, int):
-                ix -= p
+                ix = p
             else:
                 return [k] + p
         return ix
