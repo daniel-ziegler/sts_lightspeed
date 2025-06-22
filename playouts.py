@@ -20,7 +20,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, action_logit_space
+from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, action_logit_space, move_to_device
 from inputs import Path
 import slaythespire as sts
 
@@ -127,7 +127,7 @@ def load_net(model_path, device=None):
     
     net = NN(ModelHP())
     net = net.to(device)
-    # net = torch.compile(net, mode="reduce-overhead")
+    net = torch.compile(net, mode="reduce-overhead")
     
     if model_path is not None:
         state = torch.load(model_path, map_location=device, weights_only=True)

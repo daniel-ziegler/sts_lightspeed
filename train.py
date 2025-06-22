@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List
 import argparse
 
-from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch, action_logit_space
+from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch, action_logit_space, move_to_device
 import numpy as np
 import pandas as pd
 import torch
@@ -136,7 +136,7 @@ def train_step(net, opt, batch):
     Returns (loss, accuracy) tuple
     """
     device = net.device
-    batch = {k: v.to(device) for k, v in batch.items()}
+    batch = move_to_device(batch, device)
     output = process_batch(batch, net)  # output is [batch_size, max_choices] flat logits
     
     # Get logits for chosen actions using flat indices
@@ -243,7 +243,7 @@ def validate(valid_loader, net, device):
     valid_targets = []
     with torch.no_grad():
         for batch in valid_loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
+            batch = move_to_device(batch, device)
             output = process_batch(batch, net)  # output is [batch_size, max_choices] flat logits
             
             # Get logits for chosen actions using flat indices
@@ -462,7 +462,7 @@ potion_predictions = {}
 # Get predictions for validation set
 with torch.no_grad():
     for batch in valid_loader:
-        batch = {k: v.to(device) for k, v in batch.items()}
+        batch = move_to_device(batch, device)
         output = process_batch(batch, net)  # output is [batch_size, max_choices] flat logits
         
         # Get chosen action predictions for ROC curve
