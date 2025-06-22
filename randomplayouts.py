@@ -288,6 +288,80 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     
     raise ValueError(f"Could not find action for index {chosen_idx}")
 
+def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: list[sts.GameAction]) -> Choice:
+    """Construct a Choice object from the current game state and available actions."""
+    cards_offered = []
+    card_actions = []
+    relics_offered = []
+    relic_actions = []
+    fixed_actions = []
+    fixed_actions_list = []
+    paths_offered = []
+    path_actions = []
+    
+    # Build from available game actions, maintaining correspondence
+    if gc.screen_state == sts.ScreenState.REWARDS:
+        for action in actions:
+            if action.rewards_action_type == sts.RewardsActionType.CARD:
+                # handle singing bowl
+                if action.idx2 == 5:
+                    fixed_actions.append(FixedAction.SINGING_BOWL)
+                    fixed_actions_list.append(action)
+                else:
+                    cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
+                    card_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.SKIP:
+                fixed_actions.append(FixedAction.SKIP)
+                fixed_actions_list.append(action)
+                
+    elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
+        # Shop cards are now returned as [card_set] where card_set contains all shop cards
+        all_shop_relics = gc.screen_state_info.shop.relics
+        for action in actions:
+            assert action.isValidAction(gc), f"Invalid shop action: {action.getDesc(gc)}"
+            if action.rewards_action_type == sts.RewardsActionType.CARD:
+                cards_offered.append(gc.screen_state_info.shop.cards[action.idx2])
+                card_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.RELIC:
+                relics_offered.append(all_shop_relics[action.idx1])
+                relic_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.SKIP:
+                fixed_actions.append(FixedAction.SKIP)
+                fixed_actions_list.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
+                fixed_actions.append(FixedAction.REMOVE)
+                fixed_actions_list.append(action)
+                
+    elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
+        all_boss_relics = gc.screen_state_info.boss_relics
+        for action in actions:
+            if action.rewards_action_type == sts.RewardsActionType.RELIC:
+                relics_offered.append(all_boss_relics[action.idx1])
+                relic_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.SKIP:
+                fixed_actions.append(FixedAction.SKIP)
+                fixed_actions_list.append(action)
+            else:
+                raise ValueError(f"Invalid boss relic reward action: {action.getDesc(gc)}")
+        
+    elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
+        def xy_to_roomid(x, y):
+            roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
+            try:
+                roomid, = roomids
+            except ValueError:
+                print(x, y, obs.map.xs, obs.map.ys)
+                raise
+            return roomid
+        for action in actions:
+            paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
+            path_actions.append(action)
+
+    return Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
+                  paths_offered=paths_offered, path_actions=path_actions,
+                  fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
+                  relics_offered=relics_offered, relic_actions=relic_actions)
+
 def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     # Create seeded RNG instance for this game
@@ -329,81 +403,10 @@ def run_game(seed: int, net: NN = None, temperature: float = 0.01, verbose: bool
                 obs = sts.getNNRepresentation(gc)
                 actions = sts.GameAction.getAllActionsInState(gc)
 
-                cards_offered = []
-                card_actions = []
-                relics_offered = []
-                relic_actions = []
-                fixed_actions = []
-                fixed_actions_list = []
-                paths_offered = []
-                path_actions = []
-                
-                # Build from available game actions, maintaining correspondence
-                if gc.screen_state == sts.ScreenState.REWARDS:
-                    for action in actions:
-                        if action.rewards_action_type == sts.RewardsActionType.CARD:
-                            # handle singing bowl
-                            if action.idx2 == 5:
-                                fixed_actions.append(FixedAction.SINGING_BOWL)
-                                fixed_actions_list.append(action)
-                            else:
-                                cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
-                                card_actions.append(action)
-                        elif action.rewards_action_type == sts.RewardsActionType.SKIP:
-                            fixed_actions.append(FixedAction.SKIP)
-                            fixed_actions_list.append(action)
-                        
-                elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
-                    # Shop cards are now returned as [card_set] where card_set contains all shop cards
-                    all_shop_relics = gc.screen_state_info.shop.relics
-                    for action in actions:
-                        assert action.isValidAction(gc), f"Invalid shop action: {action.getDesc(gc)}"
-                        if action.rewards_action_type == sts.RewardsActionType.CARD:
-                            cards_offered.append(gc.screen_state_info.shop.cards[action.idx2])
-                            card_actions.append(action)
-                        elif action.rewards_action_type == sts.RewardsActionType.RELIC:
-                            relics_offered.append(all_shop_relics[action.idx1])
-                            relic_actions.append(action)
-                        elif action.rewards_action_type == sts.RewardsActionType.SKIP:
-                            fixed_actions.append(FixedAction.SKIP)
-                            fixed_actions_list.append(action)
-                        elif action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
-                            fixed_actions.append(FixedAction.REMOVE)
-                            fixed_actions_list.append(action)
-                        
-                elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
-                    all_boss_relics = gc.screen_state_info.boss_relics
-                    for action in actions:
-                        if action.rewards_action_type == sts.RewardsActionType.RELIC:
-                            relics_offered.append(all_boss_relics[action.idx1])
-                            relic_actions.append(action)
-                        elif action.rewards_action_type == sts.RewardsActionType.SKIP:
-                            fixed_actions.append(FixedAction.SKIP)
-                            fixed_actions_list.append(action)
-                        else:
-                            raise ValueError(f"Invalid boss relic reward action: {action.getDesc(gc)}")
-                    
-                elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
-                    def xy_to_roomid(x, y):
-                        roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
-                        try:
-                            roomid, = roomids
-                        except ValueError:
-                            print(x, y, obs.map.xs, obs.map.ys)
-                            raise
-                        return roomid
-                    for action in actions:
-                        paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
-                        path_actions.append(action)
-                
-
-                choice = Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
-                                paths_offered=paths_offered, path_actions=path_actions,
-                                fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
-                                relics_offered=relics_offered, relic_actions=relic_actions)
+                choice = construct_choice(gc, obs, actions)
                 # Pick action using either network or agent
                 if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS):
-                    assert cards_offered or paths_offered or relics_offered or fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
+                    assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
                     action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     
                     # Use path information to determine choice_type and chosen_idx
