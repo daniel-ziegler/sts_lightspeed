@@ -28,6 +28,7 @@ class PPOConfig:
     # Environment settings
     num_games_per_batch: int = 256
     num_epochs: int = 4
+    num_workers: int = 30
     batch_size: int = 128
     
     # PPO hyperparameters
@@ -37,11 +38,11 @@ class PPOConfig:
     max_grad_norm: float = 1.0
     
     # Learning rates
-    policy_lr: float = 3e-4
-    value_lr: float = 3e-4
+    policy_lr: float = 5e-5
+    value_lr: float = 1e-4
     
     # GAE parameters
-    gamma: float = 0.99
+    gamma: float = 1.00
     gae_lambda: float = 0.95
     
     # Training settings
@@ -51,6 +52,7 @@ class PPOConfig:
     # Logging
     log_every: int = 10
     save_every: int = 100
+
 
 
 class PPOExperience(NamedTuple):
@@ -205,7 +207,7 @@ def collect_experience(config: PPOConfig, service: NNService, start_seed: int = 
     """Collect experience from multiple game episodes."""
     trajectories = []
     
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
         futures = [
             executor.submit(run_ppo_episode, start_seed + i, service, config.temperature)
             for i in range(config.num_games_per_batch)
@@ -229,10 +231,11 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig) -> 
         if not traj.experiences:
             continue
             
-        # For simplicity, use the final reward for all steps (sparse reward)
-        # In future, could implement more sophisticated reward shaping
+        # Sparse reward: only final step gets reward, others get 0
         values = np.array([exp.value for exp in traj.experiences] + [0.0])  # Add bootstrap
-        rewards = np.array([traj.final_reward] * len(traj.experiences))
+        rewards = np.zeros(len(traj.experiences))
+        if len(rewards) > 0:
+            rewards[-1] = traj.final_reward  # Only final step gets reward
         
         # Compute returns and advantages using GAE
         advantages = np.zeros(len(traj.experiences))
@@ -319,6 +322,9 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
     total_policy_loss = 0
     total_value_loss = 0
     total_entropy = 0
+    total_kl_div = 0
+    total_grad_norm = 0
+    total_clipfrac = 0
     num_batches = 0
     
     for epoch in range(config.num_epochs):
@@ -367,6 +373,12 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
             ratio = torch.exp(new_log_probs - old_log_probs)
             ratio = torch.clamp(ratio, min=1e-8, max=1e8)  # Prevent extreme ratios
             
+            # Compute approximate KL divergence
+            kl_div = (old_log_probs - new_log_probs).mean()
+            
+            # Compute clipping fraction
+            clipfrac = ((ratio - 1.0).abs() > config.clip_ratio).float().mean()
+            
             # Clipped surrogate objective
             surr1 = ratio * advantages
             surr2 = torch.clamp(ratio, 1 - config.clip_ratio, 1 + config.clip_ratio) * advantages
@@ -414,19 +426,25 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
             # Backward pass
             optimizer.zero_grad()
             total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(net.parameters(), config.max_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), config.max_grad_norm)
             optimizer.step()
             
-            # Accumulate losses
+            # Accumulate losses and metrics
             total_policy_loss += policy_loss.item()
             total_value_loss += value_loss.item()
             total_entropy += entropy.item()
+            total_kl_div += kl_div.item()
+            total_grad_norm += grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            total_clipfrac += clipfrac.item()
             num_batches += 1
     
     return {
         'policy_loss': total_policy_loss / num_batches if num_batches > 0 else 0,
         'value_loss': total_value_loss / num_batches if num_batches > 0 else 0,
         'entropy': total_entropy / num_batches if num_batches > 0 else 0,
+        'kl_div': total_kl_div / num_batches if num_batches > 0 else 0,
+        'grad_norm': total_grad_norm / num_batches if num_batches > 0 else 0,
+        'clipfrac': total_clipfrac / num_batches if num_batches > 0 else 0,
     }
 
 
@@ -445,6 +463,7 @@ def main():
     
     # Setup
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    torch.set_float32_matmul_precision('high')
     config = PPOConfig(
         num_games_per_batch=args.games_per_batch,
         num_iterations=args.iterations
@@ -453,6 +472,7 @@ def main():
     # Create network with value head
     model_hp = ModelHP(use_value_head=True)
     net = NN(model_hp).to(device)
+    net = torch.compile(net, mode="default")
     
     if args.model_path:
         state = torch.load(args.model_path, map_location=device, weights_only=True)
@@ -460,7 +480,7 @@ def main():
         print(f"Loaded model from {args.model_path}")
     
     # Create service
-    service = NNService(net, batch_size=32)
+    service = NNService(net, batch_size=32, batch_size_factor=16)
     
     # Create optimizer
     optimizer = torch.optim.Adam(net.parameters(), lr=config.policy_lr)
@@ -506,6 +526,9 @@ def main():
             print(f"Policy loss: {losses.get('policy_loss', 0):.4f}, "
                   f"Value loss: {losses.get('value_loss', 0):.4f}, "
                   f"Entropy: {losses.get('entropy', 0):.4f}")
+            print(f"KL div: {losses.get('kl_div', 0):.6f}, "
+                  f"Grad norm: {losses.get('grad_norm', 0):.4f}, "
+                  f"Clip frac: {losses.get('clipfrac', 0):.3f}")
             
             # Save model periodically
             if (iteration + 1) % config.save_every == 0:

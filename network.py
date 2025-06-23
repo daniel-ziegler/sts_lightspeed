@@ -194,7 +194,7 @@ class NN(nn.Module):
         choice_logits = choice_logits.masked_fill(action_logit_mask, float('-inf'))
         
         # Compute value if value head is enabled
-        if hasattr(self, 'value_head'):
+        if self.H.use_value_head:
             # Pool over non-masked elements for value prediction
             # xn: [batch_size, seq_len, dim], pos_mask: [batch_size, seq_len]
             seq_lengths = (~pos_mask).sum(dim=1, keepdim=True).float()  # [batch_size, 1]
