@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm.auto import tqdm
 
-from network import NN, ModelHP, move_to_device, process_batch, action_logit_space, collate_fn
+from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats
 import slaythespire as sts
 
@@ -147,7 +147,7 @@ def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0) -> 
                         log_prob = np.log(np.maximum(boltz_probs[chosen_idx], 1e-20))
                         
                         # Convert back to game action
-                        path = action_logit_space.ix_to_path(batch_tensors['choices'], chosen_idx)
+                        path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
                         
                         if path[0] == 'cards':
                             action = choice.card_actions[path[1]]

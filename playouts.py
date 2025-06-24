@@ -20,7 +20,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, action_logit_space, move_to_device
+from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, choice_space, move_to_device
 from inputs import Path
 import slaythespire as sts
 
@@ -283,8 +283,8 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
         
     chosen_idx = sample_boltzmann(probs, temperature, rng)
     
-    # Convert flat index back to semantic path using action_logit_space
-    path = action_logit_space.ix_to_path(collated_input['choices'], chosen_idx)
+    # Convert flat index back to semantic path using choice_space
+    path = choice_space.ix_to_path(collated_input['choices'], chosen_idx)
     
     if path[0] == 'cards':
         # path is ['cards', card_index]

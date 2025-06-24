@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List
 import argparse
 
-from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch, action_logit_space, move_to_device
+from network import MAX_CHOICES, MAX_DECK_SIZE, NN, ActionType, FixedAction, ModelHP, SlayDataset, collate_fn, output_to_cpu, process_batch, choice_space, move_to_device
 import numpy as np
 import pandas as pd
 import torch
@@ -370,11 +370,11 @@ for i in range(len(batch)):
     
     # Go through each valid logit and convert back to semantic choice
     for logit_idx in range(len(probs)):
-        if logit_idx >= action_logit_space.length(choices_dict):
+        if logit_idx >= choice_space.length(choices_dict):
             break
             
         try:
-            path = action_logit_space.ix_to_path(choices_dict, logit_idx)
+            path = choice_space.ix_to_path(choices_dict, logit_idx)
             prob = probs[logit_idx]
             
             if path[0] == 'deck':
@@ -518,11 +518,11 @@ with torch.no_grad():
             
             # Process each valid logit
             for logit_idx in range(len(all_valid_probs)):
-                if logit_idx >= action_logit_space.length(choices_dict):
+                if logit_idx >= choice_space.length(choices_dict):
                     break
                     
                 try:
-                    path = action_logit_space.ix_to_path(choices_dict, logit_idx)
+                    path = choice_space.ix_to_path(choices_dict, logit_idx)
                     
                     # Calculate relative probability compared to all other options
                     other_probs = np.concatenate([all_valid_probs[:logit_idx], all_valid_probs[logit_idx+1:]])

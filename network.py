@@ -62,7 +62,7 @@ obs_space = DictSpace({
     'fixed_obs': FixedVecSpace(sts.getFixedObservationMaximums()),
 })
 
-action_logit_space = DictSpace({
+choice_space = DictSpace({
     'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'potions': SequenceSpace(EnumSpace(sts.Potion)),
@@ -119,7 +119,7 @@ class NN(nn.Module):
         self.H = H
 
         self.obs_embed = obs_space.build_embed(H.dim)
-        self.action_logit_embed = action_logit_space.build_embed(H.dim)
+        self.choice_embed = choice_space.build_embed(H.dim)
         
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
@@ -149,7 +149,7 @@ class NN(nn.Module):
                 - choice_logits: [batch_size, max_action_choices] tensor of flat logits
                 - values: [batch_size] tensor of state value estimates
             If value_head disabled: choice_logits tensor only
-            Use action_logit_space.ix_to_path to convert indices back to semantic actions.
+            Use choice_space.ix_to_path to convert indices back to semantic actions.
         """
         choices = batch.pop('choices')
         
@@ -177,13 +177,13 @@ class NN(nn.Module):
             raise ValueError(f"Invalid choice card ID: {cards_max}")
         
         obs_embed, obs_mask = self.obs_embed(batch)
-        action_logit_embed, action_logit_mask = self.action_logit_embed(choices)
+        choice_embed, choice_mask = self.choice_embed(choices)
 
         assert (~obs_mask).any()
-        assert (~action_logit_mask).any()
+        assert (~choice_mask).any()
 
-        x = torch.cat([obs_embed, action_logit_embed], dim=1)
-        pos_mask = torch.cat([obs_mask, action_logit_mask], dim=1)
+        x = torch.cat([obs_embed, choice_embed], dim=1)
+        pos_mask = torch.cat([obs_mask, choice_mask], dim=1)
 
         for l in self.layers:
             x = l(x, pos_mask)
@@ -191,7 +191,7 @@ class NN(nn.Module):
 
         action_xs = xn[:, obs_mask.size(1):, :]
         choice_logits = self.choice_logits(action_xs).squeeze(-1).float()
-        choice_logits = choice_logits.masked_fill(action_logit_mask, float('-inf'))
+        choice_logits = choice_logits.masked_fill(choice_mask, float('-inf'))
         
         # Compute value if value head is enabled
         if self.H.use_value_head:
