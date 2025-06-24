@@ -350,7 +350,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
         for action in actions:
             assert action.isValidAction(gc), f"Invalid shop action: {action.getDesc(gc)}"
             if action.rewards_action_type == sts.RewardsActionType.CARD:
-                cards_offered.append(gc.screen_state_info.shop.cards[action.idx2])
+                cards_offered.append(gc.screen_state_info.shop.cards[action.idx1])
                 card_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.RELIC:
                 relics_offered.append(all_shop_relics[action.idx1])
