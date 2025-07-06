@@ -92,10 +92,12 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
              r["chosen_idx"] < MAX_CHOICES)
         ), axis=1)
     ]
+    print(data_df.columns)
 
     # Split data
     valid_df = data_df[data_df['seed'].apply(lambda s: is_validation_seed(s, validation_fraction))]
     train_df = data_df[~data_df['seed'].apply(lambda s: is_validation_seed(s, validation_fraction))]
+    print(valid_df.columns)
 
     # Balance validation set
     valid_positives = valid_df[valid_df['outcome'] == 1]

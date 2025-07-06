@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import random
 import argparse
-from dataclasses import dataclass
-from typing import List, NamedTuple, Optional
+import logging
+from dataclasses import dataclass, fields
+from typing import List, NamedTuple, Optional, get_type_hints, Union
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -20,6 +21,9 @@ from tqdm.auto import tqdm
 from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats
 import slaythespire as sts
+
+# Set up logging
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -79,6 +83,9 @@ class PPOTrajectory(NamedTuple):
     values: List[float]   # Value prediction for each step
     final_reward: float
     final_floor: int
+    pstrike_offers: int  # Number of times Perfected Strike was offered
+    pstrike_takes: int   # Number of times Perfected Strike was taken
+    pstrike_probs: List[float]  # Probabilities assigned to Perfected Strike when offered
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -110,12 +117,17 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
     experiences = []
     values = []  # Collect values separately
     
+    # Track Perfected Strike stats
+    pstrike_offers = 0
+    pstrike_takes = 0
+    pstrike_probs = []
+    
     # Create timeout handling
     timeout_event = threading.Event()
     
     def timeout_handler():
         timeout_event.set()
-        print(f"Warning: Battle simulation taking too long for seed {seed}")
+        log.warning(f"Battle simulation taking too long for seed {seed}")
     
     while gc.outcome == sts.GameOutcome.UNDECIDED:
         try:
@@ -130,7 +142,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                     timer.cancel()
                     
                 if timeout_event.is_set():
-                    print(f"Seed {seed} did finish")
+                    log.warning(f"Seed {seed} did finish")
                     timeout_event.clear()
                     
             else:
@@ -148,8 +160,8 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                         
                         # Handle value head output
                         if isinstance(output, tuple):
-                            logits, values = output
-                            value = float(values) if np.isscalar(values) else float(values[0])
+                            logits, value_output = output
+                            value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
                         else:
                             logits = output
                             value = 0.0  # No value head
@@ -167,8 +179,29 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                         chosen_idx = int(rng.choices(range(len(probs)), weights=boltz_probs, k=1)[0])
                         log_prob = np.log(np.maximum(boltz_probs[chosen_idx], 1e-20))
                         
-                        # Check if Perfected Strike is offered and log if taken
+                        # Check if Perfected Strike is offered and log probability + decision
                         perfected_strike_offered = any(card.id == sts.CardId.PERFECTED_STRIKE for card in choice.cards_offered)
+                        perfected_strike_prob = None
+                        
+                        if perfected_strike_offered:
+                            pstrike_offers += 1
+                            # Count total number of valid options
+                            total_options = (len(choice.cards_offered) + len(choice.relics_offered) + 
+                                           len(choice.potions_offered) + len(choice.fixed_actions))
+                            
+                            # Find the probability assigned to Perfected Strike
+                            for i, card in enumerate(choice.cards_offered):
+                                if card.id == sts.CardId.PERFECTED_STRIKE:
+                                    # Find the choice index for this card
+                                    card_path = ('cards', i)
+                                    try:
+                                        pstrike_choice_idx = choice_space.path_to_ix(batch_tensors['choices'], card_path)
+                                        perfected_strike_prob = boltz_probs[pstrike_choice_idx]
+                                        pstrike_probs.append(perfected_strike_prob)
+                                        break
+                                    except (IndexError, KeyError):
+                                        perfected_strike_prob = 0.0
+                                        pstrike_probs.append(0.0)
                         
                         # Convert back to game action
                         path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
@@ -178,13 +211,21 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                             chosen_card = choice.cards_offered[path[1]]
                             if perfected_strike_offered:
                                 perfected_strike_taken = chosen_card.id == sts.CardId.PERFECTED_STRIKE
-                                print(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered, taken: {perfected_strike_taken}")
+                                if perfected_strike_taken:
+                                    pstrike_takes += 1
+                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, taken: {perfected_strike_taken}")
                         elif path[0] == 'relics':
                             action = choice.relic_actions[path[1]]
+                            if perfected_strike_offered:
+                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose relic instead")
                         elif path[0] == 'potions':
                             action = choice.potion_actions[path[1]]
+                            if perfected_strike_offered:
+                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose potion instead")
                         elif path[0] == 'fixed':
                             action = choice.fixed_actions_list[path[1]]
+                            if perfected_strike_offered:
+                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose fixed action instead")
                         else:
                             raise ValueError(f"Unknown path: {path}")
                         
@@ -215,7 +256,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                 action.execute(gc)
                 
         except Exception as e:
-            print(f"Error in episode {seed}: {e}")
+            log.error(f"Error in episode {seed}: {e}")
             raise
     
     # Create final metrics for reward computation
@@ -239,7 +280,10 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
         rewards=rewards,
         values=values,
         final_reward=final_reward,
-        final_floor=gc.floor_num
+        final_floor=gc.floor_num,
+        pstrike_offers=pstrike_offers,
+        pstrike_takes=pstrike_takes,
+        pstrike_probs=pstrike_probs
     )
 
 
@@ -247,18 +291,22 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     """Collect experience from multiple game episodes."""
     trajectories = []
     
-    with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
-        futures = [
-            executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, config.temperature)
-            for i in range(config.num_games_per_batch)
-        ]
-        
-        for future in tqdm(as_completed(futures), total=config.num_games_per_batch, desc="Collecting experience"):
-            try:
+    if config.num_workers == 1:
+        # Single-threaded execution for easier debugging
+        for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
+            trajectory = run_ppo_episode(start_seed + i, service, reward_fn, config.temperature)
+            trajectories.append(trajectory)
+    else:
+        # Multi-threaded execution
+        with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
+            futures = [
+                executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, config.temperature)
+                for i in range(config.num_games_per_batch)
+            ]
+            
+            for future in tqdm(as_completed(futures), total=config.num_games_per_batch, desc="Collecting experience"):
                 trajectory = future.result()
                 trajectories.append(trajectory)
-            except Exception as e:
-                print(f"Failed to collect trajectory: {e}")
     
     return trajectories
 
@@ -486,23 +534,63 @@ def main():
                         help='Path to pretrained model (optional)')
     parser.add_argument('--save-path', type=str, default='ppo_model.pt',
                         help='Path to save trained model')
-    parser.add_argument('--iterations', type=int, default=1000,
-                        help='Number of training iterations')
-    parser.add_argument('--games-per-batch', type=int, default=256,
-                        help='Number of games per training batch')
     parser.add_argument('--reward-function', type=str, default='perfected_strike',
                         choices=['smooth', 'perfected_strike', 'victory'],
                         help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss) (default: perfected_strike)')
     
+    # Automatically add all PPOConfig fields as command line arguments
+    config_defaults = PPOConfig()
+    type_hints = get_type_hints(PPOConfig)
+    
+    for field in fields(PPOConfig):
+        field_name = field.name.replace('_', '-')
+        default_value = getattr(config_defaults, field.name)
+        field_type = type_hints[field.name]
+        
+        # Handle Optional types
+        if hasattr(field_type, '__origin__') and field_type.__origin__ is Union:
+            # For Optional[T] (which is Union[T, None]), get the non-None type
+            non_none_types = [t for t in field_type.__args__ if t is not type(None)]
+            field_type = non_none_types[0] if non_none_types else str
+        
+        # Map to argparse-compatible types
+        if field_type == int:
+            arg_type = int
+        elif field_type == float:
+            arg_type = float
+        elif field_type == str:
+            arg_type = str
+        elif field_type == bool:
+            arg_type = bool
+        else:
+            # Fallback to the type of the default value
+            arg_type = type(default_value)
+            
+        parser.add_argument(
+            f'--{field_name}',
+            type=arg_type,
+            default=default_value,
+            help=f'PPO config: {field.name} (default: {default_value})'
+        )
+    
     args = parser.parse_args()
+    
+    # Configure logging - default level is WARNING, set to INFO to see Perfected Strike logs
+    logging.basicConfig(
+        level=logging.WARNING,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
     # Setup
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     torch.set_float32_matmul_precision('high')
-    config = PPOConfig(
-        num_games_per_batch=args.games_per_batch,
-        num_iterations=args.iterations
-    )
+    
+    # Create PPOConfig from parsed arguments
+    config_kwargs = {}
+    for field in fields(PPOConfig):
+        field_name = field.name.replace('_', '-')
+        config_kwargs[field.name] = getattr(args, field_name.replace('-', '_'))
+    config = PPOConfig(**config_kwargs)
     
     # Select reward function
     if args.reward_function == 'smooth':
@@ -552,8 +640,17 @@ def main():
             avg_floor = sum(t.final_floor for t in trajectories) / len(trajectories)
             avg_reward = sum(t.final_reward for t in trajectories) / len(trajectories)
             
+            # Compute Perfected Strike statistics
+            total_pstrike_offers = sum(t.pstrike_offers for t in trajectories)
+            total_pstrike_takes = sum(t.pstrike_takes for t in trajectories)
+            all_pstrike_probs = [prob for t in trajectories for prob in t.pstrike_probs]
+            
+            pstrike_take_rate = total_pstrike_takes / total_pstrike_offers if total_pstrike_offers > 0 else 0.0
+            avg_pstrike_prob = np.mean(all_pstrike_probs) if all_pstrike_probs else 0.0
+            
             print(f"Collected {len(trajectories)} trajectories in {collect_time:.1f}s")
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
+            print(f"PStrike: {total_pstrike_offers} offers, {total_pstrike_takes} takes ({pstrike_take_rate:.3f} rate), {avg_pstrike_prob:.3f} avg prob")
             
             # Prepare training data
             experiences, advantages, returns = compute_advantages(trajectories, config)
