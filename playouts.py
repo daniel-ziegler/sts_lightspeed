@@ -396,7 +396,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                   relics_offered=relics_offered, relic_actions=relic_actions,
                   potions_offered=potions_offered, potion_actions=potion_actions)
 
-def run_game(seed: int, net: NN = None, temperature: float = 1.0, verbose: bool = False, stats: ChoiceStats = None):
+def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.0, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     # Create seeded RNG instance for this game
     rng = random.Random(seed)
@@ -492,7 +492,7 @@ def run_game(seed: int, net: NN = None, temperature: float = 1.0, verbose: bool 
     print(gc.outcome, gc.floor_num)
     return (choices, gc.outcome, gc.floor_num)
 
-def run_game_data(seed: int, net: NN = None, temperature: float = 1.0, stats: ChoiceStats = None):
+def run_game_data(seed: int, net: Optional[NNService] = None, temperature: float = 1.0, stats: ChoiceStats = None):
     try:
         choices, outcome, final_floor = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
     except Exception as e:
@@ -563,18 +563,23 @@ class ChoiceStats:
 def main(args):
     torch.set_float32_matmul_precision('high')
     
-    if args.model_path in ("", "-"):
+    if args.model_path == "<simple>":
         model_path = None
+        print("Using SimpleAgent (no network)")
+        service: Optional[NNService] = None
     else:
-        model_path = args.model_path
-    # Load neural network and start service
-    net = load_net(model_path)
-    service = NNService(
-        net,
-        batch_size=args.batch_size,
-        batch_size_factor=min(min(8, args.batch_size), (args.num_threads + 1) // 2),
-    )
-    print(f"Loaded neural network from {args.model_path}")
+        if args.model_path in ("", "-"):
+            model_path = None
+        else:
+            model_path = args.model_path
+        # Load neural network and start service
+        net = load_net(model_path)
+        service = NNService(
+            net,
+            batch_size=args.batch_size,
+            batch_size_factor=min(min(8, args.batch_size), (args.num_threads + 1) // 2),
+        )
+        print(f"Loaded neural network from {args.model_path}")
 
     stats = ChoiceStats()
     
@@ -596,7 +601,8 @@ def main(args):
             )
         ])
 
-    service.stop()
+    if service is not None:
+        service.stop()
 
     # Shuffle the DataFrame
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
