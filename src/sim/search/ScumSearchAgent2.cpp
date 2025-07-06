@@ -188,7 +188,7 @@ GameAction search::ScumSearchAgent2::pickOutOfCombatAction(const GameContext &gc
                     bestIdx = i;
                 }
             }
-            return GameAction(bestIdx);
+            return GameAction(GameAction::RewardsActionType::RELIC, bestIdx);
         }
 
         case ScreenState::REST_ROOM: {

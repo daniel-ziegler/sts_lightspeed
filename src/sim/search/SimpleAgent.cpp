@@ -569,7 +569,7 @@ void search::SimpleAgent::stepOutOfCombat(GameContext &gc) {
                     bestIdx = i;
                 }
             }
-            takeAction(gc, {bestIdx});
+            takeAction(gc, {GameAction::RewardsActionType::RELIC, bestIdx});
             break;
         }
 

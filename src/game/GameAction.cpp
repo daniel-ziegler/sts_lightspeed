@@ -100,7 +100,7 @@ std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) con
                 case GameAction::RewardsActionType::SKIP:
                     return os << "skip boss relic reward";
                 default:
-                    return os << "invalid boss relic reward action";
+                    return os << "invalid boss relic reward action " << std::hex << bits;
             }
 
         case ScreenState::CARD_SELECT:
