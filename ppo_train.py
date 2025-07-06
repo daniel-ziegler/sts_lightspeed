@@ -107,6 +107,11 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
+def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
+    """Compute dense reward that penalizes Perfected Strikes (negative of perfected_strike count)."""
+    return -float(metrics.perfected_strike_count)
+
+
 def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float = 1.0) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
@@ -311,13 +316,13 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     return trajectories
 
 
-def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig) -> tuple[List[PPOExperience], List[float], List[float]]:
+def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, debug_first: bool = False) -> tuple[List[PPOExperience], List[float], List[float]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
     all_advantages = []
     all_returns = []
     
-    for traj in trajectories:
+    for traj_idx, traj in enumerate(trajectories):
         if not traj.experiences:
             continue
             
@@ -335,6 +340,42 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig) -> 
             gae = delta + config.gamma * config.gae_lambda * gae
             advantages[t] = gae
             returns[t] = advantages[t] + values[t]
+        
+        # Debug output for first trajectory
+        if debug_first and traj_idx == 0:
+            log.warning("=== PPO Advantage Calculation Debug (First Trajectory) ===")
+            log.warning(f"Trajectory length: {len(traj.experiences)} steps")
+            log.warning(f"Config: gamma={config.gamma}, gae_lambda={config.gae_lambda}")
+            log.warning("Step | Action | Reward | Pred Value | GAE Return | Raw Advantage")
+            log.warning("-" * 80)
+            
+            for t in range(len(traj.experiences)):
+                exp = traj.experiences[t]
+                # Get action description
+                if exp.choice.cards_offered and len(exp.choice.cards_offered) > 0:
+                    # Find which card was chosen
+                    path = choice_space.ix_to_path({'choices': exp.choice.as_dict()}, exp.action_idx)
+                    if path[0] == 'cards':
+                        chosen_card = exp.choice.cards_offered[path[1]]
+                        action_desc = f"Card: {chosen_card}"
+                    elif path[0] == 'relics':
+                        chosen_relic = exp.choice.relics_offered[path[1]] if exp.choice.relics_offered else "Unknown"
+                        action_desc = f"Relic: {chosen_relic}"
+                    elif path[0] == 'potions':
+                        action_desc = f"Potion: idx_{path[1]}"
+                    elif path[0] == 'fixed':
+                        action_desc = f"Fixed: {exp.choice.fixed_actions[path[1]] if exp.choice.fixed_actions else 'Unknown'}"
+                    else:
+                        action_desc = f"Unknown: {path}"
+                else:
+                    action_desc = f"Action idx: {exp.action_idx}"
+                
+                log.warning(f"{t:4d} | {action_desc[:20]:20s} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+            
+            log.warning("-" * 80)
+            log.warning(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
+            log.warning(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
+            log.warning("=" * 80)
         
         # Normalize advantages
         if len(advantages) > 1:
@@ -652,8 +693,8 @@ def main():
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
             print(f"PStrike: {total_pstrike_offers} offers, {total_pstrike_takes} takes ({pstrike_take_rate:.3f} rate), {avg_pstrike_prob:.3f} avg prob")
             
-            # Prepare training data
-            experiences, advantages, returns = compute_advantages(trajectories, config)
+            # Prepare training data (with debug output for first trajectory)
+            experiences, advantages, returns = compute_advantages(trajectories, config, debug_first=True)
             
             if not experiences:
                 print("No experiences to train on, skipping iteration")
