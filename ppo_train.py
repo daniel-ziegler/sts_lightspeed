@@ -80,7 +80,13 @@ def compute_smooth_reward(outcome: sts.GameOutcome, final_floor: int) -> float:
         return min(0.5, final_floor / 100.0)
 
 
-def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0) -> PPOTrajectory:
+def compute_perfected_strike_reward(gc: sts.GameContext) -> float:
+    """Compute reward based on number of Perfected Strikes in deck."""
+    perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
+    return float(perfected_strike_count)
+
+
+def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0, reward_fn=None) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
@@ -181,8 +187,11 @@ def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0) -> 
             print(f"Error in episode {seed}: {e}")
             raise
     
-    # Compute final reward
-    final_reward = compute_smooth_reward(gc.outcome, gc.floor_num)
+    # Compute final reward using the provided reward function
+    if reward_fn is None:
+        final_reward = compute_smooth_reward(gc.outcome, gc.floor_num)
+    else:
+        final_reward = reward_fn(gc)
     
     # Fill in rewards for all experiences
     filled_experiences = []
@@ -203,13 +212,13 @@ def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0) -> 
     )
 
 
-def collect_experience(config: PPOConfig, service: NNService, start_seed: int = 0) -> List[PPOTrajectory]:
+def collect_experience(config: PPOConfig, service: NNService, start_seed: int = 0, reward_fn=None) -> List[PPOTrajectory]:
     """Collect experience from multiple game episodes."""
     trajectories = []
     
     with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
         futures = [
-            executor.submit(run_ppo_episode, start_seed + i, service, config.temperature)
+            executor.submit(run_ppo_episode, start_seed + i, service, config.temperature, reward_fn)
             for i in range(config.num_games_per_batch)
         ]
         
@@ -458,6 +467,9 @@ def main():
                         help='Number of training iterations')
     parser.add_argument('--games-per-batch', type=int, default=256,
                         help='Number of games per training batch')
+    parser.add_argument('--reward-function', type=str, default='perfected_strike',
+                        choices=['smooth', 'perfected_strike'],
+                        help='Reward function to use (default: perfected_strike)')
     
     args = parser.parse_args()
     
@@ -468,6 +480,16 @@ def main():
         num_games_per_batch=args.games_per_batch,
         num_iterations=args.iterations
     )
+    
+    # Select reward function
+    if args.reward_function == 'smooth':
+        reward_fn = lambda gc: compute_smooth_reward(gc.outcome, gc.floor_num)
+    elif args.reward_function == 'perfected_strike':
+        reward_fn = compute_perfected_strike_reward
+    else:
+        raise ValueError(f"Unknown reward function: {args.reward_function}")
+    
+    print(f"Using reward function: {args.reward_function}")
     
     # Create network with value head
     model_hp = ModelHP(use_value_head=True)
@@ -493,7 +515,7 @@ def main():
             
             # Collect experience
             start_time = time.time()
-            trajectories = collect_experience(config, service, start_seed=iteration * 1000)
+            trajectories = collect_experience(config, service, start_seed=iteration * 1000, reward_fn=reward_fn)
             collect_time = time.time() - start_time
             
             if not trajectories:
