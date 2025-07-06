@@ -396,7 +396,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 if exp.choice.cards_offered:
                     # Check if Perfected Strike is among the offered cards
                     has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
-                    cards_str = f"{len(exp.choice.cards_offered)}cards"
+                    cards_str = f"{len(exp.choice.cards_offered)}card"
                     if has_pstrike:
                         cards_str += "*"
                     offered_items.append(cards_str)
