@@ -55,38 +55,52 @@ class PPOConfig:
 
 
 
+@dataclass
+class GameMetrics:
+    """Metrics extracted from game state for reward computation."""
+    floor_num: int
+    cur_hp: int
+    max_hp: int
+    perfected_strike_count: int
+    outcome: sts.GameOutcome
+
 class PPOExperience(NamedTuple):
     """Single step of experience from a game."""
     choice: Choice
     action_idx: int
     log_prob: float
-    value: float
-    reward: float
+    metrics: GameMetrics
 
 
 class PPOTrajectory(NamedTuple):
     """Complete game trajectory."""
     experiences: List[PPOExperience]
+    rewards: List[float]  # Reward for each step
+    values: List[float]   # Value prediction for each step
     final_reward: float
     final_floor: int
 
 
-def compute_smooth_reward(outcome: sts.GameOutcome, final_floor: int) -> float:
-    """Compute smooth reward based on game outcome and floor reached."""
-    if outcome == sts.GameOutcome.PLAYER_VICTORY:
+def compute_progress_reward(metrics: GameMetrics) -> float:
+    """Compute reward based on game outcome and floor progress."""
+    if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
         return 1.0
     else:
         # Losses get partial reward based on floor progress (0.0 to 0.5)
-        return min(0.5, final_floor / 100.0)
+        return min(0.5, metrics.floor_num / 100.0)
 
 
-def compute_perfected_strike_reward(gc: sts.GameContext) -> float:
-    """Compute reward based on number of Perfected Strikes in deck."""
-    perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
-    return float(perfected_strike_count)
+def compute_perfected_strike_reward(metrics: GameMetrics) -> float:
+    """Compute dense reward based on number of Perfected Strikes in deck."""
+    return float(metrics.perfected_strike_count)
 
 
-def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0, reward_fn=None) -> PPOTrajectory:
+def compute_victory_reward(metrics: GameMetrics) -> float:
+    """Compute sparse victory-only reward (1.0 for victory, 0.0 otherwise)."""
+    return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
+
+
+def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float = 1.0) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
@@ -94,6 +108,7 @@ def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0, rew
     agent = sts.Agent()
     agent.simulation_count_base = 1000
     experiences = []
+    values = []  # Collect values separately
     
     # Create timeout handling
     timeout_event = threading.Event()
@@ -166,15 +181,24 @@ def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0, rew
                         else:
                             raise ValueError(f"Unknown path: {path}")
                         
-                        # Store experience (reward will be filled in later)
+                        # Extract metrics from current game state for dense reward computation
+                        perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
+                        metrics = GameMetrics(
+                            floor_num=gc.floor_num,
+                            cur_hp=gc.cur_hp,
+                            max_hp=gc.max_hp,
+                            perfected_strike_count=perfected_strike_count,
+                            outcome=gc.outcome
+                        )
+                        
                         exp = PPOExperience(
                             choice=choice,
                             action_idx=chosen_idx,
                             log_prob=log_prob,
-                            value=value,
-                            reward=0.0  # Will be filled in with final reward
+                            metrics=metrics
                         )
                         experiences.append(exp)
+                        values.append(value)  # Store value separately
                     else:
                         action = agent.pick_gameaction(gc)
                 else:
@@ -187,38 +211,38 @@ def run_ppo_episode(seed: int, service: NNService, temperature: float = 1.0, rew
             print(f"Error in episode {seed}: {e}")
             raise
     
-    # Compute final reward using the provided reward function
-    if reward_fn is None:
-        final_reward = compute_smooth_reward(gc.outcome, gc.floor_num)
-    else:
-        final_reward = reward_fn(gc)
+    # Create final metrics for reward computation
+    final_metrics = GameMetrics(
+        floor_num=gc.floor_num,
+        cur_hp=gc.cur_hp,
+        max_hp=gc.max_hp,
+        perfected_strike_count=sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE),
+        outcome=gc.outcome
+    )
     
-    # Fill in rewards for all experiences
-    filled_experiences = []
-    for exp in experiences:
-        filled_exp = PPOExperience(
-            choice=exp.choice,
-            action_idx=exp.action_idx,
-            log_prob=exp.log_prob,
-            value=exp.value,
-            reward=final_reward
-        )
-        filled_experiences.append(filled_exp)
+    # Compute final reward using the provided reward function
+    final_reward = reward_fn(final_metrics)
+    
+    # Compute rewards for all experiences using the reward function
+    rewards = [reward_fn(exp.metrics) for exp in experiences]
+    # Values were collected during the episode
     
     return PPOTrajectory(
-        experiences=filled_experiences,
+        experiences=experiences,
+        rewards=rewards,
+        values=values,
         final_reward=final_reward,
         final_floor=gc.floor_num
     )
 
 
-def collect_experience(config: PPOConfig, service: NNService, start_seed: int = 0, reward_fn=None) -> List[PPOTrajectory]:
+def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_seed: int = 0) -> List[PPOTrajectory]:
     """Collect experience from multiple game episodes."""
     trajectories = []
     
     with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
         futures = [
-            executor.submit(run_ppo_episode, start_seed + i, service, config.temperature, reward_fn)
+            executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, config.temperature)
             for i in range(config.num_games_per_batch)
         ]
         
@@ -232,19 +256,19 @@ def collect_experience(config: PPOConfig, service: NNService, start_seed: int = 
     return trajectories
 
 
-def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig) -> List[PPOExperience]:
+def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig) -> tuple[List[PPOExperience], List[float], List[float]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
+    all_advantages = []
+    all_returns = []
     
     for traj in trajectories:
         if not traj.experiences:
             continue
             
-        # Sparse reward: only final step gets reward, others get 0
-        values = np.array([exp.value for exp in traj.experiences] + [0.0])  # Add bootstrap
-        rewards = np.zeros(len(traj.experiences))
-        if len(rewards) > 0:
-            rewards[-1] = traj.final_reward  # Only final step gets reward
+        # Use the rewards computed at each step (dense or sparse depending on reward function)
+        values = np.array(traj.values + [0.0])  # Add bootstrap
+        rewards = np.array(traj.rewards)
         
         # Compute returns and advantages using GAE
         advantages = np.zeros(len(traj.experiences))
@@ -266,18 +290,12 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig) -> 
             else:
                 advantages = advantages - adv_mean
         
-        # Create new experiences with advantages and returns
-        for i, exp in enumerate(traj.experiences):
-            new_exp = PPOExperience(
-                choice=exp.choice,
-                action_idx=exp.action_idx,
-                log_prob=exp.log_prob,
-                value=returns[i],  # Use return as target value
-                reward=advantages[i]  # Use advantage as reward
-            )
-            all_experiences.append(new_exp)
+        # Store experiences, advantages, and returns
+        all_experiences.extend(traj.experiences)
+        all_advantages.extend(advantages.tolist())
+        all_returns.extend(returns.tolist())
     
-    return all_experiences
+    return all_experiences, all_advantages, all_returns
 
 
 def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
@@ -307,8 +325,6 @@ def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
         # Add PPO-specific fields
         flat_dict['chosen_idx'] = exp.action_idx
         flat_dict['old_log_prob'] = exp.log_prob
-        flat_dict['advantage'] = exp.reward  # We stored advantage in reward field
-        flat_dict['target_value'] = exp.value  # We stored return in value field
         flat_dict['outcome'] = 1.0  # Dummy, not used in PPO
         
         batch_data.append(flat_dict)
@@ -316,7 +332,7 @@ def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
     return batch_data
 
 
-def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[PPOExperience], config: PPOConfig):
+def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig):
     """Perform one PPO training step."""
     if not experiences:
         return {}
@@ -358,9 +374,9 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
             # Get old log probs, advantages, target values
             old_log_probs = torch.tensor([exp.log_prob for exp in [experiences[i] for i in batch_indices]], 
                                        device=net.device, dtype=torch.float32)
-            advantages = torch.tensor([exp.reward for exp in [experiences[i] for i in batch_indices]], 
+            batch_advantages = torch.tensor([advantages[i] for i in batch_indices], 
                                     device=net.device, dtype=torch.float32)
-            target_values = torch.tensor([exp.value for exp in [experiences[i] for i in batch_indices]], 
+            target_values = torch.tensor([returns[i] for i in batch_indices], 
                                        device=net.device, dtype=torch.float32)
             chosen_indices = torch.tensor([exp.action_idx for exp in [experiences[i] for i in batch_indices]], 
                                         device=net.device, dtype=torch.long)
@@ -389,8 +405,8 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
             clipfrac = ((ratio - 1.0).abs() > config.clip_ratio).float().mean()
             
             # Clipped surrogate objective
-            surr1 = ratio * advantages
-            surr2 = torch.clamp(ratio, 1 - config.clip_ratio, 1 + config.clip_ratio) * advantages
+            surr1 = ratio * batch_advantages
+            surr2 = torch.clamp(ratio, 1 - config.clip_ratio, 1 + config.clip_ratio) * batch_advantages
             policy_loss = -torch.min(surr1, surr2).mean()
             
             # Value loss
@@ -426,7 +442,7 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
             if torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy):
                 print(f"NaN detected - policy: {policy_loss.item()}, value: {value_loss.item()}, entropy: {entropy.item()}")
                 print(f"Ratio stats - min: {ratio.min().item()}, max: {ratio.max().item()}, mean: {ratio.mean().item()}")
-                print(f"Advantages stats - min: {advantages.min().item()}, max: {advantages.max().item()}, mean: {advantages.mean().item()}")
+                print(f"Advantages stats - min: {batch_advantages.min().item()}, max: {batch_advantages.max().item()}, mean: {batch_advantages.mean().item()}")
                 continue  # Skip this batch
             
             # Total loss
@@ -468,8 +484,8 @@ def main():
     parser.add_argument('--games-per-batch', type=int, default=256,
                         help='Number of games per training batch')
     parser.add_argument('--reward-function', type=str, default='perfected_strike',
-                        choices=['smooth', 'perfected_strike'],
-                        help='Reward function to use (default: perfected_strike)')
+                        choices=['smooth', 'perfected_strike', 'victory'],
+                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss) (default: perfected_strike)')
     
     args = parser.parse_args()
     
@@ -483,9 +499,11 @@ def main():
     
     # Select reward function
     if args.reward_function == 'smooth':
-        reward_fn = lambda gc: compute_smooth_reward(gc.outcome, gc.floor_num)
+        reward_fn = compute_progress_reward
     elif args.reward_function == 'perfected_strike':
         reward_fn = compute_perfected_strike_reward
+    elif args.reward_function == 'victory':
+        reward_fn = compute_victory_reward
     else:
         raise ValueError(f"Unknown reward function: {args.reward_function}")
     
@@ -515,7 +533,7 @@ def main():
             
             # Collect experience
             start_time = time.time()
-            trajectories = collect_experience(config, service, start_seed=iteration * 1000, reward_fn=reward_fn)
+            trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000)
             collect_time = time.time() - start_time
             
             if not trajectories:
@@ -531,7 +549,7 @@ def main():
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
             
             # Prepare training data
-            experiences = compute_advantages(trajectories, config)
+            experiences, advantages, returns = compute_advantages(trajectories, config)
             
             if not experiences:
                 print("No experiences to train on, skipping iteration")
@@ -541,7 +559,7 @@ def main():
             
             # Perform PPO training step
             train_start = time.time()
-            losses = ppo_train_step(net, optimizer, experiences, config)
+            losses = ppo_train_step(net, optimizer, experiences, advantages, returns, config)
             train_time = time.time() - train_start
             
             print(f"Training completed in {train_time:.1f}s")
