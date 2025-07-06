@@ -46,8 +46,8 @@ class PPOConfig:
     value_lr: float = 1e-4
     
     # GAE parameters
-    gamma: float = 0.99
-    gae_lambda: float = 0.95
+    gamma: float = 1.00
+    gae_lambda: float = 0.97
     
     # Training settings
     num_iterations: int = 1000
@@ -72,6 +72,7 @@ class GameMetrics:
 class PPOExperience(NamedTuple):
     """Single step of experience from a game."""
     choice: Choice
+    action_idx: int  # Needed for logprobs calculation in PPO training
     log_prob: float
     metrics: GameMetrics
     action_str: str  # Store clean action description for debugging
@@ -243,7 +244,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         elif path[0] == 'fixed':
                             action = choice.fixed_actions_list[path[1]]
                             chosen_fixed = choice.fixed_actions[path[1]]
-                            action_desc = str(chosen_fixed)
+                            action_desc = str(chosen_fixed).split('.')[-1]  # Remove "FixedAction." prefix
                             if perfected_strike_offered:
                                 log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose fixed action instead")
                         else:
@@ -252,6 +253,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         # Store experience data before action execution, but capture metrics after
                         exp_data = {
                             'choice': choice,
+                            'action_idx': chosen_idx,
                             'log_prob': log_prob,
                             'value': value,
                             'action_str': action_desc
@@ -272,6 +274,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         
                         exp = PPOExperience(
                             choice=exp_data['choice'],
+                            action_idx=exp_data['action_idx'],
                             log_prob=exp_data['log_prob'],
                             metrics=metrics,
                             action_str=exp_data['action_str']
