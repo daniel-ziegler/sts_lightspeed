@@ -35,12 +35,17 @@ class TrainingHP:
     validate_every_n_steps: int = 2000
     log_every_n_steps: int = 20
 
-def parse_args() -> tuple[List[str], TrainingHP]:
-    """Parse command line arguments and return data paths and training hyperparameters"""
+def parse_args() -> tuple[List[str], TrainingHP, str]:
+    """Parse command line arguments and return data paths, training hyperparameters, and prediction mode"""
     parser = argparse.ArgumentParser(description='Train the Slay the Spire AI model')
     
     # Add positional argument for data paths
     parser.add_argument('data_paths', nargs='*', help='Paths to parquet files containing training data')
+    
+    # Add prediction mode argument
+    parser.add_argument('--prediction-mode', type=str, default='outcome', 
+                        choices=['outcome', 'pstrike'], 
+                        help='What to predict: outcome (win/loss) or pstrike (number of perfected strikes)')
     
     # Add arguments for each TrainingHP field
     defaults = TrainingHP()
@@ -58,7 +63,7 @@ def parse_args() -> tuple[List[str], TrainingHP]:
     hp_dict = {field.name: getattr(args, field.name) for field in fields(TrainingHP)}
     training_hp = TrainingHP(**hp_dict)
     
-    return args.data_paths, training_hp
+    return args.data_paths, training_hp, args.prediction_mode
 
 # %%
 def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
@@ -111,7 +116,7 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
     
     return train_df, balanced_valid_df
 
-data_paths, base_T = parse_args()
+data_paths, base_T, prediction_mode = parse_args()
 train_df, valid_df = load_and_preprocess_data(data_paths, base_T.validation_fraction)
 
 # %%
@@ -133,7 +138,7 @@ np.random.seed(3)
  #batch['outcome']
 
 # %%
-def train_step(net, opt, batch):
+def train_step(net, opt, batch, prediction_mode='outcome'):
     """
     Perform one training step.
     Returns (loss, accuracy) tuple
@@ -157,14 +162,38 @@ def train_step(net, opt, batch):
         print("Chosen logits:", chosen_logits)
         raise ValueError("NaN in logits")
     
-    loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
+    if prediction_mode == 'outcome':
+        # Binary classification for win/loss
+        loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
+        
+        # Check for NaN loss
+        if torch.isnan(loss):
+            print("Warning: NaN loss")
+            print("Chosen logits:", chosen_logits)
+            print("Outcomes:", batch['outcome'])
+            raise ValueError("NaN loss")
+        
+        with torch.no_grad():
+            accuracy = ((chosen_logits >= 0) == batch['outcome']).float().mean()
+            
+    elif prediction_mode == 'pstrike':
+        # Regression for pstrike count
+        pstrike_targets = batch['pstrike_count'].float()
+        loss = F.mse_loss(chosen_logits, pstrike_targets)
+        
+        # Check for NaN loss
+        if torch.isnan(loss):
+            print("Warning: NaN loss")
+            print("Chosen logits:", chosen_logits)
+            print("Pstrike targets:", pstrike_targets)
+            raise ValueError("NaN loss")
+        
+        with torch.no_grad():
+            # For regression, use mean absolute error as accuracy metric
+            accuracy = F.l1_loss(chosen_logits, pstrike_targets).item()
     
-    # Check for NaN loss
-    if torch.isnan(loss):
-        print("Warning: NaN loss")
-        print("Chosen logits:", chosen_logits)
-        print("Outcomes:", batch['outcome'])
-        raise ValueError("NaN loss")
+    else:
+        raise ValueError(f"Unknown prediction mode: {prediction_mode}")
     
     opt.zero_grad()
     loss.backward()
@@ -173,13 +202,10 @@ def train_step(net, opt, batch):
     torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
     
     opt.step()
-
-    with torch.no_grad():
-        accuracy = ((chosen_logits >= 0) == batch['outcome']).float().mean()
     
     return loss.item(), accuracy.item()
 
-def train(net, train_df, valid_df, T: TrainingHP, device: torch.device):
+def train(net, train_df, valid_df, T: TrainingHP, device: torch.device, prediction_mode='outcome'):
     """
     Train the network using the provided parameters and data.
     
@@ -189,11 +215,12 @@ def train(net, train_df, valid_df, T: TrainingHP, device: torch.device):
         valid_df: Validation data DataFrame
         T: Training hyperparameters
         device: Device to train on
+        prediction_mode: What to predict ('outcome' or 'pstrike')
         
     Returns:
         Tuple of (save_path, final_validation_accuracy)
     """
-    save_path = f"net.outcome.lr{T.initial_lr:.1e}.wd{T.weight_decay:.1e}.e{T.num_epochs}.pt"
+    save_path = f"net.{prediction_mode}.lr{T.initial_lr:.1e}.wd{T.weight_decay:.1e}.e{T.num_epochs}.pt"
     
     valid_loader = torch.utils.data.DataLoader(
         SlayDataset(valid_df),
@@ -226,20 +253,26 @@ def train(net, train_df, valid_df, T: TrainingHP, device: torch.device):
             for param_group in opt.param_groups:
                 param_group['lr'] = current_lr
             
-            loss, acc = train_step(net, opt, batch)
+            loss, acc = train_step(net, opt, batch, prediction_mode)
 
             if i % T.log_every_n_steps == 0:
-                print(f"{i}: loss={loss:.4f}, acc={acc:.3f}, lr={current_lr:.2e}")
+                if prediction_mode == 'outcome':
+                    print(f"{i}: loss={loss:.4f}, acc={acc:.3f}, lr={current_lr:.2e}")
+                else:
+                    print(f"{i}: loss={loss:.4f}, mae={acc:.3f}, lr={current_lr:.2e}")
             if i != 0 and i % T.validate_every_n_steps == 0 or i == len(train_loader) - 1:
                 print(f"{i}: Validating")
-                valid_losses, valid_acc = validate(valid_loader, net, device)
+                valid_losses, valid_acc = validate(valid_loader, net, device, prediction_mode)
                 print(f"Valid loss: {np.mean(valid_losses)}")
-                print(f"Valid acc: {valid_acc}")
+                if prediction_mode == 'outcome':
+                    print(f"Valid acc: {valid_acc}")
+                else:
+                    print(f"Valid mae: {valid_acc}")
 
     torch.save(net.state_dict(), save_path)
     return save_path, valid_acc
 
-def validate(valid_loader, net, device):
+def validate(valid_loader, net, device, prediction_mode='outcome'):
     """Run validation and return losses and accuracy."""
     valid_losses = []
     valid_preds = []
@@ -256,16 +289,27 @@ def validate(valid_loader, net, device):
             # Clip logits to avoid numerical issues
             chosen_logits = torch.clamp(chosen_logits, min=-20, max=20)
             
-            loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
-            pred = chosen_logits >= 0
-            valid_losses.append(loss.item())
-            valid_targets.append(batch['outcome'].cpu().numpy())
-            valid_preds.append(pred.cpu().numpy())
+            if prediction_mode == 'outcome':
+                loss = F.binary_cross_entropy_with_logits(chosen_logits, batch['outcome'])
+                pred = chosen_logits >= 0
+                valid_losses.append(loss.item())
+                valid_targets.append(batch['outcome'].cpu().numpy())
+                valid_preds.append(pred.cpu().numpy())
+            elif prediction_mode == 'pstrike':
+                pstrike_targets = batch['pstrike_count'].float()
+                loss = F.mse_loss(chosen_logits, pstrike_targets)
+                valid_losses.append(loss.item())
+                valid_targets.append(pstrike_targets.cpu().numpy())
+                valid_preds.append(chosen_logits.cpu().numpy())
         
-        acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
+        if prediction_mode == 'outcome':
+            acc = np.mean(np.concatenate(valid_preds) == np.concatenate(valid_targets))
+        else:
+            # For regression, use mean absolute error
+            acc = np.mean(np.abs(np.concatenate(valid_preds) - np.concatenate(valid_targets)))
     return valid_losses, acc
 
-def hyperparameter_sweep(train_df, valid_df):
+def hyperparameter_sweep(train_df, valid_df, prediction_mode='outcome'):
     """Run hyperparameter sweep and save results."""
     learning_rates = np.geomspace(5e-5, 1e-5, 5)
     weight_decays = np.geomspace(1e-5, 1e-5, 1)
@@ -290,7 +334,7 @@ def hyperparameter_sweep(train_df, valid_df):
         )
         
         # Train model
-        save_path, valid_acc = train(net, train_df, valid_df, T, device)
+        save_path, valid_acc = train(net, train_df, valid_df, T, device, prediction_mode)
 
         del net
         
@@ -300,25 +344,34 @@ def hyperparameter_sweep(train_df, valid_df):
             'weight_decay': wd,
             'valid_accuracy': valid_acc,
             'model_path': save_path,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'prediction_mode': prediction_mode
         }
         results.append(result)
         
         # Save intermediate results
-        with open('sweep_results.json', 'w') as f:
+        with open(f'sweep_results_{prediction_mode}.json', 'w') as f:
             json.dump(results, f, indent=2)
         
     # Find best model
-    best_result = max(results, key=lambda x: x['valid_accuracy'])
+    if prediction_mode == 'outcome':
+        best_result = max(results, key=lambda x: x['valid_accuracy'])
+    else:
+        # For regression, lower MAE is better
+        best_result = min(results, key=lambda x: x['valid_accuracy'])
+    
     print("\nBest model:")
     print(f"Learning rate: {best_result['learning_rate']:.1e}")
     print(f"Weight decay: {best_result['weight_decay']:.1e}")
-    print(f"Validation accuracy: {best_result['valid_accuracy']:.4f}")
+    if prediction_mode == 'outcome':
+        print(f"Validation accuracy: {best_result['valid_accuracy']:.4f}")
+    else:
+        print(f"Validation MAE: {best_result['valid_accuracy']:.4f}")
     print(f"Model path: {best_result['model_path']}")
     
     return best_result['model_path'], results
 
-save_path, results = hyperparameter_sweep(train_df, valid_df)
+save_path, results = hyperparameter_sweep(train_df, valid_df, prediction_mode)
 
 # %%
 H = ModelHP(use_value_head=False)

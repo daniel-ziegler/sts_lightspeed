@@ -507,6 +507,13 @@ def run_game_data(seed: int, net: Optional[NNService] = None, temperature: float
     df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
     df["seed"] = seed
     df["final_floor"] = final_floor
+    
+    # Add pstrike count for each choice
+    df["pstrike_count"] = [
+        sum(1 for card_id in c.choice.obs.deck.cards if card_id == int(sts.CardId.PERFECTED_STRIKE))
+        for c in choices
+    ]
+    
     return df
 
 class ChoiceStats:
