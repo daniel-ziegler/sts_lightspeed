@@ -52,6 +52,7 @@ class PPOConfig:
     # Training settings
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
+    resume_from: int = 0  # Step to resume from (0 = start from beginning)
     
     # Logging
     log_every: int = 10
@@ -317,13 +318,13 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
         if len(all_reward_values) > len(experiences):
             final_delta = all_reward_values[-1] - all_reward_values[-2]
             if len(experiences) > 40:  # Debug for longer episodes
-                print(f"DEBUG: Final state - floor: {all_metrics[-1].floor_num}, outcome: {all_metrics[-1].outcome}, reward: {all_reward_values[-1]:.6f}")
-                print(f"DEBUG: Last exp - floor: {all_metrics[-2].floor_num}, outcome: {all_metrics[-2].outcome}, reward: {all_reward_values[-2]:.6f}")
-                print(f"DEBUG: Final delta = {final_delta:.6f}")
-                print(f"DEBUG: Last step reward before adding delta = {rewards[-1]:.6f}")
+                log.debug(f"Final state - floor: {all_metrics[-1].floor_num}, outcome: {all_metrics[-1].outcome}, reward: {all_reward_values[-1]:.6f}")
+                log.debug(f"Last exp - floor: {all_metrics[-2].floor_num}, outcome: {all_metrics[-2].outcome}, reward: {all_reward_values[-2]:.6f}")
+                log.debug(f"Final delta = {final_delta:.6f}")
+                log.debug(f"Last step reward before adding delta = {rewards[-1]:.6f}")
             rewards[-1] += final_delta
             if len(experiences) > 40:
-                print(f"DEBUG: Last step reward after adding delta = {rewards[-1]:.6f}")
+                log.debug(f"Last step reward after adding delta = {rewards[-1]:.6f}")
     
     # Add terminal state value (0.0) for GAE bootstrap
     values.append(0.0)
@@ -331,14 +332,14 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     
     # Debug: Print what we're actually storing
     if len(experiences) > 40:  # Only for longer episodes
-        print(f"DEBUG run_ppo_episode: Created {len(rewards)} rewards: {rewards[:3]}...{rewards[-3:]}")
+        log.debug(f"Created {len(rewards)} rewards: {rewards[:3]}...{rewards[-3:]}")
         
     # Debug: Check for suspicious high rewards that might indicate the original bug
     for i, (exp, reward) in enumerate(zip(experiences, rewards)):
         if abs(reward - 0.98) < 0.01 and exp.metrics.floor_num >= 45 and exp.metrics.floor_num <= 50:
-            print(f"DEBUG FOUND SUSPICIOUS REWARD: Step {i}, floor {exp.metrics.floor_num}, outcome {exp.metrics.outcome}, reward {reward:.6f}")
-            print(f"  Expected reward for floor {exp.metrics.floor_num}: {compute_progress_reward(exp.metrics):.6f}")
-            print(f"  This matches the original bug description!")
+            log.warning(f"DEBUG FOUND SUSPICIOUS REWARD: Step {i}, floor {exp.metrics.floor_num}, outcome {exp.metrics.outcome}, reward {reward:.6f}")
+            log.warning(f"  Expected reward for floor {exp.metrics.floor_num}: {compute_progress_reward(exp.metrics):.6f}")
+            log.warning(f"  This matches the original bug description!")
     
     return PPOTrajectory(
         experiences=experiences,
@@ -423,33 +424,48 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
-            print(f"Step | {'Action':30s} | {'Floor':5s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+            print(f"Step | {'Floor':5s} | {'Action':30s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
             print("-" * 100)
             
             for t in range(len(traj.experiences)):
                 exp = traj.experiences[t]
-                # Get action description (simplified - just show what was offered)
-                offered_items = []
-                if exp.choice.cards_offered:
-                    # Check if Perfected Strike is among the offered cards
-                    has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
-                    cards_str = f"{len(exp.choice.cards_offered)}card"
-                    if has_pstrike:
-                        cards_str += "*"
-                    offered_items.append(cards_str)
-                if exp.choice.relics_offered:
-                    offered_items.append(f"{len(exp.choice.relics_offered)}rel")
-                if exp.choice.potions_offered:
-                    offered_items.append(f"{len(exp.choice.potions_offered)}pot")
-                if exp.choice.fixed_actions:
-                    offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
+                # Get action description - what was actually chosen
+                action_desc = "Unknown"
                 
-                if offered_items:
-                    action_desc = f"{'+'.join(offered_items)} idx:{exp.action_idx}"
+                # Try to get the actual chosen action description
+                if exp.choice.cards_offered and exp.action_idx < len(exp.choice.card_actions):
+                    chosen_card = exp.choice.cards_offered[exp.action_idx]
+                    action_desc = str(chosen_card)[:30]
+                elif exp.choice.relics_offered and exp.action_idx < len(exp.choice.relic_actions):
+                    chosen_relic = exp.choice.relics_offered[exp.action_idx]
+                    action_desc = sts.RelicId(chosen_relic).name[:30]
+                elif exp.choice.potions_offered and exp.action_idx < len(exp.choice.potion_actions):
+                    chosen_potion = exp.choice.potions_offered[exp.action_idx]
+                    action_desc = sts.Potion(chosen_potion).name[:30]
+                elif exp.choice.fixed_actions and exp.action_idx < len(exp.choice.fixed_actions_list):
+                    action_desc = str(exp.choice.fixed_actions[exp.action_idx])[:30]
                 else:
-                    action_desc = f"Action idx: {exp.action_idx}"
+                    # Fallback to showing what was offered
+                    offered_items = []
+                    if exp.choice.cards_offered:
+                        has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
+                        cards_str = f"{len(exp.choice.cards_offered)}card"
+                        if has_pstrike:
+                            cards_str += "*"
+                        offered_items.append(cards_str)
+                    if exp.choice.relics_offered:
+                        offered_items.append(f"{len(exp.choice.relics_offered)}rel")
+                    if exp.choice.potions_offered:
+                        offered_items.append(f"{len(exp.choice.potions_offered)}pot")
+                    if exp.choice.fixed_actions:
+                        offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
+                    
+                    if offered_items:
+                        action_desc = f"{'+'.join(offered_items)} idx:{exp.action_idx}"
+                    else:
+                        action_desc = f"Action idx: {exp.action_idx}"
                 
-                print(f"{t:4d} | {action_desc[:30]:30s} | {exp.metrics.floor_num:5d} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+                print(f"{t:4d} | {exp.metrics.floor_num:5d} | {action_desc[:30]:30s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
             print("-" * 100)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
@@ -786,13 +802,32 @@ def main():
         value_net = torch.compile(value_net, mode="default")
         
         if args.model_path:
-            # Load policy network weights
-            state = torch.load(args.model_path, map_location=device, weights_only=True)
-            policy_net.load_state_dict(state, strict=False)
-            # Initialize value network with same weights (excluding value head)
-            value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
-            value_net.load_state_dict(value_state, strict=False)
-            print(f"Loaded policy model from {args.model_path}")
+            if config.resume_from > 0:
+                # Load from specific iteration checkpoints
+                policy_path = f"{args.model_path}.policy.iter_{config.resume_from}"
+                value_path = f"{args.model_path}.value.iter_{config.resume_from}"
+                try:
+                    policy_state = torch.load(policy_path, map_location=device, weights_only=True)
+                    value_state = torch.load(value_path, map_location=device, weights_only=True)
+                    policy_net.load_state_dict(policy_state)
+                    value_net.load_state_dict(value_state)
+                    print(f"Resumed from iteration {config.resume_from}: loaded {policy_path} and {value_path}")
+                except FileNotFoundError as e:
+                    print(f"Could not find checkpoint files for iteration {config.resume_from}: {e}")
+                    print("Loading from base model path instead")
+                    state = torch.load(args.model_path, map_location=device, weights_only=True)
+                    policy_net.load_state_dict(state, strict=False)
+                    value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
+                    value_net.load_state_dict(value_state, strict=False)
+                    print(f"Loaded policy model from {args.model_path}")
+            else:
+                # Load from base model path
+                state = torch.load(args.model_path, map_location=device, weights_only=True)
+                policy_net.load_state_dict(state, strict=False)
+                # Initialize value network with same weights (excluding value head)
+                value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
+                value_net.load_state_dict(value_state, strict=False)
+                print(f"Loaded policy model from {args.model_path}")
         
         # Create separate optimizers
         policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=config.policy_lr)
@@ -814,9 +849,24 @@ def main():
         net = torch.compile(net, mode="default")
         
         if args.model_path:
-            state = torch.load(args.model_path, map_location=device, weights_only=True)
-            net.load_state_dict(state, strict=False)  # Allow missing value head weights
-            print(f"Loaded model from {args.model_path}")
+            if config.resume_from > 0:
+                # Load from specific iteration checkpoint
+                checkpoint_path = f"{args.model_path}.iter_{config.resume_from}"
+                try:
+                    state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+                    net.load_state_dict(state)
+                    print(f"Resumed from iteration {config.resume_from}: loaded {checkpoint_path}")
+                except FileNotFoundError as e:
+                    print(f"Could not find checkpoint file for iteration {config.resume_from}: {e}")
+                    print("Loading from base model path instead")
+                    state = torch.load(args.model_path, map_location=device, weights_only=True)
+                    net.load_state_dict(state, strict=False)  # Allow missing value head weights
+                    print(f"Loaded model from {args.model_path}")
+            else:
+                # Load from base model path
+                state = torch.load(args.model_path, map_location=device, weights_only=True)
+                net.load_state_dict(state, strict=False)  # Allow missing value head weights
+                print(f"Loaded model from {args.model_path}")
         
         # Create service
         service = NNService(net, batch_size=32, batch_size_factor=16)
@@ -829,10 +879,13 @@ def main():
         value_service = None  # No separate value service needed
         print("Using single network with value head")
     
-    print(f"Starting PPO training with {config.num_games_per_batch} games per batch")
+    if config.resume_from > 0:
+        print(f"Resuming PPO training from iteration {config.resume_from} with {config.num_games_per_batch} games per batch")
+    else:
+        print(f"Starting PPO training with {config.num_games_per_batch} games per batch")
     
     try:
-        for iteration in range(config.num_iterations):
+        for iteration in range(config.resume_from, config.num_iterations):
             print(f"\nIteration {iteration + 1}/{config.num_iterations}")
             
             # Collect experience
