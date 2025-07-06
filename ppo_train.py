@@ -169,7 +169,11 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                     from playouts import construct_choice
                     choice = construct_choice(gc, obs, actions)
                     
-                    if choice.cards_offered or choice.relics_offered or choice.potions_offered or choice.fixed_actions:
+                    # Count total number of choices available
+                    total_choices = (len(choice.cards_offered) + len(choice.relics_offered) + 
+                                   len(choice.potions_offered) + len(choice.fixed_actions))
+                    
+                    if total_choices > 1:
                         # Get network predictions
                         batch_tensors, output = service.get_logits(choice)
                         
@@ -244,7 +248,18 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                         else:
                             raise ValueError(f"Unknown path: {path}")
                         
-                        # Extract metrics from current game state for dense reward computation
+                        # Store experience data before action execution, but capture metrics after
+                        exp_data = {
+                            'choice': choice,
+                            'action_idx': chosen_idx,
+                            'log_prob': log_prob,
+                            'value': value
+                        }
+                        
+                        assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                        action.execute(gc)
+                        
+                        # Extract metrics from game state AFTER action execution for correct reward computation
                         perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
                         metrics = GameMetrics(
                             floor_num=gc.floor_num,
@@ -255,20 +270,21 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                         )
                         
                         exp = PPOExperience(
-                            choice=choice,
-                            action_idx=chosen_idx,
-                            log_prob=log_prob,
+                            choice=exp_data['choice'],
+                            action_idx=exp_data['action_idx'],
+                            log_prob=exp_data['log_prob'],
                             metrics=metrics
                         )
                         experiences.append(exp)
-                        values.append(value)  # Store value separately
+                        values.append(exp_data['value'])  # Store value separately
                     else:
                         action = agent.pick_gameaction(gc)
+                        assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                        action.execute(gc)
                 else:
                     action = agent.pick_gameaction(gc)
-                
-                assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
-                action.execute(gc)
+                    assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                    action.execute(gc)
                 
         except Exception as e:
             log.error(f"Error in episode {seed}: {e}")
@@ -375,17 +391,20 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
         if debug_first and traj_idx == debug_traj_idx:
             print(f"=== PPO Advantage Calculation Debug (Trajectory {traj_idx} with nonzero reward) ===")
             print(f"Trajectory length: {len(traj.experiences)} steps")
-            print(f"Config: gamma={config.gamma}, gae_lambda={config.gae_lambda}")
-            print(f"Final reward: {traj.final_reward:.3f}")
-            print(f"Step | {'Action':30s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
-            print("-" * 80)
+            print(f"Step | {'Action':30s} | {'Floor':5s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+            print("-" * 90)
             
             for t in range(len(traj.experiences)):
                 exp = traj.experiences[t]
                 # Get action description (simplified - just show what was offered)
                 offered_items = []
                 if exp.choice.cards_offered:
-                    offered_items.append(f"{len(exp.choice.cards_offered)}cards")
+                    # Check if Perfected Strike is among the offered cards
+                    has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
+                    cards_str = f"{len(exp.choice.cards_offered)}cards"
+                    if has_pstrike:
+                        cards_str += "*"
+                    offered_items.append(cards_str)
                 if exp.choice.relics_offered:
                     offered_items.append(f"{len(exp.choice.relics_offered)}rel")
                 if exp.choice.potions_offered:
@@ -398,9 +417,9 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 else:
                     action_desc = f"Action idx: {exp.action_idx}"
                 
-                print(f"{t:4d} | {action_desc[:30]:30s} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+                print(f"{t:4d} | {action_desc[:30]:30s} | {exp.metrics.floor_num:5d} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
-            print("-" * 80)
+            print("-" * 90)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
             print(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
             print("=" * 80)
