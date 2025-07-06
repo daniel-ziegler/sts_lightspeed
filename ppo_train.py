@@ -52,6 +52,7 @@ class PPOConfig:
     # Training settings
     num_iterations: int = 1000
     temperature: float = 1.0
+    separate_networks: bool = False  # Use separate policy and value networks
     
     # Logging
     log_every: int = 10
@@ -470,10 +471,22 @@ def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
     return batch_data
 
 
-def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig):
+def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig):
     """Perform one PPO training step."""
     if not experiences:
         return {}
+    
+    # Determine if we have separate networks
+    separate_networks = isinstance(nets, tuple)
+    
+    if separate_networks:
+        policy_net, value_net = nets
+        policy_optimizer, value_optimizer = optimizers
+        device = policy_net.device
+    else:
+        net = nets
+        optimizer = optimizers
+        device = net.device
     
     # Convert experiences to batches
     batch_data = experiences_to_batches(experiences)
@@ -499,25 +512,43 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
             collated_batch = collate_fn(mini_batch)
             
             # Move to device
-            collated_batch = move_to_device(collated_batch, net.device)
+            collated_batch = move_to_device(collated_batch, device)
             
             # Forward pass
-            output = net(collated_batch)
-            if isinstance(output, tuple):
-                new_logits, new_values = output
+            if separate_networks:
+                # Get policy logits from policy network
+                policy_batch = {k: v.clone() if isinstance(v, torch.Tensor) else 
+                              {k2: v2.clone() if isinstance(v2, torch.Tensor) else v2 for k2, v2 in v.items()} if isinstance(v, dict) 
+                              else v for k, v in collated_batch.items()}
+                new_logits = policy_net(policy_batch)
+                
+                # Get values from value network  
+                value_batch = {k: v.clone() if isinstance(v, torch.Tensor) else 
+                             {k2: v2.clone() if isinstance(v2, torch.Tensor) else v2 for k2, v2 in v.items()} if isinstance(v, dict)
+                             else v for k, v in collated_batch.items()}
+                value_output = value_net(value_batch)
+                if isinstance(value_output, tuple):
+                    _, new_values = value_output  # Extract values from tuple
+                else:
+                    new_values = torch.zeros(len(mini_batch), device=device)
             else:
-                new_logits = output
-                new_values = torch.zeros(len(mini_batch), device=net.device)
+                # Single network with value head
+                output = net(collated_batch)
+                if isinstance(output, tuple):
+                    new_logits, new_values = output
+                else:
+                    new_logits = output
+                    new_values = torch.zeros(len(mini_batch), device=device)
             
             # Get old log probs, advantages, target values
             old_log_probs = torch.tensor([exp.log_prob for exp in [experiences[i] for i in batch_indices]], 
-                                       device=net.device, dtype=torch.float32)
+                                       device=device, dtype=torch.float32)
             batch_advantages = torch.tensor([advantages[i] for i in batch_indices], 
-                                    device=net.device, dtype=torch.float32)
+                                    device=device, dtype=torch.float32)
             target_values = torch.tensor([returns[i] for i in batch_indices], 
-                                       device=net.device, dtype=torch.float32)
+                                       device=device, dtype=torch.float32)
             chosen_indices = torch.tensor([exp.action_idx for exp in [experiences[i] for i in batch_indices]], 
-                                        device=net.device, dtype=torch.long)
+                                        device=device, dtype=torch.long)
             
             # Compute new log probabilities with numerical stability
             action_probs = F.softmax(new_logits, dim=-1)
@@ -565,12 +596,12 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
                     batch_entropies.append(sample_entropy)
                 else:
                     # If only 0 or 1 valid actions, entropy is 0
-                    batch_entropies.append(torch.tensor(0.0, device=net.device))
+                    batch_entropies.append(torch.tensor(0.0, device=device))
             
             if batch_entropies:
                 entropy = torch.stack(batch_entropies).mean()
             else:
-                entropy = torch.tensor(0.0, device=net.device)
+                entropy = torch.tensor(0.0, device=device)
             
             # Optional debug (uncomment for debugging)
             # print(f"Valid actions per sample: {valid_mask.sum(dim=1).float().mean().item():.1f}")
@@ -583,14 +614,30 @@ def ppo_train_step(net: NN, optimizer: torch.optim.Optimizer, experiences: List[
                 print(f"Advantages stats - min: {batch_advantages.min().item()}, max: {batch_advantages.max().item()}, mean: {batch_advantages.mean().item()}")
                 continue  # Skip this batch
             
-            # Total loss
-            total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
-            
             # Backward pass
-            optimizer.zero_grad()
-            total_loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), config.max_grad_norm)
-            optimizer.step()
+            if separate_networks:
+                # Update policy network
+                policy_loss_total = policy_loss - config.entropy_coef * entropy
+                policy_optimizer.zero_grad()
+                policy_loss_total.backward(retain_graph=True)
+                policy_grad_norm = torch.nn.utils.clip_grad_norm_(policy_net.parameters(), config.max_grad_norm)
+                policy_optimizer.step()
+                
+                # Update value network
+                value_optimizer.zero_grad()
+                value_loss.backward()
+                value_grad_norm = torch.nn.utils.clip_grad_norm_(value_net.parameters(), config.max_grad_norm)
+                value_optimizer.step()
+                
+                # Average gradient norms for reporting
+                grad_norm = (policy_grad_norm + value_grad_norm) / 2
+            else:
+                # Single network with combined loss
+                total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+                optimizer.zero_grad()
+                total_loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), config.max_grad_norm)
+                optimizer.step()
             
             # Accumulate losses and metrics
             total_policy_loss += policy_loss.item()
@@ -689,21 +736,57 @@ def main():
     
     print(f"Using reward function: {args.reward_function}")
     
-    # Create network with value head
-    model_hp = ModelHP(use_value_head=True)
-    net = NN(model_hp).to(device)
-    net = torch.compile(net, mode="default")
-    
-    if args.model_path:
-        state = torch.load(args.model_path, map_location=device, weights_only=True)
-        net.load_state_dict(state, strict=False)  # Allow missing value head weights
-        print(f"Loaded model from {args.model_path}")
-    
-    # Create service
-    service = NNService(net, batch_size=32, batch_size_factor=16)
-    
-    # Create optimizer
-    optimizer = torch.optim.Adam(net.parameters(), lr=config.policy_lr)
+    # Create networks based on configuration
+    if config.separate_networks:
+        # Create separate policy and value networks
+        policy_hp = ModelHP(use_value_head=False)
+        value_hp = ModelHP(use_value_head=True)
+        
+        policy_net = NN(policy_hp).to(device)
+        value_net = NN(value_hp).to(device)
+        
+        policy_net = torch.compile(policy_net, mode="default")
+        value_net = torch.compile(value_net, mode="default")
+        
+        if args.model_path:
+            # Load policy network weights
+            state = torch.load(args.model_path, map_location=device, weights_only=True)
+            policy_net.load_state_dict(state, strict=False)
+            # Initialize value network with same weights (excluding value head)
+            value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
+            value_net.load_state_dict(value_state, strict=False)
+            print(f"Loaded policy model from {args.model_path}")
+        
+        # Create separate optimizers
+        policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=config.policy_lr)
+        value_optimizer = torch.optim.Adam(value_net.parameters(), lr=config.value_lr)
+        
+        # Use policy network for action selection
+        service = NNService(policy_net, batch_size=32, batch_size_factor=16)
+        
+        nets = (policy_net, value_net)
+        optimizers = (policy_optimizer, value_optimizer)
+        print("Using separate policy and value networks")
+    else:
+        # Create single network with value head
+        model_hp = ModelHP(use_value_head=True)
+        net = NN(model_hp).to(device)
+        net = torch.compile(net, mode="default")
+        
+        if args.model_path:
+            state = torch.load(args.model_path, map_location=device, weights_only=True)
+            net.load_state_dict(state, strict=False)  # Allow missing value head weights
+            print(f"Loaded model from {args.model_path}")
+        
+        # Create service
+        service = NNService(net, batch_size=32, batch_size_factor=16)
+        
+        # Create optimizer
+        optimizer = torch.optim.Adam(net.parameters(), lr=config.policy_lr)
+        
+        nets = net
+        optimizers = optimizer
+        print("Using single network with value head")
     
     print(f"Starting PPO training with {config.num_games_per_batch} games per batch")
     
@@ -748,7 +831,7 @@ def main():
             
             # Perform PPO training step
             train_start = time.time()
-            losses = ppo_train_step(net, optimizer, experiences, advantages, returns, config)
+            losses = ppo_train_step(nets, optimizers, experiences, advantages, returns, config)
             train_time = time.time() - train_start
             
             print(f"Training completed in {train_time:.1f}s")
@@ -761,15 +844,27 @@ def main():
             
             # Save model periodically
             if (iteration + 1) % config.save_every == 0:
-                torch.save(net.state_dict(), f"{args.save_path}.iter_{iteration + 1}")
-                print(f"Saved model checkpoint at iteration {iteration + 1}")
+                if config.separate_networks:
+                    policy_net, value_net = nets
+                    torch.save(policy_net.state_dict(), f"{args.save_path}.policy.iter_{iteration + 1}")
+                    torch.save(value_net.state_dict(), f"{args.save_path}.value.iter_{iteration + 1}")
+                    print(f"Saved separate network checkpoints at iteration {iteration + 1}")
+                else:
+                    torch.save(nets.state_dict(), f"{args.save_path}.iter_{iteration + 1}")
+                    print(f"Saved model checkpoint at iteration {iteration + 1}")
     
     finally:
         service.stop()
     
     # Save final model
-    torch.save(net.state_dict(), args.save_path)
-    print(f"Saved final model to {args.save_path}")
+    if config.separate_networks:
+        policy_net, value_net = nets
+        torch.save(policy_net.state_dict(), f"{args.save_path}.policy")
+        torch.save(value_net.state_dict(), f"{args.save_path}.value")
+        print(f"Saved final separate networks to {args.save_path}.policy and {args.save_path}.value")
+    else:
+        torch.save(nets.state_dict(), args.save_path)
+        print(f"Saved final model to {args.save_path}")
 
 
 if __name__ == "__main__":
