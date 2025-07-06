@@ -51,7 +51,7 @@ class PPOConfig:
     
     # Logging
     log_every: int = 10
-    save_every: int = 100
+    save_every: int = 20
 
 
 
@@ -167,11 +167,18 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                         chosen_idx = int(rng.choices(range(len(probs)), weights=boltz_probs, k=1)[0])
                         log_prob = np.log(np.maximum(boltz_probs[chosen_idx], 1e-20))
                         
+                        # Check if Perfected Strike is offered and log if taken
+                        perfected_strike_offered = any(card.id == sts.CardId.PERFECTED_STRIKE for card in choice.cards_offered)
+                        
                         # Convert back to game action
                         path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
                         
                         if path[0] == 'cards':
                             action = choice.card_actions[path[1]]
+                            chosen_card = choice.cards_offered[path[1]]
+                            if perfected_strike_offered:
+                                perfected_strike_taken = chosen_card.id == sts.CardId.PERFECTED_STRIKE
+                                print(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered, taken: {perfected_strike_taken}")
                         elif path[0] == 'relics':
                             action = choice.relic_actions[path[1]]
                         elif path[0] == 'potions':
