@@ -576,8 +576,8 @@ def main():
     parser.add_argument('--save-path', type=str, default='ppo_model.pt',
                         help='Path to save trained model')
     parser.add_argument('--reward-function', type=str, default='perfected_strike',
-                        choices=['smooth', 'perfected_strike', 'victory'],
-                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss) (default: perfected_strike)')
+                        choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes'],
+                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
     
     # Automatically add all PPOConfig fields as command line arguments
     config_defaults = PPOConfig()
@@ -640,6 +640,8 @@ def main():
         reward_fn = compute_perfected_strike_reward
     elif args.reward_function == 'victory':
         reward_fn = compute_victory_reward
+    elif args.reward_function == 'no_pstrikes':
+        reward_fn = compute_no_pstrikes_reward
     else:
         raise ValueError(f"Unknown reward function: {args.reward_function}")
     
