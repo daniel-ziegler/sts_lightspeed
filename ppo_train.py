@@ -122,7 +122,7 @@ def compute_no_pstrikes_reward(metrics: GameMetrics, prev_metrics: GameMetrics =
         return -float(metrics.perfected_strike_count - prev_metrics.perfected_strike_count)
 
 
-def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float = 1.0) -> PPOTrajectory:
+def run_ppo_episode(seed: int, service: NNService, reward_fn) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
@@ -186,17 +186,12 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                             value = 0.0  # No value head
                         
                         # Convert to probabilities and sample action
-                        probs = 1 / (1 + np.exp(-logits))  # sigmoid
-                        probs = probs / np.sum(probs)  # normalize
+                        logits_tensor = torch.tensor(logits)
+                        log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
+                        probs = np.exp(log_probs)
                         
-                        # Boltzmann sampling
-                        boltz_logits = np.log(np.maximum(probs, 1e-20)) / temperature
-                        boltz_logits = boltz_logits - np.max(boltz_logits)
-                        exp_logits = np.exp(boltz_logits)
-                        boltz_probs = exp_logits / np.sum(exp_logits)
-                        
-                        chosen_idx = int(rng.choices(range(len(probs)), weights=boltz_probs, k=1)[0])
-                        log_prob = np.log(np.maximum(boltz_probs[chosen_idx], 1e-20))
+                        chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
+                        log_prob = log_probs[chosen_idx]
                         
                         # Check if Perfected Strike is offered and log probability + decision
                         perfected_strike_offered = any(card.id == sts.CardId.PERFECTED_STRIKE for card in choice.cards_offered)
@@ -215,7 +210,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
                                     card_path = ('cards', i)
                                     try:
                                         pstrike_choice_idx = choice_space.path_to_ix(batch_tensors['choices'], card_path)
-                                        perfected_strike_prob = boltz_probs[pstrike_choice_idx]
+                                        perfected_strike_prob = probs[pstrike_choice_idx]
                                         pstrike_probs.append(perfected_strike_prob)
                                         break
                                     except (IndexError, KeyError):
@@ -334,13 +329,13 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     if config.num_workers == 1:
         # Single-threaded execution for easier debugging
         for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
-            trajectory = run_ppo_episode(start_seed + i, service, reward_fn, config.temperature)
+            trajectory = run_ppo_episode(start_seed + i, service, reward_fn)
             trajectories.append(trajectory)
     else:
         # Multi-threaded execution
         with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
             futures = [
-                executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, config.temperature)
+                executor.submit(run_ppo_episode, start_seed + i, service, reward_fn)
                 for i in range(config.num_games_per_batch)
             ]
             
@@ -413,7 +408,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                     offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
                 
                 if offered_items:
-                    action_desc = f"Choice({'+'.join(offered_items)}) idx:{exp.action_idx}"
+                    action_desc = f"{'+'.join(offered_items)} idx:{exp.action_idx}"
                 else:
                     action_desc = f"Action idx: {exp.action_idx}"
                 
