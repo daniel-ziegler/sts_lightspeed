@@ -46,8 +46,8 @@ class PPOConfig:
     value_lr: float = 1e-4
     
     # GAE parameters
-    gamma: float = 1.00
-    gae_lambda: float = 0.98
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
     
     # Training settings
     num_iterations: int = 1000
@@ -391,8 +391,8 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
         if debug_first and traj_idx == debug_traj_idx:
             print(f"=== PPO Advantage Calculation Debug (Trajectory {traj_idx} with nonzero reward) ===")
             print(f"Trajectory length: {len(traj.experiences)} steps")
-            print(f"Step | {'Action':30s} | {'Floor':5s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
-            print("-" * 90)
+            print(f"Step | {'Action':30s} | {'Floor':5s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+            print("-" * 100)
             
             for t in range(len(traj.experiences)):
                 exp = traj.experiences[t]
@@ -417,9 +417,9 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 else:
                     action_desc = f"Action idx: {exp.action_idx}"
                 
-                print(f"{t:4d} | {action_desc[:30]:30s} | {exp.metrics.floor_num:5d} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+                print(f"{t:4d} | {action_desc[:30]:30s} | {exp.metrics.floor_num:5d} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
-            print("-" * 90)
+            print("-" * 100)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
             print(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
             print("=" * 80)
