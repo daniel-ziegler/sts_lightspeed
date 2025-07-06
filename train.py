@@ -80,18 +80,19 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
     """
     df = pd.concat([pd.read_parquet(path) for path in paths])
     
+    data_df = df
     # Filter data to handle fixed actions
-    data_df = df[
-        df.apply(lambda r: (
-            r["choice_type"] == ActionType.FIXED or
-            r["choice_type"] == ActionType.RELIC or
-            r["choice_type"] == ActionType.POTION or
-            (r["choice_type"] == ActionType.CARD and 
-             r["chosen_idx"] >= 0 and 
-             r["chosen_idx"] < len(r["cards_offered.cards"]) and
-             r["chosen_idx"] < MAX_CHOICES)
-        ), axis=1)
-    ]
+    # data_df = df[
+    #     df.apply(lambda r: (
+    #         r["choice_type"] == ActionType.FIXED or
+    #         r["choice_type"] == ActionType.RELIC or
+    #         r["choice_type"] == ActionType.POTION or
+    #         (r["choice_type"] == ActionType.CARD and 
+    #          r["chosen_idx"] >= 0 and 
+    #          r["chosen_idx"] < len(r["cards_offered.cards"]) and
+    #          r["chosen_idx"] < MAX_CHOICES)
+    #     ), axis=1)
+    # ]
     print(data_df.columns)
 
     # Split data

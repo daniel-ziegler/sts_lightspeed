@@ -88,7 +88,7 @@ class PPOTrajectory(NamedTuple):
     pstrike_probs: List[float]  # Probabilities assigned to Perfected Strike when offered
 
 
-def compute_progress_reward(metrics: GameMetrics) -> float:
+def compute_progress_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
     """Compute reward based on game outcome and floor progress."""
     if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
         return 1.0
@@ -97,19 +97,29 @@ def compute_progress_reward(metrics: GameMetrics) -> float:
         return min(0.5, metrics.floor_num / 100.0)
 
 
-def compute_perfected_strike_reward(metrics: GameMetrics) -> float:
-    """Compute dense reward based on number of Perfected Strikes in deck."""
-    return float(metrics.perfected_strike_count)
+def compute_perfected_strike_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
+    """Compute shaped reward based on change in number of Perfected Strikes in deck."""
+    if prev_metrics is None:
+        # First step or final reward - use absolute count
+        return float(metrics.perfected_strike_count)
+    else:
+        # Reward shaping - only reward when count changes
+        return float(metrics.perfected_strike_count - prev_metrics.perfected_strike_count)
 
 
-def compute_victory_reward(metrics: GameMetrics) -> float:
+def compute_victory_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
     """Compute sparse victory-only reward (1.0 for victory, 0.0 otherwise)."""
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
-def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
-    """Compute dense reward that penalizes Perfected Strikes (negative of perfected_strike count)."""
-    return -float(metrics.perfected_strike_count)
+def compute_no_pstrikes_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
+    """Compute shaped reward that penalizes changes in Perfected Strikes (negative of change in count)."""
+    if prev_metrics is None:
+        # First step or final reward - use negative absolute count
+        return -float(metrics.perfected_strike_count)
+    else:
+        # Reward shaping - only penalize when count increases
+        return -float(metrics.perfected_strike_count - prev_metrics.perfected_strike_count)
 
 
 def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float = 1.0) -> PPOTrajectory:
@@ -276,8 +286,17 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, temperature: float
     # Compute final reward using the provided reward function
     final_reward = reward_fn(final_metrics)
     
-    # Compute rewards for all experiences using the reward function
-    rewards = [reward_fn(exp.metrics) for exp in experiences]
+    # Compute rewards for all experiences using the reward function with reward shaping
+    rewards = []
+    for i, exp in enumerate(experiences):
+        if i == 0:
+            # First experience - no previous metrics for shaping
+            reward = reward_fn(exp.metrics)
+        else:
+            # Use previous experience metrics for reward shaping
+            prev_metrics = experiences[i-1].metrics
+            reward = reward_fn(exp.metrics, prev_metrics)
+        rewards.append(reward)
     # Values were collected during the episode
     
     return PPOTrajectory(
@@ -322,6 +341,17 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
     all_advantages = []
     all_returns = []
     
+    # Find trajectory with nonzero reward for debug output
+    debug_traj_idx = None
+    if debug_first:
+        for i, traj in enumerate(trajectories):
+            if traj.final_reward != 0.0:
+                debug_traj_idx = i
+                break
+        # Fallback to first trajectory if none have nonzero reward
+        if debug_traj_idx is None and trajectories:
+            debug_traj_idx = 0
+    
     for traj_idx, traj in enumerate(trajectories):
         if not traj.experiences:
             continue
@@ -341,41 +371,39 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             advantages[t] = gae
             returns[t] = advantages[t] + values[t]
         
-        # Debug output for first trajectory
-        if debug_first and traj_idx == 0:
-            log.warning("=== PPO Advantage Calculation Debug (First Trajectory) ===")
-            log.warning(f"Trajectory length: {len(traj.experiences)} steps")
-            log.warning(f"Config: gamma={config.gamma}, gae_lambda={config.gae_lambda}")
-            log.warning("Step | Action | Reward | Pred Value | GAE Return | Raw Advantage")
-            log.warning("-" * 80)
+        # Debug output for selected trajectory with nonzero reward
+        if debug_first and traj_idx == debug_traj_idx:
+            print(f"=== PPO Advantage Calculation Debug (Trajectory {traj_idx} with nonzero reward) ===")
+            print(f"Trajectory length: {len(traj.experiences)} steps")
+            print(f"Config: gamma={config.gamma}, gae_lambda={config.gae_lambda}")
+            print(f"Final reward: {traj.final_reward:.3f}")
+            print(f"Step | {'Action':30s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+            print("-" * 80)
             
             for t in range(len(traj.experiences)):
                 exp = traj.experiences[t]
-                # Get action description
-                if exp.choice.cards_offered and len(exp.choice.cards_offered) > 0:
-                    # Find which card was chosen
-                    path = choice_space.ix_to_path({'choices': exp.choice.as_dict()}, exp.action_idx)
-                    if path[0] == 'cards':
-                        chosen_card = exp.choice.cards_offered[path[1]]
-                        action_desc = f"Card: {chosen_card}"
-                    elif path[0] == 'relics':
-                        chosen_relic = exp.choice.relics_offered[path[1]] if exp.choice.relics_offered else "Unknown"
-                        action_desc = f"Relic: {chosen_relic}"
-                    elif path[0] == 'potions':
-                        action_desc = f"Potion: idx_{path[1]}"
-                    elif path[0] == 'fixed':
-                        action_desc = f"Fixed: {exp.choice.fixed_actions[path[1]] if exp.choice.fixed_actions else 'Unknown'}"
-                    else:
-                        action_desc = f"Unknown: {path}"
+                # Get action description (simplified - just show what was offered)
+                offered_items = []
+                if exp.choice.cards_offered:
+                    offered_items.append(f"{len(exp.choice.cards_offered)}cards")
+                if exp.choice.relics_offered:
+                    offered_items.append(f"{len(exp.choice.relics_offered)}rel")
+                if exp.choice.potions_offered:
+                    offered_items.append(f"{len(exp.choice.potions_offered)}pot")
+                if exp.choice.fixed_actions:
+                    offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
+                
+                if offered_items:
+                    action_desc = f"Choice({'+'.join(offered_items)}) idx:{exp.action_idx}"
                 else:
                     action_desc = f"Action idx: {exp.action_idx}"
                 
-                log.warning(f"{t:4d} | {action_desc[:20]:20s} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+                print(f"{t:4d} | {action_desc[:30]:30s} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
-            log.warning("-" * 80)
-            log.warning(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
-            log.warning(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
-            log.warning("=" * 80)
+            print("-" * 80)
+            print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
+            print(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
+            print("=" * 80)
         
         # Normalize advantages
         if len(advantages) > 1:
