@@ -602,7 +602,7 @@ def main(args):
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
 
     if not args.no_save:
-        df_path = f"rollouts_v3_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
+        df_path = f"rollouts_v4_{args.start_seed}_{args.start_seed+args.num_games}.parquet"
         df.to_parquet(df_path, engine="pyarrow")
         print(f"Saved to {df_path}")
     

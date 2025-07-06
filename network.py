@@ -19,7 +19,7 @@ class ModelHP:
     norm_eps: float = 1e-5
     n_fixed_obs: int = len(sts.getFixedObservationMaximums())
     max_relics: int = 25  # Maximum number of relics a player typically has
-    use_value_head: bool = True  # Add value head for PPO training
+    use_value_head: bool = False  # Add value head for PPO training
     separate_networks: bool = False  # Use separate networks for policy and value
 
 

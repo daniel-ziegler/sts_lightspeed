@@ -275,7 +275,7 @@ def hyperparameter_sweep(train_df, valid_df):
         print(f"\nTraining with lr={lr:.1e}, wd={wd:.1e}")
         
         # Create fresh model for each run
-        H = ModelHP()
+        H = ModelHP(use_value_head=False)
         net = NN(H)
         net = net.to(device)
         net = torch.compile(net, mode="default")
@@ -318,7 +318,7 @@ def hyperparameter_sweep(train_df, valid_df):
 save_path, results = hyperparameter_sweep(train_df, valid_df)
 
 # %%
-H = ModelHP()
+H = ModelHP(use_value_head=False)
 net = NN(H)
 net = net.to(device)
 net = torch.compile(net, mode="reduce-overhead")
