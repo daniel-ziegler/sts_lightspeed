@@ -234,24 +234,54 @@ class TupleAddSpace(ScalarSpace[tuple]):
 
 class TupleConcatEmbedding(nn.Module):
     """Module for embedding tuples by concatenating component embeddings."""
-    def __init__(self, component_embeddings: nn.ModuleList):
+    def __init__(self, component_embeddings: nn.ModuleList, dim: int):
         super().__init__()
         self.component_embeddings = component_embeddings
+        self.position_embedding = nn.Embedding(len(component_embeddings), dim)
     
     def forward(self, xs: tuple) -> tuple[torch.Tensor, torch.Tensor]:
         embeddings, masks = zip(*[emb(x) for emb, x in zip(self.component_embeddings, xs)])
-        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
+        
+        # Create position indices for all components at once
+        position_indices = []
+        for i, mask in enumerate(masks):
+            batch_size, seq_len = mask.shape
+            position_indices.append(torch.full((batch_size, seq_len), i, dtype=torch.long, device=mask.device))
+        
+        # Concatenate position indices and get embeddings in one call
+        all_position_indices = torch.cat(position_indices, dim=1)
+        position_embeddings = self.position_embedding(all_position_indices)
+        
+        # Add position embeddings to content embeddings
+        all_embeddings = torch.cat(embeddings, dim=1)
+        return all_embeddings + position_embeddings, torch.cat(masks, dim=1)
 
 class DictEmbedding(nn.Module):
     """Module for embedding dictionaries by concatenating component embeddings."""
-    def __init__(self, component_embeddings: nn.ModuleDict, spaces: dict):
+    def __init__(self, component_embeddings: nn.ModuleDict, spaces: dict, dim: int):
         super().__init__()
         self.component_embeddings = component_embeddings
         self.spaces = spaces
+        self.position_embedding = nn.Embedding(len(spaces), dim)
+        self.key_to_index = {k: i for i, k in enumerate(spaces.keys())}
     
     def forward(self, xs: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
         embeddings, masks = zip(*[self.component_embeddings[k](xs[k]) for k in self.spaces.keys()])
-        return torch.cat(embeddings, dim=1), torch.cat(masks, dim=1)
+        
+        # Create position indices for all components at once
+        position_indices = []
+        for k, mask in zip(self.spaces.keys(), masks):
+            batch_size, seq_len = mask.shape
+            key_idx = self.key_to_index[k]
+            position_indices.append(torch.full((batch_size, seq_len), key_idx, dtype=torch.long, device=mask.device))
+        
+        # Concatenate position indices and get embeddings in one call
+        all_position_indices = torch.cat(position_indices, dim=1)
+        position_embeddings = self.position_embedding(all_position_indices)
+        
+        # Add position embeddings to content embeddings
+        all_embeddings = torch.cat(embeddings, dim=1)
+        return all_embeddings + position_embeddings, torch.cat(masks, dim=1)
 
 class TupleConcatSpace(MaskedSpace[tuple]):
     def __init__(self, *spaces: MaskedSpace[Any]):
@@ -259,7 +289,7 @@ class TupleConcatSpace(MaskedSpace[tuple]):
         super().__init__()
     
     def build_embed(self, dim: int) -> nn.Module:
-        return TupleConcatEmbedding(nn.ModuleList([space.build_embed(dim) for space in self.spaces]))
+        return TupleConcatEmbedding(nn.ModuleList([space.build_embed(dim) for space in self.spaces]), dim)
 
     def sample(self, rng: np.random.Generator) -> tuple:
         return tuple(space.sample(rng) for space in self.spaces)
@@ -289,7 +319,7 @@ class DictSpace(MaskedSpace[dict[str, Any]]):
         super().__init__()
     
     def build_embed(self, dim: int) -> nn.Module:
-        return DictEmbedding(nn.ModuleDict({k: space.build_embed(dim) for k, space in self.spaces.items()}), self.spaces)
+        return DictEmbedding(nn.ModuleDict({k: space.build_embed(dim) for k, space in self.spaces.items()}), self.spaces, dim)
 
     def sample(self, rng: np.random.Generator) -> dict[str, Any]:
         return {k: v.sample(rng) for k, v in self.spaces.items()}
