@@ -89,16 +89,28 @@ class PPOTrajectory(NamedTuple):
     pstrike_probs: List[float]  # Probabilities assigned to Perfected Strike when offered
 
 
-def compute_progress_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
-    """Compute reward based on game outcome and floor progress."""
-    if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
-        return 1.0
+def compute_progress_reward(metrics: GameMetrics, prev_metrics: Optional[GameMetrics] = None) -> float:
+    """Compute shaped reward based on floor progress and game outcome."""
+    if prev_metrics is None:
+        # First step - give initial floor reward
+        if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
+            return 1.0  # Victory bonus
+        else:
+            return min(0.5, metrics.floor_num / 100.0)  # Initial floor progress
     else:
-        # Losses get partial reward based on floor progress (0.0 to 0.5)
-        return min(0.5, metrics.floor_num / 100.0)
+        # Reward shaping - only reward for progress since last step
+        floor_delta = (metrics.floor_num - prev_metrics.floor_num) / 100.0
+        
+        # Add victory bonus if this step resulted in victory
+        victory_bonus = 0.0
+        if (metrics.outcome == sts.GameOutcome.PLAYER_VICTORY and 
+            prev_metrics.outcome == sts.GameOutcome.UNDECIDED):
+            victory_bonus = 0.5  # Victory completion bonus
+            
+        return floor_delta + victory_bonus
 
 
-def compute_perfected_strike_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
+def compute_perfected_strike_reward(metrics: GameMetrics, prev_metrics: Optional[GameMetrics] = None) -> float:
     """Compute shaped reward based on change in number of Perfected Strikes in deck."""
     if prev_metrics is None:
         # First step or final reward - use absolute count
@@ -108,12 +120,12 @@ def compute_perfected_strike_reward(metrics: GameMetrics, prev_metrics: GameMetr
         return float(metrics.perfected_strike_count - prev_metrics.perfected_strike_count)
 
 
-def compute_victory_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
+def compute_victory_reward(metrics: GameMetrics, prev_metrics: Optional[GameMetrics] = None) -> float:
     """Compute sparse victory-only reward (1.0 for victory, 0.0 otherwise)."""
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
-def compute_no_pstrikes_reward(metrics: GameMetrics, prev_metrics: GameMetrics = None) -> float:
+def compute_no_pstrikes_reward(metrics: GameMetrics, prev_metrics: Optional[GameMetrics] = None) -> float:
     """Compute shaped reward that penalizes changes in Perfected Strikes (negative of change in count)."""
     if prev_metrics is None:
         # First step or final reward - use negative absolute count
@@ -123,7 +135,7 @@ def compute_no_pstrikes_reward(metrics: GameMetrics, prev_metrics: GameMetrics =
         return -float(metrics.perfected_strike_count - prev_metrics.perfected_strike_count)
 
 
-def run_ppo_episode(seed: int, service: NNService, reward_fn) -> PPOTrajectory:
+def run_ppo_episode(seed: int, service: NNService, reward_fn, value_net=None) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
@@ -184,7 +196,44 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn) -> PPOTrajectory:
                             value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
                         else:
                             logits = output
-                            value = 0.0  # No value head
+                            # Get value from separate value network if available
+                            if value_net is not None:
+                                with torch.no_grad():
+                                    # Create batch from the choice for value network
+                                    choice_dict = choice.as_dict()
+                                    flat_dict = {}
+                                    
+                                    # Flatten the nested choice dictionary
+                                    for key, val in choice_dict.items():
+                                        if key == 'obs':
+                                            for obs_key, obs_value in val.items():
+                                                if isinstance(obs_value, dict):
+                                                    for sub_key, sub_value in obs_value.items():
+                                                        flat_dict[f'obs.{obs_key}.{sub_key}'] = sub_value
+                                                else:
+                                                    flat_dict[f'obs.{obs_key}'] = obs_value
+                                        elif key == 'cards_offered':
+                                            for cards_key, cards_value in val.items():
+                                                flat_dict[f'cards_offered.{cards_key}'] = cards_value
+                                        else:
+                                            flat_dict[key] = val
+                                    
+                                    # Add dummy fields
+                                    flat_dict['chosen_idx'] = 0
+                                    flat_dict['outcome'] = 0.0
+                                    
+                                    # Create batch and get value
+                                    from network import collate_fn, move_to_device
+                                    value_batch = collate_fn([flat_dict])
+                                    value_batch = move_to_device(value_batch, value_net.device)
+                                    value_output = value_net(value_batch)
+                                    if isinstance(value_output, tuple):
+                                        _, values = value_output
+                                        value = float(values[0])
+                                    else:
+                                        value = 0.0
+                            else:
+                                value = 0.0  # No value head
                         
                         # Convert to probabilities and sample action
                         logits_tensor = torch.tensor(logits)
@@ -323,20 +372,20 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn) -> PPOTrajectory:
     )
 
 
-def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_seed: int = 0) -> List[PPOTrajectory]:
+def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_seed: int = 0, value_net=None) -> List[PPOTrajectory]:
     """Collect experience from multiple game episodes."""
     trajectories = []
     
     if config.num_workers == 1:
         # Single-threaded execution for easier debugging
         for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
-            trajectory = run_ppo_episode(start_seed + i, service, reward_fn)
+            trajectory = run_ppo_episode(start_seed + i, service, reward_fn, value_net)
             trajectories.append(trajectory)
     else:
         # Multi-threaded execution
         with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
             futures = [
-                executor.submit(run_ppo_episode, start_seed + i, service, reward_fn)
+                executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, value_net)
                 for i in range(config.num_games_per_batch)
             ]
             
@@ -517,16 +566,10 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
             # Forward pass
             if separate_networks:
                 # Get policy logits from policy network
-                policy_batch = {k: v.clone() if isinstance(v, torch.Tensor) else 
-                              {k2: v2.clone() if isinstance(v2, torch.Tensor) else v2 for k2, v2 in v.items()} if isinstance(v, dict) 
-                              else v for k, v in collated_batch.items()}
-                new_logits = policy_net(policy_batch)
+                new_logits = policy_net(collated_batch)
                 
                 # Get values from value network  
-                value_batch = {k: v.clone() if isinstance(v, torch.Tensor) else 
-                             {k2: v2.clone() if isinstance(v2, torch.Tensor) else v2 for k2, v2 in v.items()} if isinstance(v, dict)
-                             else v for k, v in collated_batch.items()}
-                value_output = value_net(value_batch)
+                value_output = value_net(collated_batch)
                 if isinstance(value_output, tuple):
                     _, new_values = value_output  # Extract values from tuple
                 else:
@@ -556,7 +599,7 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
             
             # Get log probs for chosen actions
             batch_size = len(mini_batch)
-            batch_indices_tensor = torch.arange(batch_size, device=net.device)
+            batch_indices_tensor = torch.arange(batch_size, device=device)
             new_log_probs = action_log_probs[batch_indices_tensor, chosen_indices]
             
             # Clamp log probs for numerical stability
@@ -619,7 +662,7 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
                 # Update policy network
                 policy_loss_total = policy_loss - config.entropy_coef * entropy
                 policy_optimizer.zero_grad()
-                policy_loss_total.backward(retain_graph=True)
+                policy_loss_total.backward()
                 policy_grad_norm = torch.nn.utils.clip_grad_norm_(policy_net.parameters(), config.max_grad_norm)
                 policy_optimizer.step()
                 
@@ -796,7 +839,13 @@ def main():
             
             # Collect experience
             start_time = time.time()
-            trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000)
+            # Pass value network if using separate networks
+            if config.separate_networks:
+                policy_net, value_net = nets
+                value_net_for_collection = value_net
+            else:
+                value_net_for_collection = None
+            trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000, value_net=value_net_for_collection)
             collect_time = time.time() - start_time
             
             if not trajectories:

@@ -150,7 +150,7 @@ class NN(nn.Module):
             If value_head disabled: choice_logits tensor only
             Use choice_space.ix_to_path to convert indices back to semantic actions.
         """
-        choices = batch.pop('choices')
+        choices = batch['choices']
         
         # Debug: Check for invalid tensor values
         deck_max = batch['deck']['value'].max()
