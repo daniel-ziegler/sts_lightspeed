@@ -72,9 +72,9 @@ class GameMetrics:
 class PPOExperience(NamedTuple):
     """Single step of experience from a game."""
     choice: Choice
-    action_idx: int
     log_prob: float
     metrics: GameMetrics
+    action_str: str  # Store clean action description for debugging
 
 
 class PPOTrajectory(NamedTuple):
@@ -218,9 +218,11 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         # Convert back to game action
                         path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
                         
+                        # Generate clean action description based on path
                         if path[0] == 'cards':
                             action = choice.card_actions[path[1]]
                             chosen_card = choice.cards_offered[path[1]]
+                            action_desc = str(chosen_card)
                             if perfected_strike_offered:
                                 perfected_strike_taken = chosen_card.id == sts.CardId.PERFECTED_STRIKE
                                 if perfected_strike_taken:
@@ -228,25 +230,31 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                                 log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, taken: {perfected_strike_taken}")
                         elif path[0] == 'relics':
                             action = choice.relic_actions[path[1]]
+                            chosen_relic = choice.relics_offered[path[1]]
+                            action_desc = sts.RelicId(chosen_relic).name
                             if perfected_strike_offered:
                                 log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose relic instead")
                         elif path[0] == 'potions':
                             action = choice.potion_actions[path[1]]
+                            chosen_potion = choice.potions_offered[path[1]]
+                            action_desc = sts.Potion(chosen_potion).name
                             if perfected_strike_offered:
                                 log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose potion instead")
                         elif path[0] == 'fixed':
                             action = choice.fixed_actions_list[path[1]]
+                            chosen_fixed = choice.fixed_actions[path[1]]
+                            action_desc = str(chosen_fixed)
                             if perfected_strike_offered:
                                 log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose fixed action instead")
                         else:
-                            raise ValueError(f"Unknown path: {path}")
+                            action_desc = action.getDesc(gc)  # Fallback for unknown paths
                         
                         # Store experience data before action execution, but capture metrics after
                         exp_data = {
                             'choice': choice,
-                            'action_idx': chosen_idx,
                             'log_prob': log_prob,
-                            'value': value
+                            'value': value,
+                            'action_str': action_desc
                         }
                         
                         assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
@@ -264,9 +272,9 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         
                         exp = PPOExperience(
                             choice=exp_data['choice'],
-                            action_idx=exp_data['action_idx'],
                             log_prob=exp_data['log_prob'],
-                            metrics=metrics
+                            metrics=metrics,
+                            action_str=exp_data['action_str']
                         )
                         experiences.append(exp)
                         values.append(exp_data['value'])  # Store value separately
@@ -424,48 +432,33 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
-            print(f"Step | {'Floor':5s} | {'Action':30s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
-            print("-" * 100)
+            print(f"Step | {'Floor':5s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+            print("-" * 130)
             
             for t in range(len(traj.experiences)):
                 exp = traj.experiences[t]
-                # Get action description - what was actually chosen
-                action_desc = "Unknown"
                 
-                # Try to get the actual chosen action description
-                if exp.choice.cards_offered and exp.action_idx < len(exp.choice.card_actions):
-                    chosen_card = exp.choice.cards_offered[exp.action_idx]
-                    action_desc = str(chosen_card)[:30]
-                elif exp.choice.relics_offered and exp.action_idx < len(exp.choice.relic_actions):
-                    chosen_relic = exp.choice.relics_offered[exp.action_idx]
-                    action_desc = sts.RelicId(chosen_relic).name[:30]
-                elif exp.choice.potions_offered and exp.action_idx < len(exp.choice.potion_actions):
-                    chosen_potion = exp.choice.potions_offered[exp.action_idx]
-                    action_desc = sts.Potion(chosen_potion).name[:30]
-                elif exp.choice.fixed_actions and exp.action_idx < len(exp.choice.fixed_actions_list):
-                    action_desc = str(exp.choice.fixed_actions[exp.action_idx])[:30]
-                else:
-                    # Fallback to showing what was offered
-                    offered_items = []
-                    if exp.choice.cards_offered:
-                        has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
-                        cards_str = f"{len(exp.choice.cards_offered)}card"
-                        if has_pstrike:
-                            cards_str += "*"
-                        offered_items.append(cards_str)
-                    if exp.choice.relics_offered:
-                        offered_items.append(f"{len(exp.choice.relics_offered)}rel")
-                    if exp.choice.potions_offered:
-                        offered_items.append(f"{len(exp.choice.potions_offered)}pot")
-                    if exp.choice.fixed_actions:
-                        offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
-                    
-                    if offered_items:
-                        action_desc = f"{'+'.join(offered_items)} idx:{exp.action_idx}"
-                    else:
-                        action_desc = f"Action idx: {exp.action_idx}"
+                # Get choice summary - what was offered
+                offered_items = []
+                if exp.choice.cards_offered:
+                    has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
+                    cards_str = f"{len(exp.choice.cards_offered)}card"
+                    if has_pstrike:
+                        cards_str += "*"
+                    offered_items.append(cards_str)
+                if exp.choice.relics_offered:
+                    offered_items.append(f"{len(exp.choice.relics_offered)}rel")
+                if exp.choice.potions_offered:
+                    offered_items.append(f"{len(exp.choice.potions_offered)}pot")
+                if exp.choice.fixed_actions:
+                    offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
                 
-                print(f"{t:4d} | {exp.metrics.floor_num:5d} | {action_desc[:30]:30s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+                choice_desc = f"{'+'.join(offered_items)}" if offered_items else "none"
+                
+                # Get action description - use the clean description generated during experience collection
+                action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
+                
+                print(f"{t:4d} | {exp.metrics.floor_num:5d} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
             print("-" * 100)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
