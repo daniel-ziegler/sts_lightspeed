@@ -47,7 +47,7 @@ class PPOConfig:
     
     # GAE parameters
     gamma: float = 1.00
-    gae_lambda: float = 0.95
+    gae_lambda: float = 0.98
     
     # Training settings
     num_iterations: int = 1000

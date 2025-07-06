@@ -3,7 +3,6 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from enum import IntEnum
-from sympy import im
 import torch
 from torch import nn
 
@@ -90,7 +89,8 @@ class EnumSpace(ScalarSpace[TEnum]):
         return EnumEmbedding(self.enum_class, dim)
 
     def sample(self, rng: np.random.Generator) -> TEnum:
-        return rng.choice(list(self.enum_class))
+        values = list(self.enum_class)
+        return rng.choice(values)
 
 
 class IntSpace(ScalarSpace[int]):
@@ -190,7 +190,7 @@ class FixedVecSpace(MaskedSpace[np.ndarray]):
         return FixedVecEmbedding()
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
-        return np.array([rng.randint(0, limit) for limit in self.limits])
+        return np.array([rng.integers(0, limit) for limit in self.limits])
 
 
     def try_ix_to_path(self, x: np.ndarray, ix: int) -> PathOrRemainder:
@@ -306,4 +306,10 @@ class DictSpace(MaskedSpace[dict[str, Any]]):
 
     def path_to_ix(self, x: dict[str, Any], path: Path) -> int:
         k, *subpath = path
-        return self.spaces[k].path_to_ix(x[k], subpath)
+        ix = 0
+        # Accumulate lengths from all keys before the target key
+        for key in self.spaces.keys():
+            if key == k:
+                break
+            ix += self.spaces[key].length(x[key])
+        return ix + self.spaces[k].path_to_ix(x[k], subpath)
