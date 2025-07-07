@@ -391,7 +391,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             
             print("-" * 140)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
-            final_metrics = traj.experiences[-1].metrics
+            final_metrics = traj.final_metrics
             final_state = f"{final_metrics.floor_num}: {final_metrics.cur_hp}/{final_metrics.max_hp}hp"
             print(f"Final reward: {traj.final_reward:.3f}, Final state: {final_state}")
             print(f"Last step reward (includes terminal): {rewards[-1]:.3f}")
