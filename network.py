@@ -53,6 +53,12 @@ class FixedAction(IntEnum):
     SKIP = auto()
     REMOVE = auto()
     SINGING_BOWL = auto()
+    REST = auto()
+    SMITH = auto()
+    RECALL = auto()
+    LIFT = auto()
+    TOKE = auto()
+    DIG = auto()
 
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),

@@ -377,6 +377,26 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             else:
                 raise ValueError(f"Invalid boss relic reward action: {action.getDesc(gc)}")
         
+    elif gc.screen_state == sts.ScreenState.REST_ROOM:
+        for action in actions:
+            # Rest actions use idx1 to indicate action type:
+            # 0=rest, 1=smith, 2=recall, 3=lift, 4=toke, 5=dig, 6=skip
+            if action.idx1 == 0:
+                fixed_actions.append(FixedAction.REST)
+            elif action.idx1 == 1:
+                fixed_actions.append(FixedAction.SMITH)
+            elif action.idx1 == 2:
+                fixed_actions.append(FixedAction.RECALL)
+            elif action.idx1 == 3:
+                fixed_actions.append(FixedAction.LIFT)
+            elif action.idx1 == 4:
+                fixed_actions.append(FixedAction.TOKE)
+            elif action.idx1 == 5:
+                fixed_actions.append(FixedAction.DIG)
+            else:  # idx1 == 6 or any other value defaults to skip
+                fixed_actions.append(FixedAction.SKIP)
+            fixed_actions_list.append(action)
+                
     elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
         def xy_to_roomid(x, y):
             roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
@@ -439,7 +459,7 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
 
                 choice = construct_choice(gc, obs, actions)
                 # Pick action using either network or agent
-                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS):
+                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM):
                     assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.potions_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
                     action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     
