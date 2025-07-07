@@ -13,6 +13,7 @@
 
 #include "constants/MonsterEncounters.h"
 #include "constants/Potions.h"
+#include "constants/Events.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/ScumSearchAgent2.h"
 #include "sim/SimHelpers.h"
@@ -123,7 +124,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("cur_map_node_x", &GameContext::curMapNodeX)
         .def_readwrite("cur_map_node_y", &GameContext::curMapNodeY)
         .def_readwrite("cur_room", &GameContext::curRoom)
-//        .def_readwrite("cur_event", &GameContext::curEvent) // todo standardize event names
+        .def_readwrite("cur_event", &GameContext::curEvent)
         .def_readwrite("boss", &GameContext::boss)
 
         .def_readwrite("cur_hp", &GameContext::curHp)
@@ -360,6 +361,65 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("REST_ROOM", ScreenState::REST_ROOM)
         .value("SHOP_ROOM", ScreenState::SHOP_ROOM)
         .value("BATTLE", ScreenState::BATTLE);
+
+    pybind11::enum_<Event> eventEnum(m, "Event", pybind11::metaclass(enum_metaclass));
+    eventEnum.value("INVALID", Event::INVALID)
+        .value("MONSTER", Event::MONSTER)
+        .value("REST", Event::REST)
+        .value("SHOP", Event::SHOP)
+        .value("TREASURE", Event::TREASURE)
+        .value("NEOW", Event::NEOW)
+        .value("OMINOUS_FORGE", Event::OMINOUS_FORGE)
+        .value("PLEADING_VAGRANT", Event::PLEADING_VAGRANT)
+        .value("ANCIENT_WRITING", Event::ANCIENT_WRITING)
+        .value("OLD_BEGGAR", Event::OLD_BEGGAR)
+        .value("BIG_FISH", Event::BIG_FISH)
+        .value("BONFIRE_SPIRITS", Event::BONFIRE_SPIRITS)
+        .value("COLOSSEUM", Event::COLOSSEUM)
+        .value("CURSED_TOME", Event::CURSED_TOME)
+        .value("DEAD_ADVENTURER", Event::DEAD_ADVENTURER)
+        .value("DESIGNER_IN_SPIRE", Event::DESIGNER_IN_SPIRE)
+        .value("AUGMENTER", Event::AUGMENTER)
+        .value("DUPLICATOR", Event::DUPLICATOR)
+        .value("FACE_TRADER", Event::FACE_TRADER)
+        .value("FALLING", Event::FALLING)
+        .value("FORGOTTEN_ALTAR", Event::FORGOTTEN_ALTAR)
+        .value("THE_DIVINE_FOUNTAIN", Event::THE_DIVINE_FOUNTAIN)
+        .value("GHOSTS", Event::GHOSTS)
+        .value("GOLDEN_IDOL", Event::GOLDEN_IDOL)
+        .value("GOLDEN_SHRINE", Event::GOLDEN_SHRINE)
+        .value("WING_STATUE", Event::WING_STATUE)
+        .value("KNOWING_SKULL", Event::KNOWING_SKULL)
+        .value("LAB", Event::LAB)
+        .value("THE_SSSSSERPENT", Event::THE_SSSSSERPENT)
+        .value("LIVING_WALL", Event::LIVING_WALL)
+        .value("MASKED_BANDITS", Event::MASKED_BANDITS)
+        .value("MATCH_AND_KEEP", Event::MATCH_AND_KEEP)
+        .value("MINDBLOOM", Event::MINDBLOOM)
+        .value("HYPNOTIZING_COLORED_MUSHROOMS", Event::HYPNOTIZING_COLORED_MUSHROOMS)
+        .value("MYSTERIOUS_SPHERE", Event::MYSTERIOUS_SPHERE)
+        .value("THE_NEST", Event::THE_NEST)
+        .value("NLOTH", Event::NLOTH)
+        .value("NOTE_FOR_YOURSELF", Event::NOTE_FOR_YOURSELF)
+        .value("PURIFIER", Event::PURIFIER)
+        .value("SCRAP_OOZE", Event::SCRAP_OOZE)
+        .value("SECRET_PORTAL", Event::SECRET_PORTAL)
+        .value("SENSORY_STONE", Event::SENSORY_STONE)
+        .value("SHINING_LIGHT", Event::SHINING_LIGHT)
+        .value("THE_CLERIC", Event::THE_CLERIC)
+        .value("THE_JOUST", Event::THE_JOUST)
+        .value("THE_LIBRARY", Event::THE_LIBRARY)
+        .value("THE_MAUSOLEUM", Event::THE_MAUSOLEUM)
+        .value("THE_MOAI_HEAD", Event::THE_MOAI_HEAD)
+        .value("THE_WOMAN_IN_BLUE", Event::THE_WOMAN_IN_BLUE)
+        .value("TOMB_OF_LORD_RED_MASK", Event::TOMB_OF_LORD_RED_MASK)
+        .value("TRANSMORGRIFIER", Event::TRANSMORGRIFIER)
+        .value("UPGRADE_SHRINE", Event::UPGRADE_SHRINE)
+        .value("VAMPIRES", Event::VAMPIRES)
+        .value("WE_MEET_AGAIN", Event::WE_MEET_AGAIN)
+        .value("WHEEL_OF_CHANGE", Event::WHEEL_OF_CHANGE)
+        .value("WINDING_HALLS", Event::WINDING_HALLS)
+        .value("WORLD_OF_GOOP", Event::WORLD_OF_GOOP);
 
     pybind11::enum_<CardSelectScreenType> cardSelectScreenType(m, "CardSelectScreenType", pybind11::metaclass(enum_metaclass));
     cardSelectScreenType.value("INVALID", CardSelectScreenType::INVALID)

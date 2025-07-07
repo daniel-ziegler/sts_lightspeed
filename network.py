@@ -59,6 +59,225 @@ class FixedAction(IntEnum):
     LIFT = auto()
     TOKE = auto()
     DIG = auto()
+    
+    # Event Actions - organized by event type
+    # NEOW (4 choices)
+    NEOW_OPTION_0 = auto()
+    NEOW_OPTION_1 = auto()
+    NEOW_OPTION_2 = auto()
+    NEOW_OPTION_3 = auto()
+    
+    # Big Fish (3 choices)
+    BIG_FISH_BANANA = auto()  # Heal
+    BIG_FISH_DONUT = auto()   # Max HP
+    BIG_FISH_BOX = auto()     # Relic
+    
+    # Face Trader (3 choices)
+    FACE_TRADER_LOSE_GOLD = auto()
+    FACE_TRADER_LOSE_HP = auto()
+    FACE_TRADER_LEAVE = auto()
+    
+    # Golden Shrine (3 choices)
+    GOLDEN_SHRINE_PRAY = auto()
+    GOLDEN_SHRINE_DESECRATE = auto()
+    GOLDEN_SHRINE_LEAVE = auto()
+    
+    # N'loth (3 choices)
+    NLOTH_AGREE = auto()
+    NLOTH_DISAGREE = auto()
+    NLOTH_LEAVE = auto()
+    
+    # Sensory Stone (3 choices)
+    SENSORY_STONE_MEMORIES = auto()
+    SENSORY_STONE_COLORLESS = auto()
+    SENSORY_STONE_LEAVE = auto()
+    
+    # Winding Halls (3 choices)
+    WINDING_HALLS_MADNESS = auto()
+    WINDING_HALLS_WRITHE = auto()
+    WINDING_HALLS_LEAVE = auto()
+    
+    # Knowing Skull (4 choices)
+    KNOWING_SKULL_OPTION_0 = auto()
+    KNOWING_SKULL_OPTION_1 = auto()
+    KNOWING_SKULL_OPTION_2 = auto()
+    KNOWING_SKULL_OPTION_3 = auto()
+    
+    # Woman in Blue (4 choices)
+    WOMAN_IN_BLUE_OPTION_0 = auto()
+    WOMAN_IN_BLUE_OPTION_1 = auto()
+    WOMAN_IN_BLUE_OPTION_2 = auto()
+    WOMAN_IN_BLUE_OPTION_3 = auto()
+    
+    # Two-choice events (0x3 = bits 0,1)
+    ANCIENT_WRITING_ELEGANCE = auto()
+    ANCIENT_WRITING_SIMPLICITY = auto()
+    
+    DEAD_ADVENTURER_SEARCH = auto()
+    DEAD_ADVENTURER_LEAVE = auto()
+    
+    DUPLICATOR_DUPLICATE = auto()
+    DUPLICATOR_LEAVE = auto()
+    
+    OLD_BEGGAR_GIVE_GOLD = auto()
+    OLD_BEGGAR_REFUSE = auto()
+    
+    DIVINE_FOUNTAIN_HEAL = auto()
+    DIVINE_FOUNTAIN_LEAVE = auto()
+    
+    GHOSTS_AGREE = auto()
+    GHOSTS_REFUSE = auto()
+    
+    SSSSSERPENT_AGREE = auto()
+    SSSSSERPENT_DISAGREE = auto()
+    
+    MASKED_BANDITS_PAY = auto()
+    MASKED_BANDITS_FIGHT = auto()
+    
+    MUSHROOMS_HEAL = auto()
+    MUSHROOMS_LEAVE = auto()
+    
+    MYSTERIOUS_SPHERE_OPEN = auto()
+    MYSTERIOUS_SPHERE_LEAVE = auto()
+    
+    NEST_AGREE = auto()
+    NEST_DISAGREE = auto()
+    
+    NOTE_FOR_YOURSELF_IGNORE = auto()
+    NOTE_FOR_YOURSELF_WRITE = auto()
+    
+    SCRAP_OOZE_ATTACK = auto()
+    SCRAP_OOZE_LEAVE = auto()
+    
+    SECRET_PORTAL_ENTER = auto()
+    SECRET_PORTAL_LEAVE = auto()
+    
+    SHINING_LIGHT_ENTER = auto()
+    SHINING_LIGHT_LEAVE = auto()
+    
+    JOUST_GIVE_GOLD = auto()
+    JOUST_REFUSE = auto()
+    
+    LIBRARY_READ = auto()
+    LIBRARY_LEAVE = auto()
+    
+    MAUSOLEUM_OPEN = auto()
+    MAUSOLEUM_LEAVE = auto()
+    
+    WORLD_OF_GOOP_ENTER = auto()
+    WORLD_OF_GOOP_LEAVE = auto()
+    
+    # Single choice events (0x1 = bit 0 only)
+    LAB_OPTION = auto()
+    WHEEL_OF_CHANGE_OPTION = auto()
+    
+    # Pleading Vagrant (conditional)
+    PLEADING_VAGRANT_GIVE_GOLD = auto()
+    PLEADING_VAGRANT_REFUSE = auto()
+    PLEADING_VAGRANT_LEAVE = auto()
+    
+    # Colosseum (two phases)
+    COLOSSEUM_PHASE1_PROCEED = auto()
+    COLOSSEUM_PHASE2_OPTION_0 = auto()
+    COLOSSEUM_PHASE2_OPTION_1 = auto()
+    
+    # Cursed Tome (complex multi-phase)
+    CURSED_TOME_READ = auto()
+    CURSED_TOME_LEAVE = auto()
+    CURSED_TOME_PHASE1_OPTION = auto()
+    CURSED_TOME_PHASE2_OPTION = auto()
+    CURSED_TOME_PHASE3_OPTION = auto()
+    CURSED_TOME_PHASE4_OPTION_0 = auto()
+    CURSED_TOME_PHASE4_OPTION_1 = auto()
+    
+    # Designer In-Spire (complex conditional)
+    DESIGNER_UPGRADE_ONE = auto()
+    DESIGNER_UPGRADE_ALL = auto()
+    DESIGNER_REMOVE_CARD = auto()
+    DESIGNER_TRANSFORM_TWO = auto()
+    DESIGNER_TRANSFORM_ONE = auto()
+    DESIGNER_LEAVE = auto()
+    
+    # Augmenter (conditional)
+    AUGMENTER_AGREE = auto()
+    AUGMENTER_REFUSE = auto()
+    AUGMENTER_LEAVE = auto()
+    
+    # Falling (conditional based on deck)
+    FALLING_SKILL = auto()
+    FALLING_POWER = auto()
+    FALLING_ATTACK = auto()
+    FALLING_LEAVE = auto()
+    
+    # Forgotten Altar (conditional)
+    FORGOTTEN_ALTAR_PRAY = auto()
+    FORGOTTEN_ALTAR_DESECRATE = auto()
+    FORGOTTEN_ALTAR_LEAVE = auto()
+    
+    # Golden Idol (two phases)
+    GOLDEN_IDOL_TAKE = auto()
+    GOLDEN_IDOL_LEAVE = auto()
+    GOLDEN_IDOL_PHASE2_OPTION_0 = auto()
+    GOLDEN_IDOL_PHASE2_OPTION_1 = auto()
+    GOLDEN_IDOL_PHASE2_OPTION_2 = auto()
+    
+    # Wing Statue (conditional)
+    WING_STATUE_REMOVE_CARD = auto()
+    WING_STATUE_LOSE_GOLD = auto()
+    WING_STATUE_LEAVE = auto()
+    
+    # Living Wall (conditional)
+    LIVING_WALL_CHANGE = auto()
+    LIVING_WALL_GROW = auto()
+    LIVING_WALL_LEAVE = auto()
+    
+    # Mindbloom (conditional based on floor)
+    MINDBLOOM_ACT1_BOSS = auto()
+    MINDBLOOM_UPGRADE_CARDS = auto()
+    MINDBLOOM_TRANSFORM = auto()
+    MINDBLOOM_HEAL = auto()
+    
+    # Purifier (conditional)
+    PURIFIER_PURIFY = auto()
+    PURIFIER_LEAVE = auto()
+    
+    # Transmorgrifier (conditional)
+    TRANSMORGRIFIER_TRANSFORM = auto()
+    TRANSMORGRIFIER_LEAVE = auto()
+    
+    # The Cleric (conditional)
+    CLERIC_HEAL = auto()
+    CLERIC_PURIFY = auto()
+    CLERIC_LEAVE = auto()
+    
+    # Moai Head (conditional)
+    MOAI_HEAD_GOLDEN_IDOL = auto()
+    MOAI_HEAD_LOSE_GOLD = auto()
+    MOAI_HEAD_LEAVE = auto()
+    
+    # Tomb of Lord Red Mask (conditional)
+    TOMB_RED_MASK_ENTER = auto()
+    TOMB_RED_MASK_LEAVE = auto()
+    
+    # Upgrade Shrine (conditional)
+    UPGRADE_SHRINE_UPGRADE = auto()
+    UPGRADE_SHRINE_LEAVE = auto()
+    
+    # Vampires (conditional)
+    VAMPIRES_ACCEPT = auto()
+    VAMPIRES_REFUSE = auto()
+    VAMPIRES_BLOOD_VIAL = auto()
+    
+    # We Meet Again (conditional)
+    WE_MEET_AGAIN_POTION = auto()
+    WE_MEET_AGAIN_GOLD = auto()
+    WE_MEET_AGAIN_CARD = auto()
+    WE_MEET_AGAIN_LEAVE = auto()
+    
+    # Ominous Forge (conditional)
+    OMINOUS_FORGE_UPGRADE = auto()
+    OMINOUS_FORGE_LOSE_HP = auto()
+    OMINOUS_FORGE_LEAVE = auto()
 
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),

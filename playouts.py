@@ -25,6 +25,146 @@ from inputs import Path
 import slaythespire as sts
 
 # %%
+def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction) -> sts.FixedAction:
+    """
+    Map a GameAction for an event screen to the appropriate FixedAction enum value.
+    This handles the complex conditional logic for each event type.
+    """
+    event = gc.cur_event
+    idx1 = action.idx1
+    idx2 = action.idx2
+    event_data = gc.screen_state_info.event_data
+    
+    # Single choice events
+    if event == sts.Event.LAB:
+        return FixedAction.LAB_OPTION
+    elif event == sts.Event.WHEEL_OF_CHANGE:
+        return FixedAction.WHEEL_OF_CHANGE_OPTION
+    
+    # Two choice events (0x3 pattern)
+    elif event == sts.Event.ANCIENT_WRITING:
+        return FixedAction.ANCIENT_WRITING_ELEGANCE if idx1 == 0 else FixedAction.ANCIENT_WRITING_SIMPLICITY
+    elif event == sts.Event.DEAD_ADVENTURER:
+        return FixedAction.DEAD_ADVENTURER_SEARCH if idx1 == 0 else FixedAction.DEAD_ADVENTURER_LEAVE
+    elif event == sts.Event.DUPLICATOR:
+        return FixedAction.DUPLICATOR_DUPLICATE if idx1 == 0 else FixedAction.DUPLICATOR_LEAVE
+    elif event == sts.Event.OLD_BEGGAR:
+        return FixedAction.OLD_BEGGAR_GIVE_GOLD if idx1 == 0 else FixedAction.OLD_BEGGAR_REFUSE
+    elif event == sts.Event.THE_DIVINE_FOUNTAIN:
+        return FixedAction.DIVINE_FOUNTAIN_HEAL if idx1 == 0 else FixedAction.DIVINE_FOUNTAIN_LEAVE
+    elif event == sts.Event.GHOSTS:
+        return FixedAction.GHOSTS_AGREE if idx1 == 0 else FixedAction.GHOSTS_REFUSE
+    elif event == sts.Event.THE_SSSSSERPENT:
+        return FixedAction.SSSSSERPENT_AGREE if idx1 == 0 else FixedAction.SSSSSERPENT_DISAGREE
+    elif event == sts.Event.MASKED_BANDITS:
+        return FixedAction.MASKED_BANDITS_PAY if idx1 == 0 else FixedAction.MASKED_BANDITS_FIGHT
+    elif event == sts.Event.HYPNOTIZING_COLORED_MUSHROOMS:
+        return FixedAction.MUSHROOMS_HEAL if idx1 == 0 else FixedAction.MUSHROOMS_LEAVE
+    elif event == sts.Event.MYSTERIOUS_SPHERE:
+        return FixedAction.MYSTERIOUS_SPHERE_OPEN if idx1 == 0 else FixedAction.MYSTERIOUS_SPHERE_LEAVE
+    elif event == sts.Event.THE_NEST:
+        return FixedAction.NEST_AGREE if idx1 == 0 else FixedAction.NEST_DISAGREE
+    elif event == sts.Event.NOTE_FOR_YOURSELF:
+        return FixedAction.NOTE_FOR_YOURSELF_IGNORE if idx1 == 0 else FixedAction.NOTE_FOR_YOURSELF_WRITE
+    elif event == sts.Event.SCRAP_OOZE:
+        return FixedAction.SCRAP_OOZE_ATTACK if idx1 == 0 else FixedAction.SCRAP_OOZE_LEAVE
+    elif event == sts.Event.SECRET_PORTAL:
+        return FixedAction.SECRET_PORTAL_ENTER if idx1 == 0 else FixedAction.SECRET_PORTAL_LEAVE
+    elif event == sts.Event.SHINING_LIGHT:
+        return FixedAction.SHINING_LIGHT_ENTER if idx1 == 0 else FixedAction.SHINING_LIGHT_LEAVE
+    elif event == sts.Event.THE_JOUST:
+        return FixedAction.JOUST_GIVE_GOLD if idx1 == 0 else FixedAction.JOUST_REFUSE
+    elif event == sts.Event.THE_LIBRARY:
+        return FixedAction.LIBRARY_READ if idx1 == 0 else FixedAction.LIBRARY_LEAVE
+    elif event == sts.Event.THE_MAUSOLEUM:
+        return FixedAction.MAUSOLEUM_OPEN if idx1 == 0 else FixedAction.MAUSOLEUM_LEAVE
+    elif event == sts.Event.WORLD_OF_GOOP:
+        return FixedAction.WORLD_OF_GOOP_ENTER if idx1 == 0 else FixedAction.WORLD_OF_GOOP_LEAVE
+    
+    # Three choice events (0x7 pattern)
+    elif event == sts.Event.BIG_FISH:
+        if idx1 == 0: return FixedAction.BIG_FISH_BANANA
+        elif idx1 == 1: return FixedAction.BIG_FISH_DONUT
+        else: return FixedAction.BIG_FISH_BOX
+    elif event == sts.Event.FACE_TRADER:
+        if idx1 == 0: return FixedAction.FACE_TRADER_LOSE_GOLD
+        elif idx1 == 1: return FixedAction.FACE_TRADER_LOSE_HP
+        else: return FixedAction.FACE_TRADER_LEAVE
+    elif event == sts.Event.GOLDEN_SHRINE:
+        if idx1 == 0: return FixedAction.GOLDEN_SHRINE_PRAY
+        elif idx1 == 1: return FixedAction.GOLDEN_SHRINE_DESECRATE
+        else: return FixedAction.GOLDEN_SHRINE_LEAVE
+    elif event == sts.Event.NLOTH:
+        if idx1 == 0: return FixedAction.NLOTH_AGREE
+        elif idx1 == 1: return FixedAction.NLOTH_DISAGREE
+        else: return FixedAction.NLOTH_LEAVE
+    elif event == sts.Event.SENSORY_STONE:
+        if idx1 == 0: return FixedAction.SENSORY_STONE_MEMORIES
+        elif idx1 == 1: return FixedAction.SENSORY_STONE_COLORLESS
+        else: return FixedAction.SENSORY_STONE_LEAVE
+    elif event == sts.Event.WINDING_HALLS:
+        if idx1 == 0: return FixedAction.WINDING_HALLS_MADNESS
+        elif idx1 == 1: return FixedAction.WINDING_HALLS_WRITHE
+        else: return FixedAction.WINDING_HALLS_LEAVE
+    
+    # Four choice events (0xF pattern)
+    elif event == sts.Event.NEOW:
+        if idx1 == 0: return FixedAction.NEOW_OPTION_0
+        elif idx1 == 1: return FixedAction.NEOW_OPTION_1
+        elif idx1 == 2: return FixedAction.NEOW_OPTION_2
+        else: return FixedAction.NEOW_OPTION_3
+    elif event == sts.Event.KNOWING_SKULL:
+        if idx1 == 0: return FixedAction.KNOWING_SKULL_OPTION_0
+        elif idx1 == 1: return FixedAction.KNOWING_SKULL_OPTION_1
+        elif idx1 == 2: return FixedAction.KNOWING_SKULL_OPTION_2
+        else: return FixedAction.KNOWING_SKULL_OPTION_3
+    elif event == sts.Event.THE_WOMAN_IN_BLUE:
+        if idx1 == 0: return FixedAction.WOMAN_IN_BLUE_OPTION_0
+        elif idx1 == 1: return FixedAction.WOMAN_IN_BLUE_OPTION_1
+        elif idx1 == 2: return FixedAction.WOMAN_IN_BLUE_OPTION_2
+        else: return FixedAction.WOMAN_IN_BLUE_OPTION_3
+    
+    # Conditional events requiring special handling
+    elif event == sts.Event.PLEADING_VAGRANT:
+        if idx1 == 0: return FixedAction.PLEADING_VAGRANT_GIVE_GOLD
+        elif idx1 == 1: return FixedAction.PLEADING_VAGRANT_REFUSE
+        else: return FixedAction.PLEADING_VAGRANT_LEAVE
+    
+    elif event == sts.Event.COLOSSEUM:
+        if event_data == 0:
+            return FixedAction.COLOSSEUM_PHASE1_PROCEED
+        else:
+            return FixedAction.COLOSSEUM_PHASE2_OPTION_0 if idx1 == 0 else FixedAction.COLOSSEUM_PHASE2_OPTION_1
+    
+    elif event == sts.Event.CURSED_TOME:
+        if event_data == 0:
+            return FixedAction.CURSED_TOME_READ if idx1 == 0 else FixedAction.CURSED_TOME_LEAVE
+        elif event_data == 1:
+            return FixedAction.CURSED_TOME_PHASE1_OPTION
+        elif event_data == 2:
+            return FixedAction.CURSED_TOME_PHASE2_OPTION
+        elif event_data == 3:
+            return FixedAction.CURSED_TOME_PHASE3_OPTION
+        elif event_data == 4:
+            return FixedAction.CURSED_TOME_PHASE4_OPTION_0 if idx1 == 0 else FixedAction.CURSED_TOME_PHASE4_OPTION_1
+        else:
+            raise ValueError(f"Unknown Cursed Tome event_data: {event_data}")
+    
+    elif event == sts.Event.DESIGNER_IN_SPIRE:
+        if idx1 == 0: return FixedAction.DESIGNER_UPGRADE_ONE
+        elif idx1 == 1: return FixedAction.DESIGNER_UPGRADE_ALL
+        elif idx1 == 2: return FixedAction.DESIGNER_REMOVE_CARD
+        elif idx1 == 3: return FixedAction.DESIGNER_TRANSFORM_TWO
+        elif idx1 == 4: return FixedAction.DESIGNER_TRANSFORM_ONE
+        elif idx1 == 5: return FixedAction.DESIGNER_LEAVE
+        else:
+            raise ValueError(f"Unknown Designer In-Spire action idx1: {idx1}")
+    
+    # Default fallback - throw error for unmapped events
+    else:
+        raise ValueError(f"Unmapped event {event} with idx1={idx1}, idx2={idx2}, event_data={event_data}")
+
+
 def flatten_dict(d, parent_key='', sep='.'):
     items = []
     for k, v in d.items():
@@ -426,6 +566,13 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
             path_actions.append(action)
 
+    elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
+        # Event screen actions - map each action to appropriate FixedAction
+        for action in actions:
+            event_action = map_event_action_to_fixed_action(gc, action)
+            fixed_actions.append(event_action)
+            fixed_actions_list.append(action)
+
     return Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
                   paths_offered=paths_offered, path_actions=path_actions,
                   fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
@@ -476,7 +623,7 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
 
                 choice = construct_choice(gc, obs, actions)
                 # Pick action using either network or agent
-                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM, sts.ScreenState.CARD_SELECT):
+                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM, sts.ScreenState.CARD_SELECT, sts.ScreenState.EVENT_SCREEN):
                     assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.potions_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
                     action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     
