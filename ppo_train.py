@@ -312,14 +312,14 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     return trajectories
 
 
-def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, debug_first: bool = False) -> tuple[List[PPOExperience], List[float], List[float]]:
+def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, debug_traj: bool = False) -> tuple[List[PPOExperience], List[float], List[float]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
     all_advantages = []
     all_returns = []
     
-    # Use trajectory with highest final reward for debug output
-    debug_traj_idx = max(range(len(trajectories)), key=lambda i: trajectories[i].final_reward) if debug_first and trajectories else None
+    # debug_traj_idx = max(range(len(trajectories)), key=lambda i: trajectories[i].final_reward) if debug_traj and trajectories else None
+    debug_traj_idx = random.randint(0, len(trajectories) - 1) if debug_traj and trajectories else None
     
     for traj_idx, traj in enumerate(trajectories):
         if not traj.experiences:
@@ -344,7 +344,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             returns[t] = advantages[t] + values[t]
         
         # Debug output for random trajectory
-        if debug_first and traj_idx == debug_traj_idx:
+        if debug_traj and traj_idx == debug_traj_idx:
             print(f"=== PPO Advantage Calculation Debug (Random Trajectory {traj_idx}) ===")
             print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
@@ -815,7 +815,7 @@ def main():
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
             
             # Prepare training data (with debug output for first trajectory)
-            experiences, advantages, returns = compute_advantages(trajectories, config, debug_first=True)
+            experiences, advantages, returns = compute_advantages(trajectories, config, debug_traj=True)
             
             if not experiences:
                 print("No experiences to train on, skipping iteration")
