@@ -261,6 +261,13 @@ def load_network_backward_compatible(net: NN, state_dict: dict) -> NN:
                         updated_param[:loaded_rows, :] = loaded_param
                         updated_state[name] = updated_param
                         print(f"Resized {name}: {loaded_param.shape} -> {current_param.shape}")
+                    elif loaded_rows == current_rows and loaded_cols <= current_cols:
+                        # Input dimension has grown (e.g., fixed observation space expanded)
+                        # Keep existing weights for old inputs, use random init for new inputs
+                        updated_param = current_param.clone()
+                        updated_param[:, :loaded_cols] = loaded_param
+                        updated_state[name] = updated_param
+                        print(f"Resized {name}: {loaded_param.shape} -> {current_param.shape}")
                     else:
                         # Can't handle this mismatch - error out
                         raise ValueError(f"Couldn't resize {name}: {loaded_param.shape} vs {current_param.shape}")
