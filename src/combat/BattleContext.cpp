@@ -726,13 +726,14 @@ bool BattleContext::isCardPlayAllowed() const {
 void BattleContext::executeActions() {
     // todo find a place for checking where card queue is empty and player doesn't have control for calling onEndingTurn
     ++sum;
+    ++movesThisTurn;
     g_debug_bc = this;
 
     while (true)
     {
-        if (++loopCount > 20000 || monsters.monstersAlive < 0 || turn > 200) {
+        if (++loopCount > 100000 || monsters.monstersAlive < 0 || turn > 100 || movesThisTurn > 200) {
             // hit unproductive infinite, most likely
-            if (turn > 100) {
+            if (turn > 100 || movesThisTurn > 200) {
                 outcome = Outcome::PLAYER_LOSS;
                 break;
             }
@@ -800,6 +801,7 @@ void BattleContext::executeActions() {
         if (turnHasEnded) {
             // after all monster turns
             afterMonsterTurns();
+            movesThisTurn = 0;
             continue;
 
         }

@@ -54,6 +54,7 @@ namespace sts {
         int floorNum = 0;
         MonsterEncounter encounter = MonsterEncounter::INVALID;
         int loopCount = 0;
+        int movesThisTurn = 0;
         int energyWasted = 0;
         int cardsDrawn = 0;
         // end for debugging purposes
