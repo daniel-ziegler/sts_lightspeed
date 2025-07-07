@@ -25,6 +25,11 @@ namespace sts::py {
         return static_cast<int>(CardSelectScreenType::BONFIRE_SPIRITS);
     }
 
+    constexpr int getMaxFloor() {
+        // Act 4 Heart fight is floor 56, which is the maximum possible floor
+        return 56;
+    }
+
     pybind11::array_t<int> getFixedObservation(const GameContext &gc) {
         std::vector<int> ret(fixed_observation_space_size);
 
@@ -51,13 +56,13 @@ namespace sts::py {
         ret[offset++] = playerHpMax;
         ret[offset++] = playerHpMax;
         ret[offset++] = playerGoldMax;
-        ret[offset++] = 60; // max floor
+        ret[offset++] = getMaxFloor();
         ret[offset++] = numBosses;
         
         // Card selection screen info maximums
-        ret[offset++] = 8; // max ScreenState enum value
-        ret[offset++] = 8; // max CardSelectScreenType enum value  
-        ret[offset++] = 64; // max cards to select (MAX_DECK_SIZE)
+        ret[offset++] = getMaxScreenState();
+        ret[offset++] = getMaxCardSelectScreenType();  
+        ret[offset++] = Deck::MAX_SIZE; // max cards to select
 
         return to_numpy(ret);
     }
