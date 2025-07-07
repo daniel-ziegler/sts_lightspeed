@@ -408,15 +408,15 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 # Get action description - use the clean description generated during experience collection
                 action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
                 
-                # Create state string: fl18,20/72hp format
-                state_str = f"fl{exp.metrics.floor_num},{exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
+                # Create state string: 18: 20/72hp format
+                state_str = f"{exp.metrics.floor_num}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
                 
                 print(f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
             print("-" * 140)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
             final_metrics = traj.experiences[-1].metrics
-            final_state = f"fl{final_metrics.floor_num},{final_metrics.cur_hp}/{final_metrics.max_hp}hp"
+            final_state = f"{final_metrics.floor_num}: {final_metrics.cur_hp}/{final_metrics.max_hp}hp"
             print(f"Final reward: {traj.final_reward:.3f}, Final state: {final_state}")
             print(f"Last step reward (includes terminal): {rewards[-1]:.3f}")
             
