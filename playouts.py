@@ -160,6 +160,126 @@ def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction
         else:
             raise ValueError(f"Unknown Designer In-Spire action idx1: {idx1}")
     
+    elif event == sts.Event.AUGMENTER:
+        if idx1 == 0: return FixedAction.AUGMENTER_AGREE
+        elif idx1 == 1: return FixedAction.AUGMENTER_REFUSE
+        elif idx1 == 2: return FixedAction.AUGMENTER_LEAVE
+        else:
+            raise ValueError(f"Unknown Augmenter action idx1: {idx1}")
+    
+    elif event == sts.Event.FALLING:
+        if idx1 == 0: return FixedAction.FALLING_SKILL
+        elif idx1 == 1: return FixedAction.FALLING_POWER
+        elif idx1 == 2: return FixedAction.FALLING_ATTACK
+        elif idx1 == 3: return FixedAction.FALLING_LEAVE
+        else:
+            raise ValueError(f"Unknown Falling action idx1: {idx1}")
+    
+    elif event == sts.Event.FORGOTTEN_ALTAR:
+        if idx1 == 0: return FixedAction.FORGOTTEN_ALTAR_PRAY
+        elif idx1 == 1: return FixedAction.FORGOTTEN_ALTAR_DESECRATE
+        elif idx1 == 2: return FixedAction.FORGOTTEN_ALTAR_LEAVE
+        else:
+            raise ValueError(f"Unknown Forgotten Altar action idx1: {idx1}")
+    
+    elif event == sts.Event.GOLDEN_IDOL:
+        if not gc.relics.has(sts.RelicId.GOLDEN_IDOL):
+            return FixedAction.GOLDEN_IDOL_TAKE if idx1 == 0 else FixedAction.GOLDEN_IDOL_LEAVE
+        else:
+            if idx1 == 2: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_0
+            elif idx1 == 3: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_1
+            elif idx1 == 4: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_2
+            else:
+                raise ValueError(f"Unknown Golden Idol phase 2 action idx1: {idx1}")
+    
+    elif event == sts.Event.WING_STATUE:
+        if idx1 == 0: return FixedAction.WING_STATUE_REMOVE_CARD
+        elif idx1 == 1: return FixedAction.WING_STATUE_LOSE_GOLD
+        elif idx1 == 2: return FixedAction.WING_STATUE_LEAVE
+        else:
+            raise ValueError(f"Unknown Wing Statue action idx1: {idx1}")
+    
+    elif event == sts.Event.LIVING_WALL:
+        if idx1 == 0: return FixedAction.LIVING_WALL_CHANGE
+        elif idx1 == 1: return FixedAction.LIVING_WALL_GROW
+        elif idx1 == 2: return FixedAction.LIVING_WALL_LEAVE
+        else:
+            raise ValueError(f"Unknown Living Wall action idx1: {idx1}")
+    
+    elif event == sts.Event.MINDBLOOM:
+        if idx1 == 0: return FixedAction.MINDBLOOM_ACT1_BOSS
+        elif idx1 == 1: return FixedAction.MINDBLOOM_UPGRADE_CARDS
+        elif idx1 == 2: return FixedAction.MINDBLOOM_TRANSFORM
+        elif idx1 == 3: return FixedAction.MINDBLOOM_HEAL
+        else:
+            raise ValueError(f"Unknown Mindbloom action idx1: {idx1}")
+    
+    elif event == sts.Event.PURIFIER:
+        if idx1 == 0: return FixedAction.PURIFIER_PURIFY
+        elif idx1 == 1: return FixedAction.PURIFIER_LEAVE
+        else:
+            raise ValueError(f"Unknown Purifier action idx1: {idx1}")
+    
+    elif event == sts.Event.TRANSMORGRIFIER:
+        if idx1 == 0: return FixedAction.TRANSMORGRIFIER_TRANSFORM
+        elif idx1 == 1: return FixedAction.TRANSMORGRIFIER_LEAVE
+        else:
+            raise ValueError(f"Unknown Transmorgrifier action idx1: {idx1}")
+    
+    elif event == sts.Event.THE_CLERIC:
+        if idx1 == 0: return FixedAction.CLERIC_HEAL
+        elif idx1 == 1: return FixedAction.CLERIC_PURIFY
+        elif idx1 == 2: return FixedAction.CLERIC_LEAVE
+        else:
+            raise ValueError(f"Unknown Cleric action idx1: {idx1}")
+    
+    elif event == sts.Event.THE_MOAI_HEAD:
+        if idx1 == 0: return FixedAction.MOAI_HEAD_GOLDEN_IDOL
+        elif idx1 == 1: return FixedAction.MOAI_HEAD_LOSE_GOLD
+        elif idx1 == 2: return FixedAction.MOAI_HEAD_LEAVE
+        else:
+            raise ValueError(f"Unknown Moai Head action idx1: {idx1}")
+    
+    elif event == sts.Event.TOMB_OF_LORD_RED_MASK:
+        if idx1 == 0: return FixedAction.TOMB_RED_MASK_ENTER
+        elif idx1 == 1: return FixedAction.TOMB_RED_MASK_LEAVE
+        else:
+            raise ValueError(f"Unknown Tomb of Lord Red Mask action idx1: {idx1}")
+    
+    elif event == sts.Event.UPGRADE_SHRINE:
+        if idx1 == 0: return FixedAction.UPGRADE_SHRINE_UPGRADE
+        elif idx1 == 1: return FixedAction.UPGRADE_SHRINE_LEAVE
+        else:
+            raise ValueError(f"Unknown Upgrade Shrine action idx1: {idx1}")
+    
+    elif event == sts.Event.VAMPIRES:
+        if idx1 == 0: return FixedAction.VAMPIRES_ACCEPT
+        elif idx1 == 1: return FixedAction.VAMPIRES_REFUSE
+        elif idx1 == 2: return FixedAction.VAMPIRES_BLOOD_VIAL
+        else:
+            raise ValueError(f"Unknown Vampires action idx1: {idx1}")
+    
+    elif event == sts.Event.WE_MEET_AGAIN:
+        if idx1 == 0: return FixedAction.WE_MEET_AGAIN_POTION
+        elif idx1 == 1: return FixedAction.WE_MEET_AGAIN_GOLD
+        elif idx1 == 2: return FixedAction.WE_MEET_AGAIN_CARD
+        elif idx1 == 3: return FixedAction.WE_MEET_AGAIN_LEAVE
+        else:
+            raise ValueError(f"Unknown We Meet Again action idx1: {idx1}")
+    
+    elif event == sts.Event.OMINOUS_FORGE:
+        if idx1 == 0: return FixedAction.OMINOUS_FORGE_UPGRADE
+        elif idx1 == 1: return FixedAction.OMINOUS_FORGE_LOSE_HP
+        elif idx1 == 2: return FixedAction.OMINOUS_FORGE_LEAVE
+        else:
+            raise ValueError(f"Unknown Ominous Forge action idx1: {idx1}")
+    
+    # Unsupported events - throw errors instead of treating as invalid
+    elif event == sts.Event.MATCH_AND_KEEP:
+        raise NotImplementedError(f"Match and Keep event requires special handling with idx1={idx1}, idx2={idx2}")
+    elif event == sts.Event.BONFIRE_SPIRITS:
+        raise NotImplementedError(f"Bonfire Spirits event skips select phase - should not reach here")
+    
     # Default fallback - throw error for unmapped events
     else:
         raise ValueError(f"Unmapped event {event} with idx1={idx1}, idx2={idx2}, event_data={event_data}")
