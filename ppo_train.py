@@ -88,7 +88,7 @@ class PPOTrajectory(NamedTuple):
     rewards: List[float]  # Reward for each step
     values: List[float]   # Value prediction for each step
     final_reward: float
-    final_floor: int
+    final_metrics: GameMetrics  # Complete final game state metrics
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
 
@@ -217,7 +217,17 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         else:
                             action_desc = action.getDesc(gc)  # Fallback for unknown paths
                         
-                        # Store experience data before action execution, but capture metrics after
+                        # Extract metrics from game state BEFORE action execution
+                        perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
+                        metrics = GameMetrics(
+                            floor_num=gc.floor_num,
+                            cur_hp=gc.cur_hp,
+                            max_hp=gc.max_hp,
+                            perfected_strike_count=perfected_strike_count,
+                            outcome=gc.outcome
+                        )
+                        
+                        # Store experience data before action execution
                         exp_data = {
                             'choice': choice,
                             'action_idx': chosen_idx,
@@ -228,16 +238,6 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         
                         assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
                         action.execute(gc)
-                        
-                        # Extract metrics from game state AFTER action execution for correct reward computation
-                        perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
-                        metrics = GameMetrics(
-                            floor_num=gc.floor_num,
-                            cur_hp=gc.cur_hp,
-                            max_hp=gc.max_hp,
-                            perfected_strike_count=perfected_strike_count,
-                            outcome=gc.outcome
-                        )
                         
                         exp = PPOExperience(
                             choice=exp_data['choice'],
@@ -267,7 +267,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
         cur_hp=gc.cur_hp,
         max_hp=gc.max_hp,
         perfected_strike_count=sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE),
-        outcome=gc.outcome
+        outcome=gc.outcome,
     )
     
     # Compute shaped rewards with centralized delta calculation
@@ -279,49 +279,23 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     # Compute all reward values once
     all_reward_values = [reward_fn(metrics) for metrics in all_metrics]
     
-    # Proper reward shaping: first step gets 0, subsequent steps get deltas
+    # Proper reward shaping: each step gets delta from current state to next state
     if experiences:
-        # First step gets 0 reward (reward shaping baseline)
-        rewards.append(0.0)
-        
-        # All subsequent steps get reward deltas
-        for i in range(1, len(experiences)):
-            reward_delta = all_reward_values[i] - all_reward_values[i-1]
+        # For each experience i, reward is the delta from state i to state i+1
+        for i in range(len(experiences)):
+            reward_delta = all_reward_values[i+1] - all_reward_values[i]
             rewards.append(reward_delta)
-        
-        # Terminal step: add final delta to the last experience reward
-        if len(all_reward_values) > len(experiences):
-            final_delta = all_reward_values[-1] - all_reward_values[-2]
-            if len(experiences) > 40:  # Debug for longer episodes
-                log.debug(f"Final state - floor: {all_metrics[-1].floor_num}, outcome: {all_metrics[-1].outcome}, reward: {all_reward_values[-1]:.6f}")
-                log.debug(f"Last exp - floor: {all_metrics[-2].floor_num}, outcome: {all_metrics[-2].outcome}, reward: {all_reward_values[-2]:.6f}")
-                log.debug(f"Final delta = {final_delta:.6f}")
-                log.debug(f"Last step reward before adding delta = {rewards[-1]:.6f}")
-            rewards[-1] += final_delta
-            if len(experiences) > 40:
-                log.debug(f"Last step reward after adding delta = {rewards[-1]:.6f}")
     
     # Add terminal state value (0.0) for GAE bootstrap
     values.append(0.0)
     # Values were collected during the episode
-    
-    # Debug: Print what we're actually storing
-    if len(experiences) > 40:  # Only for longer episodes
-        log.debug(f"Created {len(rewards)} rewards: {rewards[:3]}...{rewards[-3:]}")
-        
-    # Debug: Check for suspicious high rewards that might indicate the original bug
-    for i, (exp, reward) in enumerate(zip(experiences, rewards)):
-        if abs(reward - 0.98) < 0.01 and exp.metrics.floor_num >= 45 and exp.metrics.floor_num <= 50:
-            log.warning(f"DEBUG FOUND SUSPICIOUS REWARD: Step {i}, floor {exp.metrics.floor_num}, outcome {exp.metrics.outcome}, reward {reward:.6f}")
-            log.warning(f"  Expected reward for floor {exp.metrics.floor_num}: {compute_progress_reward(exp.metrics):.6f}")
-            log.warning(f"  This matches the original bug description!")
     
     return PPOTrajectory(
         experiences=experiences,
         rewards=rewards,
         values=values,
         final_reward=all_reward_values[-1],
-        final_floor=gc.floor_num,
+        final_metrics=final_metrics,
         final_deck=list(gc.deck),
         final_relics=list(gc.relics)
     )
@@ -847,7 +821,7 @@ def main():
             
             # Compute statistics
             win_rate = sum(1 for t in trajectories if t.final_reward >= 1.0) / len(trajectories)
-            avg_floor = sum(t.final_floor for t in trajectories) / len(trajectories)
+            avg_floor = sum(t.final_metrics.floor_num for t in trajectories) / len(trajectories)
             avg_reward = sum(t.final_reward for t in trajectories) / len(trajectories)
             
             print(f"Collected {len(trajectories)} trajectories in {collect_time:.1f}s")
