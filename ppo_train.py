@@ -411,7 +411,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
                 
                 # Create state string: 18: 20/72hp format
-                state_str = f"{exp.metrics.floor_num}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
+                state_str = f"{exp.metrics.floor_num:>2}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
                 
                 print(f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             

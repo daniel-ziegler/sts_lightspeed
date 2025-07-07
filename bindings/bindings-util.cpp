@@ -11,10 +11,19 @@
 #include "sim/PrintHelpers.h"
 #include "game/Game.h"
 #include "game/Map.h"
+#include "game/Deck.h"
 
 #include "slaythespire.h"
 
 namespace sts::py {
+
+    constexpr int getMaxScreenState() {
+        return static_cast<int>(ScreenState::BATTLE);
+    }
+
+    constexpr int getMaxCardSelectScreenType() {
+        return static_cast<int>(CardSelectScreenType::BONFIRE_SPIRITS);
+    }
 
     pybind11::array_t<int> getFixedObservation(const GameContext &gc) {
         std::vector<int> ret(fixed_observation_space_size);
@@ -26,19 +35,29 @@ namespace sts::py {
         ret[offset++] = std::min(gc.gold, playerGoldMax);
         ret[offset++] = gc.floorNum;
         ret[offset++] = getBossEncoding(gc.boss);
+        
+        // Card selection screen info
+        ret[offset++] = static_cast<int>(gc.screenState);
+        ret[offset++] = static_cast<int>(gc.info.selectScreenType);
+        ret[offset++] = gc.info.toSelectCount;
 
         return to_numpy(ret);
     }
 
     pybind11::array_t<int> getFixedObservationMaximums() {
         std::vector<int> ret(fixed_observation_space_size);
-        int spaceOffset = 0;
+        int offset = 0;
 
-        ret[0] = playerHpMax;
-        ret[1] = playerHpMax;
-        ret[2] = playerGoldMax;
-        ret[3] = 60;
-        ret[4] = numBosses;
+        ret[offset++] = playerHpMax;
+        ret[offset++] = playerHpMax;
+        ret[offset++] = playerGoldMax;
+        ret[offset++] = 60; // max floor
+        ret[offset++] = numBosses;
+        
+        // Card selection screen info maximums
+        ret[offset++] = 8; // max ScreenState enum value
+        ret[offset++] = 8; // max CardSelectScreenType enum value  
+        ret[offset++] = 64; // max cards to select (MAX_DECK_SIZE)
 
         return to_numpy(ret);
     }
