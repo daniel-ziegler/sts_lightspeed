@@ -386,8 +386,8 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
-            print(f"Step | {'Floor':5s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
-            print("-" * 130)
+            print(f"Step | {'State':12s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+            print("-" * 140)
             
             for t in range(len(traj.experiences)):
                 exp = traj.experiences[t]
@@ -408,11 +408,16 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 # Get action description - use the clean description generated during experience collection
                 action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
                 
-                print(f"{t:4d} | {exp.metrics.floor_num:5d} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+                # Create state string: fl18,20/72hp format
+                state_str = f"fl{exp.metrics.floor_num},{exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
+                
+                print(f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
-            print("-" * 100)
+            print("-" * 140)
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
-            print(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
+            final_metrics = traj.experiences[-1].metrics
+            final_state = f"fl{final_metrics.floor_num},{final_metrics.cur_hp}/{final_metrics.max_hp}hp"
+            print(f"Final reward: {traj.final_reward:.3f}, Final state: {final_state}")
             print(f"Last step reward (includes terminal): {rewards[-1]:.3f}")
             
             # Show final deck and relics

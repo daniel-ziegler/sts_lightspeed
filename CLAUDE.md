@@ -147,7 +147,7 @@ The system is designed to be extensible - most new action types can be added by 
 
 - Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.
 - Always make everything *uniform*! Never handle multiple possible input data types or formats. Instead refactor at least one of the sources of input so that they are the same.
-- Do not assume warnings are not a problem. They are a problem! Figure out why they are being produced.
-- Fail fast and hard! Do not just swallow errors or surprising states - add in asserts and throw exceptions liberally.
+- DO NOT assume warnings are not a problem. They are a problem! Figure out why they are being produced.
+- Fail fast and hard! DO NOT swallow errors. Add in asserts and throw exceptions liberally. If anything surprising could be due to a bug or a bad input, *throw an exception*!
 - Never leave comments like "# Changed to new thing". Only leave comments that describe the current state of the code. And do so sparingly - prefer not to comment, unless the code would be unclear without.
 - NEVER swallow errors just to make tests pass.
