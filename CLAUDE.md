@@ -79,11 +79,24 @@ The codebase includes Python files for ML training and data generation:
 - **`network.py`** - Complete neural network architecture using transformer layers to predict win probabilities for card/relic choices and fixed actions. Includes custom embeddings, attention mechanisms, and data processing utilities
 - **`train.py`** - Training pipeline with hyperparameter sweeping, validation splits, and comprehensive evaluation including ROC curves and card/relic statistics. Supports command-line arguments for flexible training configuration
 - **`playouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multi-threaded batched inference, choice statistics, and parallel game execution
+- **`ppo_train.py`** - Proximal Policy Optimization (PPO) reinforcement learning training system. Collects experience trajectories from games and trains policy/value networks using GAE advantages
 - **`inputs.py`** - Generic input space framework with embedding builders for sequences, enums, fixed vectors, and composite types. Provides abstraction layer for neural network input processing
 - **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
 - Various `.parquet` files contain training data rollouts from different experiments
 
 To use the right Python environment, prefix all python commands with `pyenv shell 3.10.14 &&`
+
+### PPO Training Details
+
+The **`ppo_train.py`** implements Proximal Policy Optimization reinforcement learning with the following key characteristics:
+
+- **Experience Collection**: Runs parallel game episodes using `ThreadPoolExecutor` and `as_completed()` to collect trajectories
+- **Trajectory Bias**: Since `as_completed()` returns finished games in completion order, shorter (typically worse-performing) games complete first and appear earlier in the batch. This creates a systematic bias where the first trajectories are often poor performers
+- **Debug Output**: Uses random trajectory selection instead of first trajectory to avoid the completion order bias when displaying training progress
+- **Network Architecture**: Supports both single network with value head or separate policy/value networks
+- **Reward Functions**: Multiple reward function options including sparse victory rewards, dense floor progress, and perfected strike counting
+- **Checkpointing**: Automatic model saving with resume functionality using `--resume-from-step` and checkpoint paths based on `--save-path`
+- **GAE Advantages**: Computes Generalized Advantage Estimation for stable policy gradient training
 
 ## Development Notes
 
