@@ -166,28 +166,26 @@ class SinusoidalEmbedding(nn.Module):
         # [batch_size, n_features * dim]
         return emb.reshape(x.shape[0], -1)
 
+class FixedVecEmbedding(nn.Module):
+    def __init__(self, dim: int, limits: list[int]):
+        super().__init__()
+        self.num_embed = SinusoidalEmbedding(dim, len(limits))
+        self.proj = nn.Linear(self.num_embed.out_dim, dim)
+    
+    def forward(self, xs):
+        # xs is [batch_size, n_features]
+        embedded = self.proj(self.num_embed(xs))  # [batch_size, dim]
+        embedded = embedded.unsqueeze(1)  # [batch_size, 1, dim]
+        mask = torch.zeros(embedded.shape[0], 1, dtype=torch.bool, device=embedded.device)
+        return embedded, mask
+
 class FixedVecSpace(MaskedSpace[np.ndarray]):
     def __init__(self, limits: list[int]):
         self.limits = limits
         super().__init__()
     
     def build_embed(self, dim: int) -> nn.Module:
-        limits = self.limits  # Capture in closure
-        
-        class FixedVecEmbedding(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.num_embed = SinusoidalEmbedding(dim, len(limits))
-                self.proj = nn.Linear(self.num_embed.out_dim, dim)
-            
-            def forward(self, xs):
-                # xs is [batch_size, n_features]
-                embedded = self.proj(self.num_embed(xs))  # [batch_size, dim]
-                embedded = embedded.unsqueeze(1)  # [batch_size, 1, dim]
-                mask = torch.zeros(embedded.shape[0], 1, dtype=torch.bool, device=embedded.device)
-                return embedded, mask
-        
-        return FixedVecEmbedding()
+        return FixedVecEmbedding(dim, self.limits)
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         return np.array([rng.integers(0, limit) for limit in self.limits])
