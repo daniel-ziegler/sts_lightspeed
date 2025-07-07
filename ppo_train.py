@@ -146,9 +146,10 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                 obs = sts.getNNRepresentation(gc)
                 actions = sts.GameAction.getAllActionsInState(gc)
                 
-                if gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM, sts.ScreenState.CARD_SELECT, sts.ScreenState.EVENT_SCREEN):
-                    from playouts import construct_choice
-                    choice = construct_choice(gc, obs, actions)
+                from playouts import construct_choice
+                choice = construct_choice(gc, obs, actions)
+                
+                if choice is not None:
                     
                     # Count total number of choices available
                     total_choices = (len(choice.cards_offered) + len(choice.relics_offered) + 

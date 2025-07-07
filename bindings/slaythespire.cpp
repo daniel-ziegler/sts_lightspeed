@@ -229,7 +229,8 @@ PYBIND11_MODULE(slaythespire, m) {
             }
             return cards;
         })
-        .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer);
+        .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer)
+        .def_readwrite("event_data", &ScreenStateInfo::eventData);
 
     pybind11::class_<Shop>(m, "Shop")
         .def_property_readonly("prices", [](const Shop& s) {

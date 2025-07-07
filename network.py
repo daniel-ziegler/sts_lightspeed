@@ -256,7 +256,8 @@ class FixedAction(IntEnum):
     MOAI_HEAD_LEAVE = auto()
     
     # Tomb of Lord Red Mask (conditional)
-    TOMB_RED_MASK_ENTER = auto()
+    TOMB_RED_MASK_DON_MASK = auto()  # Don the Red Mask (if you have it)
+    TOMB_RED_MASK_OFFER_GOLD = auto()  # Offer gold for Red Mask (if you don't have it)
     TOMB_RED_MASK_LEAVE = auto()
     
     # Upgrade Shrine (conditional)

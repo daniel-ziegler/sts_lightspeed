@@ -25,7 +25,7 @@ from inputs import Path
 import slaythespire as sts
 
 # %%
-def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction) -> sts.FixedAction:
+def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction) -> Optional[sts.FixedAction]:
     """
     Map a GameAction for an event screen to the appropriate FixedAction enum value.
     This handles the complex conditional logic for each event type.
@@ -183,14 +183,13 @@ def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction
             raise ValueError(f"Unknown Forgotten Altar action idx1: {idx1}")
     
     elif event == sts.Event.GOLDEN_IDOL:
-        if not gc.relics.has(sts.RelicId.GOLDEN_IDOL):
-            return FixedAction.GOLDEN_IDOL_TAKE if idx1 == 0 else FixedAction.GOLDEN_IDOL_LEAVE
+        if idx1 == 0: return FixedAction.GOLDEN_IDOL_TAKE
+        elif idx1 == 1: return FixedAction.GOLDEN_IDOL_LEAVE
+        elif idx1 == 2: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_0
+        elif idx1 == 3: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_1
+        elif idx1 == 4: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_2
         else:
-            if idx1 == 2: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_0
-            elif idx1 == 3: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_1
-            elif idx1 == 4: return FixedAction.GOLDEN_IDOL_PHASE2_OPTION_2
-            else:
-                raise ValueError(f"Unknown Golden Idol phase 2 action idx1: {idx1}")
+            raise ValueError(f"Unknown Golden Idol action idx1: {idx1}")
     
     elif event == sts.Event.WING_STATUE:
         if idx1 == 0: return FixedAction.WING_STATUE_REMOVE_CARD
@@ -241,8 +240,9 @@ def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction
             raise ValueError(f"Unknown Moai Head action idx1: {idx1}")
     
     elif event == sts.Event.TOMB_OF_LORD_RED_MASK:
-        if idx1 == 0: return FixedAction.TOMB_RED_MASK_ENTER
-        elif idx1 == 1: return FixedAction.TOMB_RED_MASK_LEAVE
+        if idx1 == 0: return FixedAction.TOMB_RED_MASK_DON_MASK
+        elif idx1 == 1: return FixedAction.TOMB_RED_MASK_OFFER_GOLD
+        elif idx1 == 2: return FixedAction.TOMB_RED_MASK_LEAVE
         else:
             raise ValueError(f"Unknown Tomb of Lord Red Mask action idx1: {idx1}")
     
@@ -274,9 +274,9 @@ def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction
         else:
             raise ValueError(f"Unknown Ominous Forge action idx1: {idx1}")
     
-    # Unsupported events - throw errors instead of treating as invalid
+    # Unsupported events - return None instead of throwing errors
     elif event == sts.Event.MATCH_AND_KEEP:
-        raise NotImplementedError(f"Match and Keep event requires special handling with idx1={idx1}, idx2={idx2}")
+        return None  # Return None for unsupported events
     elif event == sts.Event.BONFIRE_SPIRITS:
         raise NotImplementedError(f"Bonfire Spirits event skips select phase - should not reach here")
     
@@ -578,7 +578,7 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     
     raise ValueError(f"Could not find action for index {chosen_idx}")
 
-def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: list[sts.GameAction]) -> Choice:
+def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: list[sts.GameAction]) -> Optional[Choice]:
     """Construct a Choice object from the current game state and available actions."""
     cards_offered = []
     card_actions = []
@@ -690,8 +690,13 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
         # Event screen actions - map each action to appropriate FixedAction
         for action in actions:
             event_action = map_event_action_to_fixed_action(gc, action)
+            if event_action is None:
+                return None  # Return None if any action can't be mapped
             fixed_actions.append(event_action)
             fixed_actions_list.append(action)
+    else:
+        # Return None for unsupported screen states
+        return None
 
     return Choice(obs, cards_offered=cards_offered, card_actions=card_actions,
                   paths_offered=paths_offered, path_actions=path_actions,
@@ -743,7 +748,7 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
 
                 choice = construct_choice(gc, obs, actions)
                 # Pick action using either network or agent
-                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM, sts.ScreenState.CARD_SELECT, sts.ScreenState.EVENT_SCREEN):
+                if net is not None and choice is not None:
                     assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.potions_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
                     action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     
