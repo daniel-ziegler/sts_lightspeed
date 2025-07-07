@@ -40,10 +40,6 @@ namespace sts::py {
         ret[offset++] = std::min(gc.gold, playerGoldMax);
         ret[offset++] = gc.floorNum;
         ret[offset++] = getBossEncoding(gc.boss);
-        
-        // Card selection screen info
-        ret[offset++] = static_cast<int>(gc.screenState);
-        ret[offset++] = static_cast<int>(gc.info.selectScreenType);
         ret[offset++] = gc.info.toSelectCount;
 
         return to_numpy(ret);
@@ -58,10 +54,6 @@ namespace sts::py {
         ret[offset++] = playerGoldMax;
         ret[offset++] = getMaxFloor();
         ret[offset++] = numBosses;
-        
-        // Card selection screen info maximums
-        ret[offset++] = getMaxScreenState();
-        ret[offset++] = getMaxCardSelectScreenType();  
         ret[offset++] = Deck::MAX_SIZE; // max cards to select
 
         return to_numpy(ret);

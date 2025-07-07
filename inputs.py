@@ -175,11 +175,9 @@ class FixedVecEmbedding(nn.Module):
     def forward(self, xs):
         # xs is [batch_size, n_features]
         embedded = self.proj(self.num_embed(xs))  # [batch_size, dim]
-        embedded = embedded.unsqueeze(1)  # [batch_size, 1, dim]
-        mask = torch.zeros(embedded.shape[0], 1, dtype=torch.bool, device=embedded.device)
-        return embedded, mask
+        return embedded  # Return only the embedding for ScalarSpace
 
-class FixedVecSpace(MaskedSpace[np.ndarray]):
+class FixedVecSpace(ScalarSpace[np.ndarray]):
     def __init__(self, limits: list[int]):
         self.limits = limits
         super().__init__()
@@ -189,19 +187,6 @@ class FixedVecSpace(MaskedSpace[np.ndarray]):
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         return np.array([rng.integers(0, limit) for limit in self.limits])
-
-
-    def try_ix_to_path(self, x: np.ndarray, ix: int) -> PathOrRemainder:
-        if ix == 0:
-            return []
-        else:
-            return ix - 1
-
-    def path_to_ix(self, x: np.ndarray, path: Path) -> int:
-        if len(path) == 0:
-            return 0
-        else:
-            raise IndexError(f"Path {path} is out of bounds")
 
 class TupleAddEmbedding(nn.Module):
     """Module for embedding tuples by adding component embeddings."""
@@ -229,6 +214,84 @@ class TupleAddSpace(ScalarSpace[tuple]):
 
     def sample(self, rng: np.random.Generator) -> tuple:
         return tuple(space.sample(rng) for space in self.spaces)
+
+
+class ScalarToSequenceEmbedding(nn.Module):
+    """Adapter to convert scalar embedding to sequence embedding format."""
+    def __init__(self, scalar_embedding: nn.Module):
+        super().__init__()
+        self.scalar_embedding = scalar_embedding
+    
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # x is a single value per batch item: [batch_size]
+        # Convert to scalar embedding: [batch_size, dim]
+        embedding = self.scalar_embedding(x)
+        
+        # Add sequence dimension: [batch_size, 1, dim]
+        embedding = embedding.unsqueeze(1)
+        
+        # Create mask: [batch_size, 1] - all False (not masked)
+        mask = torch.zeros(embedding.shape[0], 1, dtype=torch.bool, device=embedding.device)
+        
+        return embedding, mask
+
+
+class ScalarToSequenceSpace(MaskedSpace[Any]):
+    """Adapter to convert ScalarSpace to MaskedSpace for use in DictSpace."""
+    def __init__(self, scalar_space: ScalarSpace[Any]):
+        self.scalar_space = scalar_space
+        super().__init__()
+    
+    def build_embed(self, dim: int) -> nn.Module:
+        scalar_embedding = self.scalar_space.build_embed(dim)
+        return ScalarToSequenceEmbedding(scalar_embedding)
+    
+    def sample(self, rng: np.random.Generator) -> Any:
+        return self.scalar_space.sample(rng)
+    
+    def try_ix_to_path(self, x: Any, ix: int) -> PathOrRemainder:
+        # For single values, only index 0 is valid
+        if ix == 0:
+            return []
+        return ix - 1
+    
+    def path_to_ix(self, x: Any, path: Path) -> int:
+        # For single values, only empty path is valid (index 0)
+        if len(path) == 0:
+            return 0
+        raise ValueError(f"Invalid path {path} for scalar value")
+
+
+class DictAddEmbedding(nn.Module):
+    """Module for embedding dictionaries by adding component embeddings."""
+    def __init__(self, component_embeddings: nn.ModuleDict):
+        super().__init__()
+        self.component_embeddings = component_embeddings
+    
+    def forward(self, xs: dict) -> torch.Tensor:
+        # Apply embeddings to each component and sum them
+        component_outputs = []
+        for key, emb in self.component_embeddings.items():
+            component_input = xs[key]
+            component_outputs.append(emb(component_input))
+        
+        # Sum the embeddings
+        return torch.sum(torch.stack(component_outputs, dim=0), dim=0)
+
+
+class DictAddSpace(ScalarSpace[dict]):
+    """Space for dictionaries where component embeddings are added together."""
+    def __init__(self, spaces: dict[str, ScalarSpace[Any]]):
+        self.spaces = spaces
+        super().__init__()
+    
+    def build_embed(self, dim: int) -> nn.Module:
+        component_embeddings = nn.ModuleDict({k: space.build_embed(dim) for k, space in self.spaces.items()})
+        return DictAddEmbedding(component_embeddings)
+    
+    def sample(self, rng: np.random.Generator) -> dict:
+        return {k: space.sample(rng) for k, space in self.spaces.items()}
+
 
 class TupleConcatEmbedding(nn.Module):
     """Module for embedding tuples by concatenating component embeddings."""

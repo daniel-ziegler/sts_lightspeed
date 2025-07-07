@@ -8,7 +8,7 @@ from torch import nn
 import torch.nn.functional as F
 
 import slaythespire as sts
-from inputs import SinusoidalEmbedding, FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace
+from inputs import SinusoidalEmbedding, FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace
 
 @dataclass
 class ModelHP:
@@ -64,11 +64,14 @@ obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'potions': SequenceSpace(EnumSpace(sts.Potion)),
-    'fixed_obs': FixedVecSpace(sts.getFixedObservationMaximums()),
+    'fixed_obs': ScalarToSequenceSpace(DictAddSpace({
+        'fixed_observation': FixedVecSpace(sts.getFixedObservationMaximums()),
+        'screen_state': EnumSpace(sts.ScreenState),
+    })),
 })
 
 choice_space = DictSpace({
-    'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
+    'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE), EnumSpace(sts.CardSelectScreenType))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'potions': SequenceSpace(EnumSpace(sts.Potion)),
     'fixed': SequenceSpace(EnumSpace(FixedAction)),
@@ -340,13 +343,16 @@ def collate_fn(batch):
             'value': torch.full((len(batch), sts.MAX_POTION_CAPACITY), 0, dtype=torch.int32),
             'mask': torch.ones((len(batch), sts.MAX_POTION_CAPACITY), dtype=torch.bool)
         },
-        'fixed_obs': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32)
+        'fixed_obs': {
+            'fixed_observation': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32),
+            'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
+        }
     }
     
     # Create batched tensors for choices using fixed maximum sizes
     batch_choices = {
         'cards': {
-            'value': torch.full((len(batch), MAX_CHOICES, 2), 0, dtype=torch.int32),
+            'value': torch.full((len(batch), MAX_CHOICES, 3), 0, dtype=torch.int32),
             'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
         },
         'relics': {
@@ -385,15 +391,20 @@ def collate_fn(batch):
         batch_obs['potions']['value'][i, :potions_len] = torch.tensor(potions, dtype=torch.int32)
         batch_obs['potions']['mask'][i, :potions_len] = torch.zeros(potions_len, dtype=torch.bool)
         
-        batch_obs['fixed_obs'][i] = torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
+        # Set fixed observation components
+        batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
+        batch_obs['fixed_obs']['screen_state'][i] = x['screen_state']
         
         # Build choices data inline
         cards_offered = x['cards_offered.cards']
         cards_upgrades = x['cards_offered.upgrades']
+        select_screen_type = x['select_screen_type']
         choice_cards_len = len(cards_offered)
         assert choice_cards_len <= MAX_CHOICES, f"Choice cards count {choice_cards_len} exceeds maximum {MAX_CHOICES}; {cards_offered}; {relics}"
         if choice_cards_len > 0:
-            batch_choices['cards']['value'][i, :choice_cards_len] = torch.tensor(list(zip(cards_offered, cards_upgrades)), dtype=torch.int32).reshape(-1, 2)
+            # Create 3-tuple: (card_id, upgrade_count, select_screen_type)
+            card_tuples = [(card_id, upgrade, select_screen_type) for card_id, upgrade in zip(cards_offered, cards_upgrades)]
+            batch_choices['cards']['value'][i, :choice_cards_len] = torch.tensor(card_tuples, dtype=torch.int32)
         batch_choices['cards']['mask'][i, :choice_cards_len] = torch.zeros(choice_cards_len, dtype=torch.bool)
         
         relics_offered = x['relics_offered']

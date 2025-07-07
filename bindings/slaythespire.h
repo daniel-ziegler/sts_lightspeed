@@ -39,7 +39,7 @@ namespace sts {
             return result;
         }
 
-        static constexpr int fixed_observation_space_size = 8;
+        static constexpr int fixed_observation_space_size = 6;
         static constexpr int playerHpMax = 200;
         static constexpr int playerGoldMax = 1800;
         static constexpr int cardCountMax = 7;
