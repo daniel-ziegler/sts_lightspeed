@@ -265,22 +265,13 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     # Compute shaped rewards with centralized delta calculation
     rewards = []
     
-    # Collect all states: experiences + final state
-    all_metrics = [exp.metrics for exp in experiences] + [final_metrics]
-    
     # Compute all reward values once
-    all_reward_values_orig = [reward_fn(metrics) for metrics in all_metrics]
     all_reward_values = reward_fn_vals + [reward_fn(final_metrics)]
     
     # Reward shaping: each step gets delta from current state to next state
     for i in range(len(experiences)):
         reward_delta = all_reward_values[i+1] - all_reward_values[i]
         rewards.append(reward_delta)
-    
-    if seed % 1000 == 0 or all_reward_values[-1] > 0.5:
-        print(f"Seed {seed} last reward: {rewards[-1]:.3f} = {all_reward_values[-1]:.3f} - {all_reward_values[-2]:.3f}")
-        print(f"= {all_reward_values_orig[-1]:.3f} - {all_reward_values_orig[-2]:.3f}")
-        print(f"{len(rewards)=}; {len(all_reward_values)=}; {len(all_reward_values_orig)=}")
     
     # Add terminal state value (0.0) for GAE bootstrap
     values.append(0.0)
