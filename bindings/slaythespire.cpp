@@ -214,8 +214,20 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_property_readonly("shop", [](const ScreenStateInfo& info) -> const Shop& {
             return info.shop;
         })
-        // .def_property_readonly("to_select_cards", )
-        // .def_property_readonly("have_selected_cards", )
+        .def_property_readonly("to_select_cards", [](const ScreenStateInfo& info) {
+            std::vector<Card> cards;
+            for (const auto& select_card : info.toSelectCards) {
+                cards.push_back(select_card.card);
+            }
+            return cards;
+        })
+        .def_property_readonly("have_selected_cards", [](const ScreenStateInfo& info) {
+            std::vector<Card> cards;
+            for (const auto& select_card : info.haveSelectedCards) {
+                cards.push_back(select_card.card);
+            }
+            return cards;
+        })
         .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer);
 
     pybind11::class_<Shop>(m, "Shop")

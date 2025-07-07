@@ -397,6 +397,16 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                 fixed_actions.append(FixedAction.SKIP)
             fixed_actions_list.append(action)
                 
+    elif gc.screen_state == sts.ScreenState.CARD_SELECT:
+        # Card selection screen (e.g., for smithing, removing cards, etc.)
+        # Actions are indices into the toSelectCards list
+        for action in actions:
+            card_idx = action.idx1
+            if card_idx < len(gc.screen_state_info.to_select_cards):
+                select_card = gc.screen_state_info.to_select_cards[card_idx]
+                cards_offered.append(select_card)  # select_card is already a Card object
+                card_actions.append(action)
+                
     elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
         def xy_to_roomid(x, y):
             roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
@@ -459,7 +469,7 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
 
                 choice = construct_choice(gc, obs, actions)
                 # Pick action using either network or agent
-                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM):
+                if net is not None and gc.screen_state in (sts.ScreenState.REWARDS, sts.ScreenState.SHOP_ROOM, sts.ScreenState.BOSS_RELIC_REWARDS, sts.ScreenState.REST_ROOM, sts.ScreenState.CARD_SELECT):
                     assert choice.cards_offered or choice.paths_offered or choice.relics_offered or choice.potions_offered or choice.fixed_actions, (gc.screen_state, actions, gc.screen_state_info.boss_relics)
                     action, action_path = pick_card_with_net(net, choice, actions, temperature=temperature, stats=stats, rng=rng)
                     
