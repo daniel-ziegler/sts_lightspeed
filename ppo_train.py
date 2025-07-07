@@ -126,30 +126,20 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     values = []  # Collect values separately
     reward_fn_vals = []
     
-    # No perfected strike tracking needed
-    
-    # Create timeout handling
-    timeout_event = threading.Event()
-    
-    def timeout_handler():
-        timeout_event.set()
-        log.warning(f"Battle simulation taking too long for seed {seed}")
-    
     while gc.outcome == sts.GameOutcome.UNDECIDED:
         try:
             if gc.screen_state == sts.ScreenState.BATTLE:
-                # Use MCTS agent for battles
-                timer = threading.Timer(30.0, timeout_handler)
-                timer.start()
-                
-                try:
-                    agent.playout_battle(gc)
-                finally:
-                    timer.cancel()
+                # Use MCTS agent for battles in background thread
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(agent.playout_battle, gc)
                     
-                if timeout_event.is_set():
-                    log.warning(f"Seed {seed} did finish")
-                    timeout_event.clear()
+                    try:
+                        # Wait for completion with timeout
+                        future.result(timeout=30.0)
+                    except TimeoutError:
+                        log.warning(f"Battle simulation timed out for seed {seed}. Background thread will continue running.")
+                        # End the episode. The outcome will be UNDECIDED.
+                        break
                     
             else:
                 # Use neural network for non-battle decisions
@@ -524,7 +514,7 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
                 # Get values from value network  
                 value_output = value_net(collated_batch)
                 if isinstance(value_output, tuple):
-                    _, new_values = value_output  # Extract values from tuple
+                    _, new_values = value_output
                 else:
                     new_values = torch.zeros(len(mini_batch), device=device)
             else:
