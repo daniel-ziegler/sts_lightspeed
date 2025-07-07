@@ -33,7 +33,9 @@ class PPOConfig:
     # Environment settings
     num_games_per_batch: int = 256
     num_epochs: int = 4
-    num_workers: int = 30
+    num_workers: int = 40
+    inf_batch_size: int = 32
+    inf_batch_size_factor: int = 16
     batch_size: int = 128
     
     # PPO hyperparameters
@@ -786,10 +788,10 @@ def main():
         value_optimizer = torch.optim.AdamW(value_net.parameters(), lr=config.value_lr, weight_decay=config.weight_decay)
         
         # Use policy network for action selection
-        service = NNService(policy_net, batch_size=32, batch_size_factor=16)
+        service = NNService(policy_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
         
         # Create separate value service
-        value_service = NNService(value_net, batch_size=32, batch_size_factor=16)
+        value_service = NNService(value_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
         
         nets = (policy_net, value_net)
         optimizers = (policy_optimizer, value_optimizer)
@@ -814,7 +816,7 @@ def main():
             print(f"Loaded model from {args.init_path}")
         
         # Create service
-        service = NNService(net, batch_size=32, batch_size_factor=16)
+        service = NNService(net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
         
         # Create optimizer
         optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
