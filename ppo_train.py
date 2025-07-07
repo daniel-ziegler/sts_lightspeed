@@ -124,6 +124,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     agent.simulation_count_base = 1000
     experiences = []
     values = []  # Collect values separately
+    reward_fn_vals = []
     
     # No perfected strike tracking needed
     
@@ -224,8 +225,9 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                             cur_hp=gc.cur_hp,
                             max_hp=gc.max_hp,
                             perfected_strike_count=perfected_strike_count,
-                            outcome=gc.outcome
+                            outcome=gc.outcome,
                         )
+                        reward_fn_vals.append(reward_fn(metrics))
                         
                         # Store experience data before action execution
                         exp_data = {
@@ -277,14 +279,18 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     all_metrics = [exp.metrics for exp in experiences] + [final_metrics]
     
     # Compute all reward values once
-    all_reward_values = [reward_fn(metrics) for metrics in all_metrics]
+    all_reward_values_orig = [reward_fn(metrics) for metrics in all_metrics]
+    all_reward_values = reward_fn_vals + [reward_fn(final_metrics)]
     
-    # Proper reward shaping: each step gets delta from current state to next state
-    if experiences:
-        # For each experience i, reward is the delta from state i to state i+1
-        for i in range(len(experiences)):
-            reward_delta = all_reward_values[i+1] - all_reward_values[i]
-            rewards.append(reward_delta)
+    # Reward shaping: each step gets delta from current state to next state
+    for i in range(len(experiences)):
+        reward_delta = all_reward_values[i+1] - all_reward_values[i]
+        rewards.append(reward_delta)
+    
+    if seed % 1000 == 0 or all_reward_values[-1] > 0.5:
+        print(f"Seed {seed} last reward: {rewards[-1]:.3f} = {all_reward_values[-1]:.3f} - {all_reward_values[-2]:.3f}")
+        print(f"= {all_reward_values_orig[-1]:.3f} - {all_reward_values_orig[-2]:.3f}")
+        print(f"{len(rewards)=}; {len(all_reward_values)=}; {len(all_reward_values_orig)=}")
     
     # Add terminal state value (0.0) for GAE bootstrap
     values.append(0.0)
@@ -331,8 +337,8 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
     all_advantages = []
     all_returns = []
     
-    # Use random trajectory for debug output
-    debug_traj_idx = random.randint(0, len(trajectories) - 1) if debug_first and trajectories else None
+    # Use trajectory with highest final reward for debug output
+    debug_traj_idx = max(range(len(trajectories)), key=lambda i: trajectories[i].final_reward) if debug_first and trajectories else None
     
     for traj_idx, traj in enumerate(trajectories):
         if not traj.experiences:
