@@ -10,6 +10,7 @@ from typing import List, NamedTuple, Optional, get_type_hints, Union
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,7 @@ class PPOConfig:
     # Learning rates
     policy_lr: float = 5e-5
     value_lr: float = 1e-4
+    weight_decay: float = 1e-4  # L2 regularization strength
     
     # GAE parameters
     gamma: float = 1.00
@@ -52,7 +54,7 @@ class PPOConfig:
     # Training settings
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
-    resume_from: int = 0  # Step to resume from (0 = start from beginning)
+    resume_from_step: int = 0  # Step to resume from (0 = start from beginning)
     
     # Logging
     log_every: int = 10
@@ -85,9 +87,8 @@ class PPOTrajectory(NamedTuple):
     values: List[float]   # Value prediction for each step
     final_reward: float
     final_floor: int
-    pstrike_offers: int  # Number of times Perfected Strike was offered
-    pstrike_takes: int   # Number of times Perfected Strike was taken
-    pstrike_probs: List[float]  # Probabilities assigned to Perfected Strike when offered
+    final_deck: List[sts.Card]  # Final deck state
+    final_relics: List[sts.RelicId]  # Final relics
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -122,10 +123,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
     experiences = []
     values = []  # Collect values separately
     
-    # Track Perfected Strike stats
-    pstrike_offers = 0
-    pstrike_takes = 0
-    pstrike_probs = []
+    # No perfected strike tracking needed
     
     # Create timeout handling
     timeout_event = threading.Event()
@@ -192,29 +190,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                         chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
                         log_prob = log_probs[chosen_idx]
                         
-                        # Check if Perfected Strike is offered and log probability + decision
-                        perfected_strike_offered = any(card.id == sts.CardId.PERFECTED_STRIKE for card in choice.cards_offered)
-                        perfected_strike_prob = None
-                        
-                        if perfected_strike_offered:
-                            pstrike_offers += 1
-                            # Count total number of valid options
-                            total_options = (len(choice.cards_offered) + len(choice.relics_offered) + 
-                                           len(choice.potions_offered) + len(choice.fixed_actions))
-                            
-                            # Find the probability assigned to Perfected Strike
-                            for i, card in enumerate(choice.cards_offered):
-                                if card.id == sts.CardId.PERFECTED_STRIKE:
-                                    # Find the choice index for this card
-                                    card_path = ('cards', i)
-                                    try:
-                                        pstrike_choice_idx = choice_space.path_to_ix(batch_tensors['choices'], card_path)
-                                        perfected_strike_prob = float(probs[pstrike_choice_idx])
-                                        pstrike_probs.append(perfected_strike_prob)
-                                        break
-                                    except (IndexError, KeyError):
-                                        perfected_strike_prob = 0.0
-                                        pstrike_probs.append(0.0)
+                        # No perfected strike tracking needed
                         
                         # Convert back to game action
                         path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
@@ -224,29 +200,18 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
                             action = choice.card_actions[path[1]]
                             chosen_card = choice.cards_offered[path[1]]
                             action_desc = str(chosen_card)
-                            if perfected_strike_offered:
-                                perfected_strike_taken = chosen_card.id == sts.CardId.PERFECTED_STRIKE
-                                if perfected_strike_taken:
-                                    pstrike_takes += 1
-                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, taken: {perfected_strike_taken}")
                         elif path[0] == 'relics':
                             action = choice.relic_actions[path[1]]
                             chosen_relic = choice.relics_offered[path[1]]
                             action_desc = sts.RelicId(chosen_relic).name
-                            if perfected_strike_offered:
-                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose relic instead")
                         elif path[0] == 'potions':
                             action = choice.potion_actions[path[1]]
                             chosen_potion = choice.potions_offered[path[1]]
                             action_desc = sts.Potion(chosen_potion).name
-                            if perfected_strike_offered:
-                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose potion instead")
                         elif path[0] == 'fixed':
                             action = choice.fixed_actions_list[path[1]]
                             chosen_fixed = choice.fixed_actions[path[1]]
                             action_desc = str(chosen_fixed).split('.')[-1]  # Remove "FixedAction." prefix
-                            if perfected_strike_offered:
-                                log.info(f"Seed {seed}, Floor {gc.floor_num}: Perfected Strike offered ({total_options} options), prob: {perfected_strike_prob:.3f}, but chose fixed action instead")
                         else:
                             action_desc = action.getDesc(gc)  # Fallback for unknown paths
                         
@@ -303,9 +268,6 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
         outcome=gc.outcome
     )
     
-    # Compute final reward using the provided reward function
-    final_reward = reward_fn(final_metrics)
-    
     # Compute shaped rewards with centralized delta calculation
     rewards = []
     
@@ -356,11 +318,10 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
         experiences=experiences,
         rewards=rewards,
         values=values,
-        final_reward=final_reward,
+        final_reward=all_reward_values[-1],
         final_floor=gc.floor_num,
-        pstrike_offers=pstrike_offers,
-        pstrike_takes=pstrike_takes,
-        pstrike_probs=pstrike_probs
+        final_deck=list(gc.deck),
+        final_relics=list(gc.relics)
     )
 
 
@@ -394,18 +355,8 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
     all_advantages = []
     all_returns = []
     
-    # Find trajectory with highest reward for debug output
-    debug_traj_idx = None
-    if debug_first and trajectories:
-        # Find trajectory with highest final reward
-        best_reward = max(traj.final_reward for traj in trajectories)
-        for i, traj in enumerate(trajectories):
-            if traj.final_reward == best_reward:
-                debug_traj_idx = i
-                break
-        # Fallback to first trajectory if none found
-        if debug_traj_idx is None:
-            debug_traj_idx = 0
+    # Use random trajectory for debug output
+    debug_traj_idx = random.randint(0, len(trajectories) - 1) if debug_first and trajectories else None
     
     for traj_idx, traj in enumerate(trajectories):
         if not traj.experiences:
@@ -429,9 +380,9 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             advantages[t] = gae
             returns[t] = advantages[t] + values[t]
         
-        # Debug output for highest-reward trajectory
+        # Debug output for random trajectory
         if debug_first and traj_idx == debug_traj_idx:
-            print(f"=== PPO Advantage Calculation Debug (Trajectory {traj_idx} with highest reward: {traj.final_reward:.3f}) ===")
+            print(f"=== PPO Advantage Calculation Debug (Random Trajectory {traj_idx}) ===")
             print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
@@ -444,11 +395,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                 # Get choice summary - what was offered
                 offered_items = []
                 if exp.choice.cards_offered:
-                    has_pstrike = any(card.id == sts.CardId.PERFECTED_STRIKE for card in exp.choice.cards_offered)
-                    cards_str = f"{len(exp.choice.cards_offered)}card"
-                    if has_pstrike:
-                        cards_str += "*"
-                    offered_items.append(cards_str)
+                    offered_items.append(f"{len(exp.choice.cards_offered)}card")
                 if exp.choice.relics_offered:
                     offered_items.append(f"{len(exp.choice.relics_offered)}rel")
                 if exp.choice.potions_offered:
@@ -467,6 +414,20 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
             print(f"Final reward: {traj.final_reward:.3f}, Final floor: {traj.final_floor}")
             print(f"Last step reward (includes terminal): {rewards[-1]:.3f}")
+            
+            # Show final deck and relics
+            print(f"Final deck ({len(traj.final_deck)} cards):")
+            deck_summary = Counter(str(card) for card in traj.final_deck)
+            for card_str, count in deck_summary.most_common():
+                if count > 1:
+                    print(f"  {count}x {card_str}")
+                else:
+                    print(f"  {card_str}")
+            
+            print(f"Final relics ({len(traj.final_relics)}):") 
+            for relic in traj.final_relics:
+                print(f"  {relic.id}")
+            
             print("=" * 80)
         
         # Normalize advantages
@@ -708,7 +669,7 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
 
 def main():
     parser = argparse.ArgumentParser(description='PPO training for Slay the Spire')
-    parser.add_argument('--model-path', type=str, default=None,
+    parser.add_argument('--init-path', type=str, default=None,
                         help='Path to pretrained model (optional)')
     parser.add_argument('--save-path', type=str, default='ppo_model.pt',
                         help='Path to save trained model')
@@ -797,37 +758,27 @@ def main():
         policy_net = torch.compile(policy_net, mode="default")
         value_net = torch.compile(value_net, mode="default")
         
-        if args.model_path:
-            if config.resume_from > 0:
-                # Load from specific iteration checkpoints
-                policy_path = f"{args.model_path}.policy.iter_{config.resume_from}"
-                value_path = f"{args.model_path}.value.iter_{config.resume_from}"
-                try:
-                    policy_state = torch.load(policy_path, map_location=device, weights_only=True)
-                    value_state = torch.load(value_path, map_location=device, weights_only=True)
-                    policy_net.load_state_dict(policy_state)
-                    value_net.load_state_dict(value_state)
-                    print(f"Resumed from iteration {config.resume_from}: loaded {policy_path} and {value_path}")
-                except FileNotFoundError as e:
-                    print(f"Could not find checkpoint files for iteration {config.resume_from}: {e}")
-                    print("Loading from base model path instead")
-                    state = torch.load(args.model_path, map_location=device, weights_only=True)
-                    policy_net.load_state_dict(state, strict=False)
-                    value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
-                    value_net.load_state_dict(value_state, strict=False)
-                    print(f"Loaded policy model from {args.model_path}")
-            else:
-                # Load from base model path
-                state = torch.load(args.model_path, map_location=device, weights_only=True)
-                policy_net.load_state_dict(state, strict=False)
-                # Initialize value network with same weights (excluding value head)
-                value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
-                value_net.load_state_dict(value_state, strict=False)
-                print(f"Loaded policy model from {args.model_path}")
+        if config.resume_from_step > 0:
+            # Load from specific iteration checkpoints
+            policy_path = f"{args.save_path}.policy.iter_{config.resume_from_step}"
+            value_path = f"{args.save_path}.value.iter_{config.resume_from_step}"
+            policy_state = torch.load(policy_path, map_location=device, weights_only=True)
+            value_state = torch.load(value_path, map_location=device, weights_only=True)
+            policy_net.load_state_dict(policy_state)
+            value_net.load_state_dict(value_state)
+            print(f"Resumed from iteration {config.resume_from_step}: loaded {policy_path} and {value_path}")
+        elif args.init_path:
+            # Load from init path
+            state = torch.load(args.init_path, map_location=device, weights_only=True)
+            policy_net.load_state_dict(state)
+            # Initialize value network with same weights (excluding value head)
+            value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
+            value_net.load_state_dict(value_state)
+            print(f"Loaded policy model from {args.init_path}")
         
         # Create separate optimizers
-        policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=config.policy_lr)
-        value_optimizer = torch.optim.Adam(value_net.parameters(), lr=config.value_lr)
+        policy_optimizer = torch.optim.AdamW(policy_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
+        value_optimizer = torch.optim.AdamW(value_net.parameters(), lr=config.value_lr, weight_decay=config.weight_decay)
         
         # Use policy network for action selection
         service = NNService(policy_net, batch_size=32, batch_size_factor=16)
@@ -844,44 +795,37 @@ def main():
         net = NN(model_hp).to(device)
         net = torch.compile(net, mode="default")
         
-        if args.model_path:
-            if config.resume_from > 0:
-                # Load from specific iteration checkpoint
-                checkpoint_path = f"{args.model_path}.iter_{config.resume_from}"
-                try:
-                    state = torch.load(checkpoint_path, map_location=device, weights_only=True)
-                    net.load_state_dict(state)
-                    print(f"Resumed from iteration {config.resume_from}: loaded {checkpoint_path}")
-                except FileNotFoundError as e:
-                    print(f"Could not find checkpoint file for iteration {config.resume_from}: {e}")
-                    print("Loading from base model path instead")
-                    state = torch.load(args.model_path, map_location=device, weights_only=True)
-                    net.load_state_dict(state, strict=False)  # Allow missing value head weights
-                    print(f"Loaded model from {args.model_path}")
-            else:
-                # Load from base model path
-                state = torch.load(args.model_path, map_location=device, weights_only=True)
-                net.load_state_dict(state, strict=False)  # Allow missing value head weights
-                print(f"Loaded model from {args.model_path}")
+        
+        if config.resume_from_step > 0:
+            # Load from specific iteration checkpoint
+            checkpoint_path = f"{args.save_path}.iter_{config.resume_from_step}"
+            state = torch.load(checkpoint_path, map_location=device, weights_only=True)
+            net.load_state_dict(state)
+            print(f"Resumed from iteration {config.resume_from_step}: loaded {checkpoint_path}")
+        elif args.init_path:
+            # Load from init path
+            state = torch.load(args.init_path, map_location=device, weights_only=True)
+            net.load_state_dict(state, strict=False)  # Allow missing value head weights
+            print(f"Loaded model from {args.init_path}")
         
         # Create service
         service = NNService(net, batch_size=32, batch_size_factor=16)
         
         # Create optimizer
-        optimizer = torch.optim.Adam(net.parameters(), lr=config.policy_lr)
+        optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
         
         nets = net
         optimizers = optimizer
         value_service = None  # No separate value service needed
         print("Using single network with value head")
     
-    if config.resume_from > 0:
-        print(f"Resuming PPO training from iteration {config.resume_from} with {config.num_games_per_batch} games per batch")
+    if config.resume_from_step > 0:
+        print(f"Resuming PPO training from iteration {config.resume_from_step} with {config.num_games_per_batch} games per batch")
     else:
         print(f"Starting PPO training with {config.num_games_per_batch} games per batch")
     
     try:
-        for iteration in range(config.resume_from, config.num_iterations):
+        for iteration in range(config.resume_from_step, config.num_iterations):
             print(f"\nIteration {iteration + 1}/{config.num_iterations}")
             
             # Collect experience
@@ -899,17 +843,8 @@ def main():
             avg_floor = sum(t.final_floor for t in trajectories) / len(trajectories)
             avg_reward = sum(t.final_reward for t in trajectories) / len(trajectories)
             
-            # Compute Perfected Strike statistics
-            total_pstrike_offers = sum(t.pstrike_offers for t in trajectories)
-            total_pstrike_takes = sum(t.pstrike_takes for t in trajectories)
-            all_pstrike_probs = [prob for t in trajectories for prob in t.pstrike_probs]
-            
-            pstrike_take_rate = total_pstrike_takes / total_pstrike_offers if total_pstrike_offers > 0 else 0.0
-            avg_pstrike_prob = np.mean(all_pstrike_probs) if all_pstrike_probs else 0.0
-            
             print(f"Collected {len(trajectories)} trajectories in {collect_time:.1f}s")
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
-            print(f"PStrike: {total_pstrike_offers} offers, {total_pstrike_takes} takes ({pstrike_take_rate:.3f} rate), {avg_pstrike_prob:.3f} avg prob")
             
             # Prepare training data (with debug output for first trajectory)
             experiences, advantages, returns = compute_advantages(trajectories, config, debug_first=True)
