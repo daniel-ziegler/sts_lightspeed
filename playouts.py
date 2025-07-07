@@ -20,7 +20,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, choice_space, move_to_device
+from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, choice_space, move_to_device, load_network_backward_compatible
 from inputs import Path
 import slaythespire as sts
 
@@ -131,7 +131,7 @@ def load_net(model_path, device=None):
     
     if model_path is not None:
         state = torch.load(model_path, map_location=device, weights_only=True)
-        net.load_state_dict(state)
+        net = load_network_backward_compatible(net, state)
     net.eval()
     
     return net

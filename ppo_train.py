@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm.auto import tqdm
 
-from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn
+from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats
 import slaythespire as sts
 
@@ -764,16 +764,16 @@ def main():
             value_path = f"{args.save_path}.value.iter_{config.resume_from_step}"
             policy_state = torch.load(policy_path, map_location=device, weights_only=True)
             value_state = torch.load(value_path, map_location=device, weights_only=True)
-            policy_net.load_state_dict(policy_state)
-            value_net.load_state_dict(value_state)
+            policy_net = load_network_backward_compatible(policy_net, policy_state)
+            value_net = load_network_backward_compatible(value_net, value_state)
             print(f"Resumed from iteration {config.resume_from_step}: loaded {policy_path} and {value_path}")
         elif args.init_path:
             # Load from init path
             state = torch.load(args.init_path, map_location=device, weights_only=True)
-            policy_net.load_state_dict(state)
+            policy_net = load_network_backward_compatible(policy_net, state)
             # Initialize value network with same weights (excluding value head)
             value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
-            value_net.load_state_dict(value_state)
+            value_net = load_network_backward_compatible(value_net, value_state)
             print(f"Loaded policy model from {args.init_path}")
         
         # Create separate optimizers
@@ -800,12 +800,12 @@ def main():
             # Load from specific iteration checkpoint
             checkpoint_path = f"{args.save_path}.iter_{config.resume_from_step}"
             state = torch.load(checkpoint_path, map_location=device, weights_only=True)
-            net.load_state_dict(state)
+            net = load_network_backward_compatible(net, state)
             print(f"Resumed from iteration {config.resume_from_step}: loaded {checkpoint_path}")
         elif args.init_path:
             # Load from init path
             state = torch.load(args.init_path, map_location=device, weights_only=True)
-            net.load_state_dict(state, strict=False)  # Allow missing value head weights
+            net = load_network_backward_compatible(net, state)
             print(f"Loaded model from {args.init_path}")
         
         # Create service

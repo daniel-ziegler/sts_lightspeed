@@ -98,6 +98,43 @@ The **`ppo_train.py`** implements Proximal Policy Optimization reinforcement lea
 - **Checkpointing**: Automatic model saving with resume functionality using `--resume-from-step` and checkpoint paths based on `--save-path`
 - **GAE Advantages**: Computes Generalized Advantage Estimation for stable policy gradient training
 
+### Neural Network Action Support
+
+The ML pipeline supports neural network decision-making for specific screen states through a structured choice system. Here's what's required to add support for a new action type:
+
+#### Adding New FixedAction Types
+When adding actions that map to existing choice categories (like rest site actions → fixed actions):
+
+1. **`network.py`**: Add new `FixedAction` enum values
+2. **`playouts.py`**: 
+   - Add new screen state case in `construct_choice()` function
+   - Map C++ action indices to appropriate `FixedAction` types
+   - Add screen state to neural network condition in `run_game()`
+3. **`ppo_train.py`**: Add screen state to neural network condition in `run_ppo_episode()`
+
+#### Adding New Choice Categories
+If you needed to add a completely new choice type (like `events_offered` field to `Choice`):
+
+1. **`playouts.py`**: 
+   - Add new field to `Choice` dataclass constructor and `as_dict()` method
+   - Add handling in `construct_choice()` for the new choice type
+   - Add path handling in `pick_card_with_net()` function
+   - Add choice type mapping in action path processing
+2. **`network.py`**: 
+   - Add new `ActionType` enum value
+   - Add new field to `choice_space` DictSpace definition
+   - Update network architecture if needed for new input dimensions
+3. **`ppo_train.py`**: Add path handling for new choice type in experience collection
+4. **`train.py`**: Update validation and statistics collection for new choice type
+
+#### Key Patterns
+- **C++ Integration**: Game actions use `idx1`, `idx2` fields and `rewards_action_type` for structured actions
+- **Choice Mapping**: `construct_choice()` maps C++ actions to typed Python choice objects
+- **Path System**: `choice_space.ix_to_path()` converts flat neural network indices back to semantic choices
+- **Consistency**: Both `playouts.py` and `ppo_train.py` must handle the same screen states identically
+
+The system is designed to be extensible - most new action types can be added by following these established patterns without changing the core neural network architecture.
+
 ## Development Notes
 
 - C++20 standard required
@@ -113,3 +150,4 @@ The **`ppo_train.py`** implements Proximal Policy Optimization reinforcement lea
 - Do not assume warnings are not a problem. They are a problem! Figure out why they are being produced.
 - Fail fast and hard! Do not just swallow errors or surprising states - add in asserts and throw exceptions liberally.
 - Never leave comments like "# Changed to new thing". Only leave comments that describe the current state of the code. And do so sparingly - prefer not to comment, unless the code would be unclear without.
+- NEVER swallow errors just to make tests pass.

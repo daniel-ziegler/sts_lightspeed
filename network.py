@@ -214,6 +214,90 @@ class NN(nn.Module):
         return next(self.parameters()).device
 
 
+def load_network_backward_compatible(net: NN, state_dict: dict) -> NN:
+    """
+    Load state dict into network with backward compatibility for embedding size changes.
+    
+    When enum-based embeddings grow (like FixedAction), old networks will have fewer
+    embedding weights than the current network expects. This function handles this by:
+    1. Taking the randomly initialized weights from the new network
+    2. Slicing in the loaded weights for existing indices
+    3. Keeping random initialization for new indices
+    
+    Args:
+        net: Freshly initialized network with current architecture
+        state_dict: State dict from saved model (potentially with smaller embeddings)
+    
+    Returns:
+        The network with loaded weights, handling size mismatches gracefully
+    """
+    current_state = net.state_dict()
+    
+    # Create a copy of the current state dict to modify
+    updated_state = current_state.copy()
+    
+    # Process each parameter in the loaded state dict
+    for name, loaded_param in state_dict.items():
+        if name in current_state:
+            current_param = current_state[name]
+            
+            # Check if shapes match
+            if loaded_param.shape == current_param.shape:
+                # Shapes match - use loaded parameter directly
+                updated_state[name] = loaded_param
+            elif loaded_param.dim() > 0 and current_param.dim() > 0:
+                # Shapes don't match - try to slice in the loaded weights
+                # This handles cases where embeddings have grown
+                
+                if loaded_param.dim() == 2 and current_param.dim() == 2:
+                    # 2D tensor (like embedding weights)
+                    loaded_rows, loaded_cols = loaded_param.shape
+                    current_rows, current_cols = current_param.shape
+                    
+                    if loaded_cols == current_cols and loaded_rows <= current_rows:
+                        # Same number of features, but fewer embedding entries
+                        # Slice the loaded weights into the current tensor
+                        updated_param = current_param.clone()
+                        updated_param[:loaded_rows, :] = loaded_param
+                        updated_state[name] = updated_param
+                        print(f"Resized {name}: {loaded_param.shape} -> {current_param.shape}")
+                    else:
+                        # Can't handle this mismatch - error out
+                        raise ValueError(f"Couldn't resize {name}: {loaded_param.shape} vs {current_param.shape}")
+                        
+                elif loaded_param.dim() == 1 and current_param.dim() == 1:
+                    # 1D tensor (like bias)
+                    loaded_size = loaded_param.shape[0]
+                    current_size = current_param.shape[0]
+                    
+                    if loaded_size <= current_size:
+                        # Slice the loaded bias into the current tensor
+                        updated_param = current_param.clone()
+                        updated_param[:loaded_size] = loaded_param
+                        updated_state[name] = updated_param
+                        print(f"Resized {name}: {loaded_param.shape} -> {current_param.shape}")
+                    else:
+                        raise ValueError(f"Couldn't resize {name}: {loaded_param.shape} vs {current_param.shape}")
+                        
+                else:
+                    # Different dimensionality - error out
+                    raise ValueError(f"Dimension mismatch for {name}: {loaded_param.shape} vs {current_param.shape}")
+                    
+            else:
+                # Scalar or other edge case - use loaded if possible
+                if loaded_param.shape == current_param.shape:
+                    updated_state[name] = loaded_param
+                else:
+                    raise ValueError(f"Couldn't handle {name}: {loaded_param.shape} vs {current_param.shape}")
+        else:
+            # Parameter exists in loaded model but not current model - error out
+            raise ValueError(f"Parameter {name} from loaded model not in current architecture")
+    
+    # Load the updated state dict
+    net.load_state_dict(updated_state)
+    return net
+
+
 # %%
 class SlayDataset(torch.utils.data.Dataset):
     def __init__(self, df):
