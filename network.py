@@ -28,6 +28,7 @@ MAX_CHOICES = 64    # Maximum deck size for card selection screens like smithing
 MAX_UPGRADE = 21
 MAX_RELICS = 25     # Maximum number of relics a player typically has
 MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
+MAX_MAP_NODES = 100
 
 
 class ActionType(IntEnum):
@@ -280,6 +281,10 @@ class FixedAction(IntEnum):
     OMINOUS_FORGE_LOSE_HP = auto()
     OMINOUS_FORGE_LEAVE = auto()
 
+class IsCurrentNode(IntEnum):
+    NOT_CURRENT = 0
+    CURRENT = 1
+
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
@@ -288,6 +293,8 @@ obs_space = DictSpace({
         'fixed_observation': FixedVecSpace(sts.getFixedObservationMaximums()),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
+    'map_nodes': SequenceSpace(TupleAddSpace(EnumSpace(sts.Room), EnumSpace(IsCurrentNode), FixedVecSpace([7, 16, MAX_MAP_NODES]))),
+    'map_edges': SequenceSpace(FixedVecSpace([MAX_MAP_NODES, MAX_MAP_NODES])),
 })
 
 choice_space = DictSpace({
@@ -295,6 +302,7 @@ choice_space = DictSpace({
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'potions': SequenceSpace(EnumSpace(sts.Potion)),
     'fixed': SequenceSpace(EnumSpace(FixedAction)),
+    'paths': SequenceSpace(FixedVecSpace([MAX_MAP_NODES])),
 })
 
 
@@ -566,6 +574,14 @@ def collate_fn(batch):
         'fixed_obs': {
             'fixed_observation': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32),
             'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
+        },
+        'map_nodes': {
+            'value': torch.full((len(batch), MAX_MAP_NODES, 5), 0, dtype=torch.int32),  # [room_type, is_current, x, y, node_id]
+            'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
+        },
+        'map_edges': {
+            'value': torch.full((len(batch), MAX_MAP_NODES * 6, 2), 0, dtype=torch.int32),  # [from_node_id, to_node_id]
+            'mask': torch.ones((len(batch), MAX_MAP_NODES * 6), dtype=torch.bool)
         }
     }
     
@@ -586,6 +602,10 @@ def collate_fn(batch):
         'fixed': {
             'value': torch.full((len(batch), MAX_FIXED_ACTIONS), FixedAction.INVALID.value, dtype=torch.int32),
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
+        },
+        'paths': {
+            'value': torch.full((len(batch), MAX_CHOICES), 0, dtype=torch.int32),  # [destination_node_id]
+            'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
         }
     }
     
@@ -614,6 +634,36 @@ def collate_fn(batch):
         # Set fixed observation components
         batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
         batch_obs['fixed_obs']['screen_state'][i] = x['screen_state']
+        
+        # Set map observation components
+        map_xs = x['obs.map.xs']
+        map_ys = x['obs.map.ys']
+        map_room_types = x['obs.map.roomTypes']
+        map_x_pos = x['obs.mapX']
+        map_y_pos = x['obs.mapY']
+        nodes_len = len(map_xs)
+        assert nodes_len <= MAX_MAP_NODES, f"Map nodes count {nodes_len} exceeds maximum {MAX_MAP_NODES}"
+        
+        # Create node data: [room_type, is_current, x, y, node_id]
+        for j in range(nodes_len):
+            is_current = 1 if (map_xs[j] == map_x_pos and map_ys[j] == map_y_pos) else 0
+            batch_obs['map_nodes']['value'][i, j] = torch.tensor([
+                int(map_room_types[j]), is_current, map_xs[j], map_ys[j], j
+            ], dtype=torch.int32)
+        batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
+        
+        # Set map edges
+        map_edge_starts = x['obs.map.edgeStarts']
+        map_edge_ends = x['obs.map.edgeEnds']
+        edges_len = len(map_edge_starts)
+        assert edges_len <= MAX_MAP_NODES * 6, f"Map edges count {edges_len} exceeds maximum {MAX_MAP_NODES * 6}"
+        
+        # Create edge data: [from_node_id, to_node_id]
+        for j in range(edges_len):
+            batch_obs['map_edges']['value'][i, j] = torch.tensor([
+                map_edge_starts[j], map_edge_ends[j]
+            ], dtype=torch.int32)
+        batch_obs['map_edges']['mask'][i, :edges_len] = torch.zeros(edges_len, dtype=torch.bool)
         
         # Build choices data inline
         cards_offered = x['cards_offered.cards']
@@ -644,6 +694,12 @@ def collate_fn(batch):
         assert choice_fixed_len <= MAX_FIXED_ACTIONS, f"Choice fixed actions count {choice_fixed_len} exceeds maximum {MAX_FIXED_ACTIONS}"
         batch_choices['fixed']['value'][i, :choice_fixed_len] = torch.tensor(fixed_actions, dtype=torch.int32)
         batch_choices['fixed']['mask'][i, :choice_fixed_len] = torch.zeros(choice_fixed_len, dtype=torch.bool)
+        
+        paths_offered = x['paths_offered']
+        choice_paths_len = len(paths_offered)
+        assert choice_paths_len <= MAX_CHOICES, f"Choice paths count {choice_paths_len} exceeds maximum {MAX_CHOICES}"
+        batch_choices['paths']['value'][i, :choice_paths_len] = torch.tensor(paths_offered, dtype=torch.int32)
+        batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         chosen_idx_list.append(x['chosen_idx'])
         outcome_list.append(x['outcome'])

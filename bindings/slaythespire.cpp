@@ -40,9 +40,9 @@ pybind11::dict py::NNRelicsRepresentation::as_dict() const {
 pybind11::dict py::NNMapRepresentation::as_dict() const {
     return pybind11::dict("xs"_a=xs,
                           "ys"_a=ys,
-                          "room_types"_a=roomTypes,
-                          "edge_starts"_a=edgeStarts,
-                          "edge_ends"_a=edgeEnds);
+                          "roomTypes"_a=roomTypes,
+                          "edgeStarts"_a=edgeStarts,
+                          "edgeEnds"_a=edgeEnds);
 }
 
 pybind11::dict py::NNRepresentation::as_dict() const {
@@ -50,7 +50,9 @@ pybind11::dict py::NNRepresentation::as_dict() const {
                         "deck"_a=deck.as_dict(),
                         "relics"_a=relics.as_dict(),
                         "potions"_a=potions,
-                        "map"_a=map.as_dict());
+                        "map"_a=map.as_dict(),
+                        "mapX"_a=mapX,
+                        "mapY"_a=mapY);
 }
 
 PYBIND11_MODULE(slaythespire, m) {
@@ -301,7 +303,10 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("fixed_observation", &sts::py::NNRepresentation::fixedObservation)
         .def_readwrite("deck", &sts::py::NNRepresentation::deck)
         .def_readwrite("relics", &sts::py::NNRepresentation::relics)
+        .def_readwrite("potions", &sts::py::NNRepresentation::potions)
         .def_readwrite("map", &sts::py::NNRepresentation::map)
+        .def_readwrite("mapX", &sts::py::NNRepresentation::mapX)
+        .def_readwrite("mapY", &sts::py::NNRepresentation::mapY)
         .def("as_dict", &sts::py::NNRepresentation::as_dict);
 
     pybind11::class_<Card> card(m, "Card");
