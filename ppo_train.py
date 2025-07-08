@@ -115,7 +115,7 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
-def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None) -> PPOTrajectory:
+def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, battle_executor) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
@@ -130,16 +130,15 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service=None
         try:
             if gc.screen_state == sts.ScreenState.BATTLE:
                 # Use MCTS agent for battles in background thread
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(agent.playout_battle, gc)
-                    
-                    try:
-                        # Wait for completion with timeout
-                        future.result(timeout=30.0)
-                    except TimeoutError:
-                        log.warning(f"Battle simulation timed out for seed {seed}. Background thread will continue running.")
-                        # End the episode. The outcome will be UNDECIDED.
-                        break
+                future = battle_executor.submit(agent.playout_battle, gc)
+                
+                try:
+                    # Wait for completion with timeout
+                    future.result(timeout=30.0)
+                except TimeoutError:
+                    log.warning(f"Battle simulation timed out for seed {seed}. Background thread will continue running.")
+                    # End the episode. The outcome will be UNDECIDED.
+                    break
                     
             else:
                 # Use neural network for non-battle decisions
@@ -295,20 +294,24 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     
     if config.num_workers == 1:
         # Single-threaded execution for easier debugging
-        for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
-            trajectory = run_ppo_episode(start_seed + i, service, reward_fn, value_service)
-            trajectories.append(trajectory)
+        # Create a shared executor for battle simulations
+        with ThreadPoolExecutor(max_workers=1) as battle_executor:
+            for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
+                trajectory = run_ppo_episode(start_seed + i, service, reward_fn, value_service, battle_executor)
+                trajectories.append(trajectory)
     else:
         # Multi-threaded execution
-        with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
-            futures = [
-                executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, value_service)
-                for i in range(config.num_games_per_batch)
-            ]
-            
-            for future in tqdm(as_completed(futures), total=config.num_games_per_batch, desc="Collecting experience"):
-                trajectory = future.result()
-                trajectories.append(trajectory)
+        # Create a shared executor for battle simulations
+        with ThreadPoolExecutor(max_workers=config.num_workers) as battle_executor:
+            with ThreadPoolExecutor(max_workers=config.num_workers) as main_executor:
+                futures = [
+                    main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, value_service, battle_executor)
+                    for i in range(config.num_games_per_batch)
+                ]
+                
+                for future in tqdm(as_completed(futures), total=config.num_games_per_batch, desc="Collecting experience"):
+                    trajectory = future.result()
+                    trajectories.append(trajectory)
     
     return trajectories
 
