@@ -152,7 +152,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, bat
                     
                     # Count total number of choices available
                     total_choices = (len(choice.cards_offered) + len(choice.relics_offered) + 
-                                   len(choice.potions_offered) + len(choice.fixed_actions))
+                                   len(choice.potions_offered) + len(choice.fixed_actions) + len(choice.paths_offered))
                     
                     if total_choices > 1:
                         # Get network predictions
@@ -201,6 +201,10 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, bat
                             action = choice.potion_actions[path[1]]
                             chosen_potion = choice.potions_offered[path[1]]
                             action_desc = sts.Potion(chosen_potion).name
+                        elif path[0] == 'paths':
+                            action = choice.path_actions[path[1]]
+                            chosen_path = choice.paths_offered[path[1]]
+                            action_desc = f"room{chosen_path}"
                         elif path[0] == 'fixed':
                             action = choice.fixed_actions_list[path[1]]
                             chosen_fixed = choice.fixed_actions[path[1]]

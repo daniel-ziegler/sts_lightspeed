@@ -775,10 +775,6 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
                     # For non-network actions (like map choices), use the old logic
                     choice_type = ActionType.INVALID
                     chosen_idx = -1
-                    
-                    if gc.screen_state == sts.ScreenState.MAP_SCREEN:
-                        choice_type = ActionType.PATH
-                        chosen_idx, = [ix for ix, a in enumerate(actions) if a.idx1 == action.idx1]
                 
                 if action not in actions:
                     print(gc)
