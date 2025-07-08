@@ -8,7 +8,7 @@ from torch import nn
 import torch.nn.functional as F
 
 import slaythespire as sts
-from inputs import SinusoidalEmbedding, FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace
+from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace
 
 @dataclass
 class ModelHP:
@@ -23,7 +23,7 @@ class ModelHP:
 
 
 # Constants for data processing
-MAX_DECK_SIZE = 64  # Should be enough for most decks
+MAX_DECK_SIZE = 128  # Should be enough for most decks
 MAX_CHOICES = 64    # Maximum deck size for card selection screens like smithing
 MAX_UPGRADE = 21
 MAX_RELICS = 25     # Maximum number of relics a player typically has

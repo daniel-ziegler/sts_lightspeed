@@ -691,7 +691,7 @@ def main():
     # Setup
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     torch.set_float32_matmul_precision('high')
-    torch._dynamo.config.cache_size_limit = 16
+    torch._dynamo.config.cache_size_limit = 24
     
     # Create PPOConfig from parsed arguments
     config_kwargs = {}
