@@ -553,31 +553,52 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     # Convert flat index back to semantic path using choice_space
     path = choice_space.ix_to_path(collated_input['choices'], chosen_idx)
     
+    # Special validation for card actions
     if path[0] == 'cards':
-        # path is ['cards', card_index]
         card_index = path[1]
         if card_index >= len(choice.card_actions) or card_index < 0:
             print(f"Chosen index: {chosen_idx} from logits {logits}")
             print(f"{collated_input['choices']=}")
             raise ValueError(f"Chosen index {chosen_idx} out of bounds for {path}")
-        return choice.card_actions[card_index], path
     
+    action, action_desc = path_to_action_and_desc(choice, path)
+    return action, path
+
+def path_to_action_and_desc(choice: Choice, path: list, gc: Optional[sts.GameContext] = None) -> tuple[sts.GameAction, str]:
+    """Convert a path to the corresponding action and description string.
+    
+    Args:
+        choice: The Choice object containing available actions
+        path: The path from choice_space.ix_to_path()
+        gc: GameContext for fallback description (optional)
+        
+    Returns:
+        tuple of (action, description_string)
+    """
+    if path[0] == 'cards':
+        action = choice.card_actions[path[1]]
+        chosen_card = choice.cards_offered[path[1]]
+        action_desc = str(chosen_card)
     elif path[0] == 'relics':
-        # path is ['relics', relic_index]
-        relic_index = path[1]
-        return choice.relic_actions[relic_index], path
-    
+        action = choice.relic_actions[path[1]]
+        chosen_relic = choice.relics_offered[path[1]]
+        action_desc = sts.RelicId(chosen_relic).name
     elif path[0] == 'potions':
-        # path is ['potions', potion_index]
-        potion_index = path[1]
-        return choice.potion_actions[potion_index], path
-    
+        action = choice.potion_actions[path[1]]
+        chosen_potion = choice.potions_offered[path[1]]
+        action_desc = sts.Potion(chosen_potion).name
+    elif path[0] == 'paths':
+        action = choice.path_actions[path[1]]
+        chosen_path = choice.paths_offered[path[1]]
+        action_desc = f"path_to_room_{chosen_path}"
     elif path[0] == 'fixed':
-        # path is ['fixed', action_index]
-        action_index = path[1]
-        return choice.fixed_actions_list[action_index], path
+        action = choice.fixed_actions_list[path[1]]
+        chosen_fixed = choice.fixed_actions[path[1]]
+        action_desc = str(chosen_fixed).split('.')[-1]  # Remove "FixedAction." prefix
+    else:
+        raise ValueError(f"Unknown path type: {path[0]}")
     
-    raise ValueError(f"Could not find action for index {chosen_idx}")
+    return action, action_desc
 
 def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: list[sts.GameAction]) -> Optional[Choice]:
     """Construct a Choice object from the current game state and available actions."""
@@ -762,6 +783,9 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
                         chosen_idx = action_path[1]
                     elif action_path[0] == 'potions':
                         choice_type = ActionType.POTION
+                        chosen_idx = action_path[1]
+                    elif action_path[0] == 'paths':
+                        choice_type = ActionType.PATH
                         chosen_idx = action_path[1]
                     elif action_path[0] == 'fixed':
                         choice_type = ActionType.FIXED

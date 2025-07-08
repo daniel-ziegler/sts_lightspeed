@@ -20,7 +20,7 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible
-from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats
+from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc
 import slaythespire as sts
 
 # Set up logging
@@ -189,28 +189,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, bat
                         path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
                         
                         # Generate clean action description based on path
-                        if path[0] == 'cards':
-                            action = choice.card_actions[path[1]]
-                            chosen_card = choice.cards_offered[path[1]]
-                            action_desc = str(chosen_card)
-                        elif path[0] == 'relics':
-                            action = choice.relic_actions[path[1]]
-                            chosen_relic = choice.relics_offered[path[1]]
-                            action_desc = sts.RelicId(chosen_relic).name
-                        elif path[0] == 'potions':
-                            action = choice.potion_actions[path[1]]
-                            chosen_potion = choice.potions_offered[path[1]]
-                            action_desc = sts.Potion(chosen_potion).name
-                        elif path[0] == 'paths':
-                            action = choice.path_actions[path[1]]
-                            chosen_path = choice.paths_offered[path[1]]
-                            action_desc = f"room{chosen_path}"
-                        elif path[0] == 'fixed':
-                            action = choice.fixed_actions_list[path[1]]
-                            chosen_fixed = choice.fixed_actions[path[1]]
-                            action_desc = str(chosen_fixed).split('.')[-1]  # Remove "FixedAction." prefix
-                        else:
-                            action_desc = action.getDesc(gc)  # Fallback for unknown paths
+                        action, action_desc = path_to_action_and_desc(choice, path, gc)
                         
                         # Extract metrics from game state BEFORE action execution
                         perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
