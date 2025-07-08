@@ -293,7 +293,11 @@ obs_space = DictSpace({
         'fixed_observation': FixedVecSpace(sts.getFixedObservationMaximums()),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
-    'map_nodes': SequenceSpace(TupleAddSpace(EnumSpace(sts.Room), EnumSpace(IsCurrentNode), FixedVecSpace([7, 16, MAX_MAP_NODES]))),
+    'map_nodes': SequenceSpace(DictAddSpace({
+        'room': EnumSpace(sts.Room),
+        'is_current': EnumSpace(IsCurrentNode),
+        'data': FixedVecSpace([7, 16, MAX_MAP_NODES])
+    })),
     'map_edges': SequenceSpace(FixedVecSpace([MAX_MAP_NODES, MAX_MAP_NODES])),
 })
 
@@ -576,12 +580,16 @@ def collate_fn(batch):
             'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
         },
         'map_nodes': {
-            'value': torch.full((len(batch), MAX_MAP_NODES, 5), 0, dtype=torch.int32),  # [room_type, is_current, x, y, node_id]
+            'value': {
+                'room': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
+                'is_current': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
+                'data': torch.full((len(batch), MAX_MAP_NODES, 3), 0, dtype=torch.int32),  # [x, y, node_id]
+            },
             'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
         },
         'map_edges': {
-            'value': torch.full((len(batch), MAX_MAP_NODES * 6, 2), 0, dtype=torch.int32),  # [from_node_id, to_node_id]
-            'mask': torch.ones((len(batch), MAX_MAP_NODES * 6), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_MAP_NODES * 3, 2), 0, dtype=torch.int32),  # [from_node_id, to_node_id]
+            'mask': torch.ones((len(batch), MAX_MAP_NODES * 3), dtype=torch.bool)
         }
     }
     
@@ -604,7 +612,7 @@ def collate_fn(batch):
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         },
         'paths': {
-            'value': torch.full((len(batch), MAX_CHOICES), 0, dtype=torch.int32),  # [destination_node_id]
+            'value': torch.full((len(batch), MAX_CHOICES, 1), 0, dtype=torch.int32),  # [destination_node_id]
             'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
         }
     }
@@ -647,16 +655,16 @@ def collate_fn(batch):
         # Create node data: [room_type, is_current, x, y, node_id]
         for j in range(nodes_len):
             is_current = 1 if (map_xs[j] == map_x_pos and map_ys[j] == map_y_pos) else 0
-            batch_obs['map_nodes']['value'][i, j] = torch.tensor([
-                int(map_room_types[j]), is_current, map_xs[j], map_ys[j], j
-            ], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['room'][i, j] = torch.tensor(int(map_room_types[j]), dtype=torch.int32)
+            batch_obs['map_nodes']['value']['is_current'][i, j] = torch.tensor(is_current, dtype=torch.int32)
+            batch_obs['map_nodes']['value']['data'][i, j] = torch.tensor([map_xs[j], map_ys[j], j], dtype=torch.int32)
         batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
         
         # Set map edges
         map_edge_starts = x['obs.map.edgeStarts']
         map_edge_ends = x['obs.map.edgeEnds']
         edges_len = len(map_edge_starts)
-        assert edges_len <= MAX_MAP_NODES * 6, f"Map edges count {edges_len} exceeds maximum {MAX_MAP_NODES * 6}"
+        assert edges_len <= MAX_MAP_NODES * 3, f"Map edges count {edges_len} exceeds maximum {MAX_MAP_NODES * 3}"
         
         # Create edge data: [from_node_id, to_node_id]
         for j in range(edges_len):
@@ -698,7 +706,7 @@ def collate_fn(batch):
         paths_offered = x['paths_offered']
         choice_paths_len = len(paths_offered)
         assert choice_paths_len <= MAX_CHOICES, f"Choice paths count {choice_paths_len} exceeds maximum {MAX_CHOICES}"
-        batch_choices['paths']['value'][i, :choice_paths_len] = torch.tensor(paths_offered, dtype=torch.int32)
+        batch_choices['paths']['value'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
         batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         chosen_idx_list.append(x['chosen_idx'])

@@ -35,8 +35,8 @@ class TrainingHP:
     validate_every_n_steps: int = 2000
     log_every_n_steps: int = 20
 
-def parse_args() -> tuple[List[str], TrainingHP, str]:
-    """Parse command line arguments and return data paths, training hyperparameters, and prediction mode"""
+def parse_args() -> tuple[List[str], TrainingHP, str, object]:
+    """Parse command line arguments and return data paths, training hyperparameters, prediction mode, and args object"""
     parser = argparse.ArgumentParser(description='Train the Slay the Spire AI model')
     
     # Add positional argument for data paths
@@ -46,6 +46,8 @@ def parse_args() -> tuple[List[str], TrainingHP, str]:
     parser.add_argument('--prediction-mode', type=str, default='outcome', 
                         choices=['outcome', 'pstrike'], 
                         help='What to predict: outcome (win/loss) or pstrike (number of perfected strikes)')
+    parser.add_argument('--no-torch-compile', action='store_true',
+                        help='Disable torch.compile for the neural network')
     
     # Add arguments for each TrainingHP field
     defaults = TrainingHP()
@@ -63,7 +65,7 @@ def parse_args() -> tuple[List[str], TrainingHP, str]:
     hp_dict = {field.name: getattr(args, field.name) for field in fields(TrainingHP)}
     training_hp = TrainingHP(**hp_dict)
     
-    return args.data_paths, training_hp, args.prediction_mode
+    return args.data_paths, training_hp, args.prediction_mode, args
 
 # %%
 def is_validation_seed(seed: int, valid_fraction: float = 0.1) -> bool:
@@ -116,7 +118,7 @@ def load_and_preprocess_data(paths: list[str], validation_fraction: float = 0.1)
     
     return train_df, balanced_valid_df
 
-data_paths, base_T, prediction_mode = parse_args()
+data_paths, base_T, prediction_mode, args = parse_args()
 train_df, valid_df = load_and_preprocess_data(data_paths, base_T.validation_fraction)
 
 # %%
@@ -325,7 +327,8 @@ def hyperparameter_sweep(train_df, valid_df, prediction_mode='outcome'):
         H = ModelHP(use_value_head=False)
         net = NN(H)
         net = net.to(device)
-        net = torch.compile(net, mode="default")
+        if not args.no_torch_compile:
+            net = torch.compile(net, mode="default")
         
         # Update hyperparameters
         T = dataclasses.replace(base_T,
@@ -377,7 +380,8 @@ save_path, results = hyperparameter_sweep(train_df, valid_df, prediction_mode)
 H = ModelHP(use_value_head=False)
 net = NN(H)
 net = net.to(device)
-net = torch.compile(net, mode="reduce-overhead")
+if not args.no_torch_compile:
+    net = torch.compile(net, mode="reduce-overhead")
 
 # %%
 state = torch.load(save_path, weights_only=True, map_location=device)

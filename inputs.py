@@ -169,13 +169,22 @@ class SinusoidalEmbedding(nn.Module):
 class FixedVecEmbedding(nn.Module):
     def __init__(self, dim: int, limits: list[int]):
         super().__init__()
+        self.limits = limits
         self.num_embed = SinusoidalEmbedding(dim, len(limits))
         self.proj = nn.Linear(self.num_embed.out_dim, dim)
     
     def forward(self, xs):
-        # xs is [batch_size, n_features]
-        embedded = self.proj(self.num_embed(xs))  # [batch_size, dim]
-        return embedded  # Return only the embedding for ScalarSpace
+        # xs is [..., n_features]
+        assert xs.shape[-1] == len(self.limits), f"FixedVecSpace limits {self.limits} do not match input shape {xs.shape}"
+        
+        original_shape = xs.shape
+        
+        xs_reshaped = xs.reshape(-1, xs.shape[-1])
+        
+        embedded = self.proj(self.num_embed(xs_reshaped))  # [*, dim]
+        
+        output_shape = list(original_shape[:-1]) + [embedded.shape[-1]]
+        return embedded.reshape(output_shape)
 
 class FixedVecSpace(ScalarSpace[np.ndarray]):
     def __init__(self, limits: list[int]):
@@ -204,6 +213,7 @@ class TupleAddEmbedding(nn.Module):
         
         # Sum the embeddings
         return torch.sum(torch.stack(component_outputs, dim=0), dim=0)
+
 class TupleAddSpace(ScalarSpace[tuple]):
     def __init__(self, *spaces: ScalarSpace[Any]):
         self.spaces = spaces

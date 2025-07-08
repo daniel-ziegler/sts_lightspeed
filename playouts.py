@@ -387,13 +387,14 @@ class Decision:
             'choice_type': self.choice_type,
         }
 
-def load_net(model_path, device=None):
+def load_net(model_path, device=None, use_torch_compile=True):
     if device is None:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
     net = NN(ModelHP())
     net = net.to(device)
-    net = torch.compile(net, mode="reduce-overhead")
+    if use_torch_compile:
+        net = torch.compile(net, mode="reduce-overhead")
     
     if model_path is not None:
         state = torch.load(model_path, map_location=device, weights_only=True)
@@ -889,7 +890,7 @@ def main(args):
         else:
             model_path = args.model_path
         # Load neural network and start service
-        net = load_net(model_path)
+        net = load_net(model_path, use_torch_compile=not args.no_torch_compile)
         service = NNService(
             net,
             batch_size=args.batch_size,
@@ -958,6 +959,8 @@ if __name__ == "__main__":
                         help='Disable saving results to parquet file')
     parser.add_argument('--temperature', type=float, default=1.0,
                         help='Temperature for Boltzmann sampling (default: 1.0)')
+    parser.add_argument('--no-torch-compile', action='store_true',
+                        help='Disable torch.compile for the neural network')
     
     args = parser.parse_args()
     main(args)

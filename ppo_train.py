@@ -647,6 +647,8 @@ def main():
     parser.add_argument('--reward-function', type=str, default='perfected_strike',
                         choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes'],
                         help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
+    parser.add_argument('--no-torch-compile', action='store_true',
+                        help='Disable torch.compile for the neural networks')
     
     # Automatically add all PPOConfig fields as command line arguments
     config_defaults = PPOConfig()
@@ -726,8 +728,9 @@ def main():
         policy_net = NN(policy_hp).to(device)
         value_net = NN(value_hp).to(device)
         
-        policy_net = torch.compile(policy_net, mode="default")
-        value_net = torch.compile(value_net, mode="default")
+        if not args.no_torch_compile:
+            policy_net = torch.compile(policy_net, mode="default")
+            value_net = torch.compile(value_net, mode="default")
         
         if config.resume_from_step > 0:
             # Load from specific iteration checkpoints
@@ -764,7 +767,8 @@ def main():
         # Create single network with value head
         model_hp = ModelHP(use_value_head=True)
         net = NN(model_hp).to(device)
-        net = torch.compile(net, mode="default")
+        if not args.no_torch_compile:
+            net = torch.compile(net, mode="default")
         
         
         if config.resume_from_step > 0:
