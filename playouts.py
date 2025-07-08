@@ -590,7 +590,7 @@ def path_to_action_and_desc(choice: Choice, path: list, gc: Optional[sts.GameCon
     elif path[0] == 'paths':
         action = choice.path_actions[path[1]]
         chosen_path = choice.paths_offered[path[1]]
-        action_desc = f"path_to_room_{chosen_path}"
+        action_desc = f"path{chosen_path}"
     elif path[0] == 'fixed':
         action = choice.fixed_actions_list[path[1]]
         chosen_fixed = choice.fixed_actions[path[1]]

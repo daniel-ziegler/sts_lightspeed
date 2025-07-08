@@ -19,8 +19,8 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm.auto import tqdm
 
-from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible
-from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc
+from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy
+from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice
 import slaythespire as sts
 
 # Set up logging
@@ -115,7 +115,7 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
-def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, battle_executor) -> PPOTrajectory:
+def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
@@ -145,7 +145,6 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, bat
                 obs = sts.getNNRepresentation(gc)
                 actions = sts.GameAction.getAllActionsInState(gc)
                 
-                from playouts import construct_choice
                 choice = construct_choice(gc, obs, actions)
                 
                 if choice is not None:
@@ -164,16 +163,8 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, bat
                             value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
                         else:
                             logits = output
-                            # Get value from separate value service if available
-                            if value_service is not None:
-                                _, value_output = value_service.get_logits(choice)
-                                if isinstance(value_output, tuple):
-                                    _, value = value_output
-                                    value = float(value) if np.isscalar(value) else float(value[0])
-                                else:
-                                    value = 0.0
-                            else:
-                                value = 0.0  # No value head
+                            # No separate value service needed with combined wrapper
+                            value = 0.0
                         
                         # Convert to probabilities and sample action
                         logits_tensor = torch.tensor(logits)
@@ -271,7 +262,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, value_service, bat
     )
 
 
-def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_seed: int = 0, value_service=None) -> List[PPOTrajectory]:
+def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_seed: int = 0) -> List[PPOTrajectory]:
     """Collect experience from multiple game episodes."""
     trajectories = []
     
@@ -280,7 +271,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         # Create a shared executor for battle simulations
         with ThreadPoolExecutor(max_workers=1) as battle_executor:
             for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
-                trajectory = run_ppo_episode(start_seed + i, service, reward_fn, value_service, battle_executor)
+                trajectory = run_ppo_episode(start_seed + i, service, reward_fn, battle_executor)
                 trajectories.append(trajectory)
     else:
         # Multi-threaded execution
@@ -288,7 +279,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         with ThreadPoolExecutor(max_workers=config.num_workers) as battle_executor:
             with ThreadPoolExecutor(max_workers=config.num_workers) as main_executor:
                 futures = [
-                    main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, value_service, battle_executor)
+                    main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, battle_executor)
                     for i in range(config.num_games_per_batch)
                 ]
                 
@@ -352,6 +343,8 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
                     offered_items.append(f"{len(exp.choice.potions_offered)}pot")
                 if exp.choice.fixed_actions:
                     offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
+                if exp.choice.paths_offered:
+                    offered_items.append(f"{len(exp.choice.paths_offered)}path")
                 
                 choice_desc = f"{'+'.join(offered_items)}" if offered_items else "none"
                 
@@ -627,7 +620,7 @@ def main():
                         help='Path to pretrained model (optional)')
     parser.add_argument('--save-path', type=str, default='ppo_model.pt',
                         help='Path to save trained model')
-    parser.add_argument('--reward-function', type=str, default='perfected_strike',
+    parser.add_argument('--reward-function', type=str, default='smooth',
                         choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes'],
                         help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
     parser.add_argument('--no-torch-compile', action='store_true',
@@ -733,19 +726,19 @@ def main():
             value_net = load_network_backward_compatible(value_net, value_state)
             print(f"Loaded policy model from {args.init_path}")
         
+        # Create combined network wrapper
+        combined_net = SeparateValuePolicy(policy_net, value_net)
+        
         # Create separate optimizers
         policy_optimizer = torch.optim.AdamW(policy_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
         value_optimizer = torch.optim.AdamW(value_net.parameters(), lr=config.value_lr, weight_decay=config.weight_decay)
         
-        # Use policy network for action selection
-        service = NNService(policy_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
-        
-        # Create separate value service
-        value_service = NNService(value_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
+        # Use combined network for action selection
+        service = NNService(combined_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
         
         nets = (policy_net, value_net)
         optimizers = (policy_optimizer, value_optimizer)
-        print("Using separate policy and value networks")
+        print("Using separate policy and value networks with combined wrapper")
     else:
         # Create single network with value head
         model_hp = ModelHP(use_value_head=True)
@@ -774,7 +767,6 @@ def main():
         
         nets = net
         optimizers = optimizer
-        value_service = None  # No separate value service needed
         print("Using single network with value head")
     
     if config.resume_from_step > 0:
@@ -788,8 +780,7 @@ def main():
             
             # Collect experience
             start_time = time.time()
-            # Pass value service if using separate networks
-            trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000, value_service=value_service)
+            trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000)
             collect_time = time.time() - start_time
             
             if not trajectories:
@@ -839,8 +830,6 @@ def main():
     
     finally:
         service.stop()
-        if value_service is not None:
-            value_service.stop()
     
     # Save final model
     if config.separate_networks:

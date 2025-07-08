@@ -745,5 +745,34 @@ def output_to_cpu(output, batch: dict):
         return output.cpu().numpy()
 
 
+class SeparateValuePolicy(nn.Module):
+    """Wrapper that combines separate policy and value networks to look like a single network."""
+    
+    def __init__(self, policy_net: NN, value_net: NN):
+        super().__init__()
+        self.policy_net = policy_net
+        self.value_net = value_net
+        
+        # Ensure networks have correct configurations
+        if policy_net.H.use_value_head:
+            raise ValueError("Policy network should not have value head when using separate networks")
+        if not value_net.H.use_value_head:
+            raise ValueError("Value network should have value head when using separate networks")
+    
+    def forward(self, batch: dict):
+        """Forward pass that combines policy and value outputs."""
+        # Get policy logits
+        policy_logits = self.policy_net(batch)
+        
+        # Get value prediction - value network returns (logits, values) tuple
+        value_output = self.value_net(batch)
+        _, values = value_output  # Extract values from tuple
+        
+        return policy_logits, values
+    
+    @property
+    def device(self):
+        return self.policy_net.device
+
 
 # %%
