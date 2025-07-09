@@ -624,8 +624,8 @@ def main():
     parser.add_argument('--reward-function', type=str, default='smooth',
                         choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes'],
                         help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
-    parser.add_argument('--no-torch-compile', action='store_true',
-                        help='Disable torch.compile for the neural networks')
+    parser.add_argument('--torch-compile', type=str, default='default',
+                        help='Torch compile mode: "default", "max-autotune", "reduce-overhead", or "no" to disable')
     
     # Automatically add all PPOConfig fields as command line arguments
     config_defaults = PPOConfig()
@@ -762,15 +762,16 @@ def main():
         service_net = net
         print("Using single network with value head")
     
-    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
+    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=args.torch_compile)
 
     # Compile networks after service creation to ensure same compilation state
-    if not args.no_torch_compile:
+    if args.torch_compile != 'no':
+        compile_mode = args.torch_compile
         if config.separate_networks:
             # Compile the whole SeparateValuePolicy
-            service_net = torch.compile(service_net, mode="reduce-overhead")
+            service_net = torch.compile(service_net, mode=compile_mode)
         else:
-            net = torch.compile(net, mode="reduce-overhead")
+            net = torch.compile(net, mode=compile_mode)
             service_net = net
             nets = net
 

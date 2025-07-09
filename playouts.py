@@ -410,9 +410,9 @@ class NNRequest(NamedTuple):
 
 class NNService:
     """Background service that batches neural network inference requests"""
-    def __init__(self, net: NN, batch_size=32, max_wait_time=0.01, batch_size_factor=8):
+    def __init__(self, net: NN, batch_size=32, max_wait_time=0.01, batch_size_factor=8, torch_compile_mode='default'):
         # Create a separate copy of the network for inference to avoid CUDA graph conflicts
-        self.net = self._clone_network(net)
+        self.net = self._clone_network(net, torch_compile_mode)
         self.net.eval()
         
         # Round batch_size up to nearest multiple of batch_size_factor
@@ -424,10 +424,11 @@ class NNService:
         self.thread = Thread(target=self._process_requests, daemon=True)
         self.thread.start()
     
-    def _clone_network(self, net):
+    def _clone_network(self, net, torch_compile_mode):
         """Create a separate copy of the network for inference"""
         clone = copy.deepcopy(net)
-        clone = torch.compile(clone, mode="reduce-overhead")
+        if torch_compile_mode != 'no':
+            clone = torch.compile(clone, mode=torch_compile_mode)
         return clone
     
     def update_weights(self, net):
