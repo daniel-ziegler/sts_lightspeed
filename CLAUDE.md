@@ -215,7 +215,12 @@ The system is designed to be extensible - most new action types can be added by 
    - **Order**: Choice creation → Serialization → Collation → Neural network
    - **Tools**: Use `dir()`, `type()`, `hasattr()` to inspect objects
 
-2. **Build After Changes**: Always rebuild after C++ binding changes
+2. **Event Action Mapping**: Check GameContext.cpp for correct action structure
+   - **Example**: NLOTH event has 3 cases (0, 1, 2)
+   - **Pattern**: Look at `GameContext::chooseEventOption()` switch statements
+   - **Verify**: Action indices match the C++ implementation exactly
+
+3. **Build After Changes**: Always rebuild after C++ binding changes
    - **Command**: `pyenv shell 3.10.14 && make`
    - **Check**: Import and test immediately after build
 
