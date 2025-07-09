@@ -587,10 +587,10 @@ def path_to_action_and_desc(choice: Choice, path: list, gc: Optional[sts.GameCon
         action = choice.potion_actions[path[1]]
         chosen_potion = choice.potions_offered[path[1]]
         action_desc = sts.Potion(chosen_potion).name
-    elif path[0] == 'paths':
-        action = choice.path_actions[path[1]]
-        chosen_path = choice.paths_offered[path[1]]
-        action_desc = f"path{chosen_path}"
+    # elif path[0] == 'paths':
+    #     action = choice.path_actions[path[1]]
+    #     chosen_path = choice.paths_offered[path[1]]
+    #     action_desc = f"path{chosen_path}"
     elif path[0] == 'fixed':
         action = choice.fixed_actions_list[path[1]]
         chosen_fixed = choice.fixed_actions[path[1]]
@@ -695,18 +695,18 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                 cards_offered.append(select_card)  # select_card is already a Card object
                 card_actions.append(action)
                 
-    elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
-        def xy_to_roomid(x, y):
-            roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
-            try:
-                roomid, = roomids
-            except ValueError:
-                print(x, y, obs.map.xs, obs.map.ys)
-                raise
-            return roomid
-        for action in actions:
-            paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
-            path_actions.append(action)
+    # elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
+    #     def xy_to_roomid(x, y):
+    #         roomids = [i for i in range(len(obs.map.xs)) if (y == 15 or obs.map.xs[i] == x) and obs.map.ys[i] == y]
+    #         try:
+    #             roomid, = roomids
+    #         except ValueError:
+    #             print(x, y, obs.map.xs, obs.map.ys)
+    #             raise
+    #         return roomid
+    #     for action in actions:
+    #         paths_offered.append(xy_to_roomid(action.idx1, gc.cur_map_node_y+1))
+    #         path_actions.append(action)
 
     elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
         # Event screen actions - map each action to appropriate FixedAction

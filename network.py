@@ -298,7 +298,6 @@ obs_space = DictSpace({
         'is_current': EnumSpace(IsCurrentNode),
         'data': FixedVecSpace([7, 16, MAX_MAP_NODES])
     })),
-    'map_edges': SequenceSpace(FixedVecSpace([MAX_MAP_NODES, MAX_MAP_NODES])),
 })
 
 choice_space = DictSpace({
@@ -306,7 +305,6 @@ choice_space = DictSpace({
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'potions': SequenceSpace(EnumSpace(sts.Potion)),
     'fixed': SequenceSpace(EnumSpace(FixedAction)),
-    'paths': SequenceSpace(FixedVecSpace([MAX_MAP_NODES])),
 })
 
 
@@ -587,10 +585,6 @@ def collate_fn(batch):
             },
             'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
         },
-        'map_edges': {
-            'value': torch.full((len(batch), MAX_MAP_NODES * 3, 2), 0, dtype=torch.int32),  # [from_node_id, to_node_id]
-            'mask': torch.ones((len(batch), MAX_MAP_NODES * 3), dtype=torch.bool)
-        }
     }
     
     # Create batched tensors for choices using fixed maximum sizes
@@ -611,10 +605,6 @@ def collate_fn(batch):
             'value': torch.full((len(batch), MAX_FIXED_ACTIONS), FixedAction.INVALID.value, dtype=torch.int32),
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         },
-        'paths': {
-            'value': torch.full((len(batch), MAX_CHOICES, 1), 0, dtype=torch.int32),  # [destination_node_id]
-            'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
-        }
     }
     
     # Fill the batched tensors with assertions to ensure data fits
@@ -660,19 +650,6 @@ def collate_fn(batch):
             batch_obs['map_nodes']['value']['data'][i, j] = torch.tensor([map_xs[j], map_ys[j], j], dtype=torch.int32)
         batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
         
-        # Set map edges
-        map_edge_starts = x['obs.map.edgeStarts']
-        map_edge_ends = x['obs.map.edgeEnds']
-        edges_len = len(map_edge_starts)
-        assert edges_len <= MAX_MAP_NODES * 3, f"Map edges count {edges_len} exceeds maximum {MAX_MAP_NODES * 3}"
-        
-        # Create edge data: [from_node_id, to_node_id]
-        for j in range(edges_len):
-            batch_obs['map_edges']['value'][i, j] = torch.tensor([
-                map_edge_starts[j], map_edge_ends[j]
-            ], dtype=torch.int32)
-        batch_obs['map_edges']['mask'][i, :edges_len] = torch.zeros(edges_len, dtype=torch.bool)
-        
         # Build choices data inline
         cards_offered = x['cards_offered.cards']
         cards_upgrades = x['cards_offered.upgrades']
@@ -702,12 +679,6 @@ def collate_fn(batch):
         assert choice_fixed_len <= MAX_FIXED_ACTIONS, f"Choice fixed actions count {choice_fixed_len} exceeds maximum {MAX_FIXED_ACTIONS}"
         batch_choices['fixed']['value'][i, :choice_fixed_len] = torch.tensor(fixed_actions, dtype=torch.int32)
         batch_choices['fixed']['mask'][i, :choice_fixed_len] = torch.zeros(choice_fixed_len, dtype=torch.bool)
-        
-        paths_offered = x['paths_offered']
-        choice_paths_len = len(paths_offered)
-        assert choice_paths_len <= MAX_CHOICES, f"Choice paths count {choice_paths_len} exceeds maximum {MAX_CHOICES}"
-        batch_choices['paths']['value'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
-        batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         chosen_idx_list.append(x['chosen_idx'])
         outcome_list.append(x['outcome'])
