@@ -21,11 +21,85 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from network import NN, ActionType, FixedAction, ModelHP, collate_fn, process_batch, output_to_cpu, choice_space, move_to_device, load_network_backward_compatible
+from network import NN, ActionType, FixedAction, EventFixedInfo, ModelHP, collate_fn, process_batch, output_to_cpu, choice_space, move_to_device, load_network_backward_compatible
 from inputs import Path
 import slaythespire as sts
 
 # %%
+def extract_event_info(gc: sts.GameContext, action: sts.GameAction, fixed_action: FixedAction) -> tuple[int, int, int, EventFixedInfo]:
+    """Extract event-specific information for the neural network."""
+    event = gc.cur_event
+    info = gc.screen_state_info
+    
+    gold = 0
+    card = sts.CardId.INVALID
+    relic = sts.RelicId.INVALID
+    event_info = EventFixedInfo.NONE
+    
+    # Add event-specific information based on the event type
+    if event == sts.Event.NEOW:
+        # Extract drawback information for Neow
+        neow_options = info.neowRewards
+        if action.idx1 < len(neow_options):
+            drawback = neow_options[action.idx1].d
+            if drawback == sts.NeowDrawback.TEN_PERCENT_HP_LOSS:
+                event_info = EventFixedInfo.NEOW_TEN_PERCENT_HP_LOSS
+            elif drawback == sts.NeowDrawback.NO_GOLD:
+                event_info = EventFixedInfo.NEOW_NO_GOLD
+            elif drawback == sts.NeowDrawback.CURSE:
+                event_info = EventFixedInfo.NEOW_CURSE
+            elif drawback == sts.NeowDrawback.PERCENT_DAMAGE:
+                event_info = EventFixedInfo.NEOW_PERCENT_DAMAGE
+            elif drawback == sts.NeowDrawback.LOSE_STARTER_RELIC:
+                event_info = EventFixedInfo.NEOW_LOSE_STARTER_RELIC
+    
+    elif event == sts.Event.FALLING:
+        # Show which card would be lost for each choice
+        if fixed_action == FixedAction.FALLING_SKILL and info.skillCardDeckIdx != -1:
+            card = gc.deck[info.skillCardDeckIdx].id
+        elif fixed_action == FixedAction.FALLING_POWER and info.powerCardDeckIdx != -1:
+            card = gc.deck[info.powerCardDeckIdx].id
+        elif fixed_action == FixedAction.FALLING_ATTACK and info.attackCardDeckIdx != -1:
+            card = gc.deck[info.attackCardDeckIdx].id
+    
+    elif event == sts.Event.WE_MEET_AGAIN:
+        # Show card and potion that would be lost, and gold cost
+        if info.cardIdx != -1:
+            card = gc.deck[info.cardIdx].id
+        gold = info.gold if info.gold != -1 else 0
+    
+    elif event == sts.Event.NLOTH:
+        # Show which relics are offered
+        if fixed_action == FixedAction.NLOTH_AGREE:
+            if info.relicIdx0 != -1:
+                relic = gc.relics.relics[info.relicIdx0]
+    
+    elif event == sts.Event.WORLD_OF_GOOP:
+        # Show gold loss amount
+        if fixed_action == FixedAction.WORLD_OF_GOOP_ENTER:
+            gold = info.goldLoss
+    
+    elif event == sts.Event.FACE_TRADER:
+        # Show HP loss amount
+        if fixed_action == FixedAction.FACE_TRADER_LOSE_HP:
+            gold = info.hpAmount0  # Store HP amount in gold field for display
+    
+    elif event == sts.Event.GOLDEN_IDOL:
+        # Show HP loss amounts for different phases
+        if fixed_action == FixedAction.GOLDEN_IDOL_TAKE:
+            gold = info.hpAmount0  # Initial HP loss
+        elif fixed_action == FixedAction.GOLDEN_IDOL_PHASE2_OPTION_0:
+            gold = info.hpAmount1  # Escape HP loss
+    
+    elif event == sts.Event.WINDING_HALLS:
+        # Show HP amounts for different choices
+        if fixed_action == FixedAction.WINDING_HALLS_MADNESS:
+            gold = info.hpAmount0  # Current HP loss
+        elif fixed_action == FixedAction.WINDING_HALLS_WRITHE:
+            gold = info.hpAmount1  # Heal amount
+    
+    return gold, card, relic, event_info
+
 def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction) -> Optional[sts.FixedAction]:
     """
     Map a GameAction for an event screen to the appropriate FixedAction enum value.
@@ -110,10 +184,52 @@ def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction
     
     # Four choice events (0xF pattern)
     elif event == sts.Event.NEOW:
-        if idx1 == 0: return FixedAction.NEOW_OPTION_0
-        elif idx1 == 1: return FixedAction.NEOW_OPTION_1
-        elif idx1 == 2: return FixedAction.NEOW_OPTION_2
-        else: return FixedAction.NEOW_OPTION_3
+        # Map Neow actions to specific bonus types
+        neow_options = gc.screen_state_info.neowRewards
+        if idx1 >= len(neow_options):
+            raise ValueError(f"Invalid Neow action idx1: {idx1}")
+        
+        bonus = neow_options[idx1].r
+        if bonus == sts.NeowBonus.THREE_CARDS:
+            return FixedAction.NEOW_THREE_CARDS
+        elif bonus == sts.NeowBonus.ONE_RANDOM_RARE_CARD:
+            return FixedAction.NEOW_ONE_RANDOM_RARE_CARD
+        elif bonus == sts.NeowBonus.REMOVE_CARD:
+            return FixedAction.NEOW_REMOVE_CARD
+        elif bonus == sts.NeowBonus.UPGRADE_CARD:
+            return FixedAction.NEOW_UPGRADE_CARD
+        elif bonus == sts.NeowBonus.TRANSFORM_CARD:
+            return FixedAction.NEOW_TRANSFORM_CARD
+        elif bonus == sts.NeowBonus.RANDOM_COLORLESS:
+            return FixedAction.NEOW_RANDOM_COLORLESS
+        elif bonus == sts.NeowBonus.THREE_SMALL_POTIONS:
+            return FixedAction.NEOW_THREE_SMALL_POTIONS
+        elif bonus == sts.NeowBonus.RANDOM_COMMON_RELIC:
+            return FixedAction.NEOW_RANDOM_COMMON_RELIC
+        elif bonus == sts.NeowBonus.TEN_PERCENT_HP_BONUS:
+            return FixedAction.NEOW_TEN_PERCENT_HP_BONUS
+        elif bonus == sts.NeowBonus.THREE_ENEMY_KILL:
+            return FixedAction.NEOW_THREE_ENEMY_KILL
+        elif bonus == sts.NeowBonus.HUNDRED_GOLD:
+            return FixedAction.NEOW_HUNDRED_GOLD
+        elif bonus == sts.NeowBonus.RANDOM_COLORLESS_2:
+            return FixedAction.NEOW_RANDOM_COLORLESS_2
+        elif bonus == sts.NeowBonus.REMOVE_TWO:
+            return FixedAction.NEOW_REMOVE_TWO
+        elif bonus == sts.NeowBonus.ONE_RARE_RELIC:
+            return FixedAction.NEOW_ONE_RARE_RELIC
+        elif bonus == sts.NeowBonus.THREE_RARE_CARDS:
+            return FixedAction.NEOW_THREE_RARE_CARDS
+        elif bonus == sts.NeowBonus.TWO_FIFTY_GOLD:
+            return FixedAction.NEOW_TWO_FIFTY_GOLD
+        elif bonus == sts.NeowBonus.TRANSFORM_TWO_CARDS:
+            return FixedAction.NEOW_TRANSFORM_TWO_CARDS
+        elif bonus == sts.NeowBonus.TWENTY_PERCENT_HP_BONUS:
+            return FixedAction.NEOW_TWENTY_PERCENT_HP_BONUS
+        elif bonus == sts.NeowBonus.BOSS_RELIC:
+            return FixedAction.NEOW_BOSS_RELIC
+        else:
+            raise ValueError(f"Unknown Neow bonus: {bonus}")
     elif event == sts.Event.KNOWING_SKULL:
         if idx1 == 0: return FixedAction.KNOWING_SKULL_OPTION_0
         elif idx1 == 1: return FixedAction.KNOWING_SKULL_OPTION_1
@@ -344,7 +460,7 @@ class Choice:
             ),
             relics_offered=np.array(self.relics_offered, dtype=np.int32),
             potions_offered=np.array(self.potions_offered, dtype=np.int32),
-            fixed_actions=np.array(self.fixed_actions if self.fixed_actions else [], dtype=np.int32),
+            fixed_actions=self.fixed_actions if self.fixed_actions else [],
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
             screen_state=int(self.screen_state),
             select_screen_type=int(self.select_screen_type),
@@ -610,7 +726,11 @@ def path_to_action_and_desc(choice: Choice, path: list, gc: Optional[sts.GameCon
     elif path[0] == 'fixed':
         action = choice.fixed_actions_list[path[1]]
         chosen_fixed = choice.fixed_actions[path[1]]
-        action_desc = str(chosen_fixed).split('.')[-1]  # Remove "FixedAction." prefix
+        # Handle both old enum format and new dict format
+        if isinstance(chosen_fixed, dict):
+            action_desc = str(chosen_fixed['action']).split('.')[-1]  # Remove "FixedAction." prefix
+        else:
+            action_desc = str(chosen_fixed).split('.')[-1]  # Remove "FixedAction." prefix
     else:
         raise ValueError(f"Unknown path type: {path[0]}")
     
@@ -635,7 +755,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             if action.rewards_action_type == sts.RewardsActionType.CARD:
                 # handle singing bowl
                 if action.idx2 == 5:
-                    fixed_actions.append(FixedAction.SINGING_BOWL)
+                    fixed_actions.append({'action': FixedAction.SINGING_BOWL})
                     fixed_actions_list.append(action)
                 else:
                     cards_offered.append(gc.screen_state_info.rewards_container.cards[action.idx1][action.idx2])
@@ -644,7 +764,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                 potions_offered.append(gc.screen_state_info.rewards_container.potions[action.idx1])
                 potion_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
-                fixed_actions.append(FixedAction.SKIP)
+                fixed_actions.append({'action': FixedAction.SKIP})
                 fixed_actions_list.append(action)
                 
     elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
@@ -663,10 +783,10 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                 potions_offered.append(all_shop_potions[action.idx1])
                 potion_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
-                fixed_actions.append(FixedAction.SKIP)
+                fixed_actions.append({'action': FixedAction.SKIP})
                 fixed_actions_list.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
-                fixed_actions.append(FixedAction.REMOVE)
+                fixed_actions.append({'action': FixedAction.REMOVE})
                 fixed_actions_list.append(action)
                 
     elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
@@ -676,7 +796,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                 relics_offered.append(all_boss_relics[action.idx1])
                 relic_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
-                fixed_actions.append(FixedAction.SKIP)
+                fixed_actions.append({'action': FixedAction.SKIP})
                 fixed_actions_list.append(action)
             else:
                 raise ValueError(f"Invalid boss relic reward action: {action.getDesc(gc)}")
@@ -686,19 +806,21 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             # Rest actions use idx1 to indicate action type:
             # 0=rest, 1=smith, 2=recall, 3=lift, 4=toke, 5=dig, 6=skip
             if action.idx1 == 0:
-                fixed_actions.append(FixedAction.REST)
+                action_type = FixedAction.REST
             elif action.idx1 == 1:
-                fixed_actions.append(FixedAction.SMITH)
+                action_type = FixedAction.SMITH
             elif action.idx1 == 2:
-                fixed_actions.append(FixedAction.RECALL)
+                action_type = FixedAction.RECALL
             elif action.idx1 == 3:
-                fixed_actions.append(FixedAction.LIFT)
+                action_type = FixedAction.LIFT
             elif action.idx1 == 4:
-                fixed_actions.append(FixedAction.TOKE)
+                action_type = FixedAction.TOKE
             elif action.idx1 == 5:
-                fixed_actions.append(FixedAction.DIG)
+                action_type = FixedAction.DIG
             else:  # idx1 == 6 or any other value defaults to skip
-                fixed_actions.append(FixedAction.SKIP)
+                action_type = FixedAction.SKIP
+            
+            fixed_actions.append({'action': action_type})
             fixed_actions_list.append(action)
                 
     elif gc.screen_state == sts.ScreenState.CARD_SELECT:
@@ -725,12 +847,26 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
     #         path_actions.append(action)
 
     elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
-        # Event screen actions - map each action to appropriate FixedAction
+        # Event screen actions - map each action to appropriate FixedAction with info
         for action in actions:
             event_action = map_event_action_to_fixed_action(gc, action)
             if event_action is None:
                 return None  # Return None if any action can't be mapped
-            fixed_actions.append(event_action)
+            
+            # Extract event-specific information
+            gold, card, relic, event_info = extract_event_info(gc, action, event_action)
+            
+            # Create dictionary entry for this fixed action
+            action_dict = {'action': event_action}
+            if gold != 0:
+                action_dict['gold'] = gold
+            if card != sts.CardId.INVALID:
+                action_dict['card'] = card
+            if relic != sts.RelicId.INVALID:
+                action_dict['relic'] = relic
+            if event_info != EventFixedInfo.NONE:
+                action_dict['info'] = event_info
+            fixed_actions.append(action_dict)
             fixed_actions_list.append(action)
     else:
         # Return None for unsupported screen states

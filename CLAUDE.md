@@ -143,6 +143,81 @@ The system is designed to be extensible - most new action types can be added by 
 - Complete enemy roster and relic system
 - Console playable with full overworld/map system
 
+## Common Pitfalls and Solutions
+
+### Python/C++ Integration Issues
+
+1. **Enum Bounds Checking**: All `IntEnum` classes used with `EnumSpace` must start at 0, not 1
+   - **Wrong**: `class MyEnum(IntEnum): NONE = auto()` (starts at 1)
+   - **Right**: `class MyEnum(IntEnum): NONE = 0; OTHER = auto()` (starts at 0)
+   - **Why**: `EnumSpace` checks `0 <= x < len(enum_class)` but `auto()` starts at 1
+
+2. **Object Attribute Access**: Check object types before accessing attributes
+   - **Wrong**: `gc.deck.cards[idx]` (deck is a list, not an object)
+   - **Right**: `gc.deck[idx]` (deck is the list itself)
+   - **Check**: Use `type(obj)` and `dir(obj)` to verify structure
+
+3. **Card/Relic ID Access**: Use correct attribute names
+   - **Wrong**: `card.getId()` (method doesn't exist)
+   - **Right**: `card.id` (direct attribute access)
+   - **Check**: Test with `hasattr(obj, 'method_name')` first
+
+### C++ Bindings
+
+1. **Missing Bindings**: Add all needed fields to `bindings/slaythespire.cpp`
+   - **Pattern**: `.def_readwrite("pythonName", &CppClass::cppFieldName)`
+   - **Required**: Rebuild with `make` after adding bindings
+   - **Check**: Use `dir(obj)` to verify fields are exposed
+
+2. **Naming Conventions**: C++ uses camelCase, Python expectations vary
+   - **C++**: `skillCardDeckIdx`, `relicIdx0`, `hpAmount1`
+   - **Python**: Access exactly as defined in C++ (don't convert to snake_case)
+
+3. **Nested Namespaces**: PyBind11 doesn't handle nested namespaces well
+   - **Wrong**: `pybind11::enum_<Neow::Bonus>(m, "Neow.Bonus")`
+   - **Right**: `pybind11::enum_<Neow::Bonus>(m, "NeowBonus")`
+   - **Access**: Use `sts.NeowBonus.THREE_CARDS` not `sts.Neow.Bonus.THREE_CARDS`
+
+### Neural Network Pipeline
+
+1. **Choice Space Structure**: Match tensor structure to space definitions
+   - **DictAddSpace**: Requires nested dictionary in batch tensors
+   - **Collation**: Manually populate each field, can't use `torch.tensor()` on individual elements
+   - **Defaults**: Use `.get()` with sensible defaults for optional fields
+
+2. **Batch Tensor Initialization**: Structure must match space definition
+   - **Wrong**: Single tensor for `DictAddSpace`
+   - **Right**: Nested dict with tensor for each field
+   - **Example**: `'fixed': {'value': {'action': tensor, 'gold': tensor}, 'mask': tensor}`
+
+3. **Data Type Consistency**: Ensure all tensor assignments use correct types
+   - **Wrong**: `batch['field'][i,j] = torch.tensor(value)`
+   - **Right**: `batch['field'][i,j] = int(value)` (for int32 tensors)
+
+### Choice System Updates
+
+1. **Backward Compatibility**: Update all related functions when changing data structures
+   - **Required**: Update `as_dict()`, `construct_choice()`, `path_to_action_and_desc()`
+   - **Pattern**: Use `isinstance(obj, dict)` to handle both old and new formats temporarily
+
+2. **Serialization**: Use `flatten_dict()` for nested structures before collation
+   - **Pattern**: `flattened = flatten_dict(choice.as_dict())`
+   - **Required**: Add dummy fields for training: `choice_type`, `chosen_idx`, `outcome`
+
+3. **Optional Fields**: Design for sparse data to avoid boilerplate
+   - **Pattern**: Only include non-default values in dictionaries
+   - **Collation**: Use `.get(key, default)` to handle missing fields
+
+### Testing and Debugging
+
+1. **Incremental Testing**: Test each component separately
+   - **Order**: Choice creation → Serialization → Collation → Neural network
+   - **Tools**: Use `dir()`, `type()`, `hasattr()` to inspect objects
+
+2. **Build After Changes**: Always rebuild after C++ binding changes
+   - **Command**: `pyenv shell 3.10.14 && make`
+   - **Check**: Import and test immediately after build
+
 # Important instructions
 
 - Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.

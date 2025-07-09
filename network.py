@@ -29,6 +29,7 @@ MAX_UPGRADE = 21
 MAX_RELICS = 25     # Maximum number of relics a player typically has
 MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
 MAX_MAP_NODES = 100
+MAX_GOLD = 1000
 
 
 class ActionType(IntEnum):
@@ -62,11 +63,29 @@ class FixedAction(IntEnum):
     DIG = auto()
     
     # Event Actions - organized by event type
-    # NEOW (4 choices)
-    NEOW_OPTION_0 = auto()
-    NEOW_OPTION_1 = auto()
-    NEOW_OPTION_2 = auto()
-    NEOW_OPTION_3 = auto()
+    # Neow bonus
+    NEOW_THREE_CARDS = auto()
+    NEOW_ONE_RANDOM_RARE_CARD = auto()
+    NEOW_REMOVE_CARD = auto()
+    NEOW_UPGRADE_CARD = auto()
+    NEOW_TRANSFORM_CARD = auto()
+    NEOW_RANDOM_COLORLESS = auto()
+
+    NEOW_THREE_SMALL_POTIONS = auto()
+    NEOW_RANDOM_COMMON_RELIC = auto()
+    NEOW_TEN_PERCENT_HP_BONUS = auto()
+    NEOW_THREE_ENEMY_KILL = auto()
+    NEOW_HUNDRED_GOLD = auto()
+
+    NEOW_RANDOM_COLORLESS_2 = auto()
+    NEOW_REMOVE_TWO = auto()
+    NEOW_ONE_RARE_RELIC = auto()
+    NEOW_THREE_RARE_CARDS = auto()
+    NEOW_TWO_FIFTY_GOLD = auto()
+    NEOW_TRANSFORM_TWO_CARDS = auto()
+    NEOW_TWENTY_PERCENT_HP_BONUS = auto()
+
+    NEOW_BOSS_RELIC = auto()
     
     # Big Fish (3 choices)
     BIG_FISH_BANANA = auto()  # Heal
@@ -281,6 +300,15 @@ class FixedAction(IntEnum):
     OMINOUS_FORGE_LOSE_HP = auto()
     OMINOUS_FORGE_LEAVE = auto()
 
+
+class EventFixedInfo(IntEnum):
+    NONE = 0
+    NEOW_TEN_PERCENT_HP_LOSS = auto()
+    NEOW_NO_GOLD = auto()
+    NEOW_CURSE = auto()
+    NEOW_PERCENT_DAMAGE = auto()
+    NEOW_LOSE_STARTER_RELIC = auto()
+
 class IsCurrentNode(IntEnum):
     NOT_CURRENT = 0
     CURRENT = 1
@@ -304,7 +332,13 @@ choice_space = DictSpace({
     'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE), EnumSpace(sts.CardSelectScreenType))),
     'relics': SequenceSpace(EnumSpace(sts.RelicId)),
     'potions': SequenceSpace(EnumSpace(sts.Potion)),
-    'fixed': SequenceSpace(EnumSpace(FixedAction)),
+    'fixed': SequenceSpace(DictAddSpace({
+        'action': EnumSpace(FixedAction),
+        'gold': FixedVecSpace([MAX_GOLD]),
+        'card': EnumSpace(sts.CardId),
+        'relic': EnumSpace(sts.RelicId),
+        'info': EnumSpace(EventFixedInfo),
+    })),
 })
 
 
@@ -602,7 +636,13 @@ def collate_fn(batch):
             'mask': torch.ones((len(batch), sts.MAX_POTION_CAPACITY), dtype=torch.bool)
         },
         'fixed': {
-            'value': torch.full((len(batch), MAX_FIXED_ACTIONS), FixedAction.INVALID.value, dtype=torch.int32),
+            'value': {
+                'action': torch.full((len(batch), MAX_FIXED_ACTIONS), FixedAction.INVALID.value, dtype=torch.int32),
+                'gold': torch.full((len(batch), MAX_FIXED_ACTIONS, 1), 0, dtype=torch.int32),
+                'card': torch.full((len(batch), MAX_FIXED_ACTIONS), sts.CardId.INVALID.value, dtype=torch.int32),
+                'relic': torch.full((len(batch), MAX_FIXED_ACTIONS), sts.RelicId.INVALID.value, dtype=torch.int32),
+                'info': torch.full((len(batch), MAX_FIXED_ACTIONS), EventFixedInfo.NONE.value, dtype=torch.int32),
+            },
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         },
     }
@@ -677,7 +717,17 @@ def collate_fn(batch):
         fixed_actions = x['fixed_actions']
         choice_fixed_len = len(fixed_actions)
         assert choice_fixed_len <= MAX_FIXED_ACTIONS, f"Choice fixed actions count {choice_fixed_len} exceeds maximum {MAX_FIXED_ACTIONS}"
-        batch_choices['fixed']['value'][i, :choice_fixed_len] = torch.tensor(fixed_actions, dtype=torch.int32)
+        
+        # Manually collate the fixed actions dictionary structure
+        for j, action_dict in enumerate(fixed_actions):
+            # Handle the 'action' field (required)
+            batch_choices['fixed']['value']['action'][i, j] = int(action_dict['action'])
+            
+            # Handle optional fields with defaults
+            batch_choices['fixed']['value']['gold'][i, j, 0] = action_dict.get('gold', 0)
+            batch_choices['fixed']['value']['card'][i, j] = int(action_dict.get('card', sts.CardId.INVALID))
+            batch_choices['fixed']['value']['relic'][i, j] = int(action_dict.get('relic', sts.RelicId.INVALID))
+            batch_choices['fixed']['value']['info'][i, j] = int(action_dict.get('info', EventFixedInfo.NONE))
         batch_choices['fixed']['mask'][i, :choice_fixed_len] = torch.zeros(choice_fixed_len, dtype=torch.bool)
         
         chosen_idx_list.append(x['chosen_idx'])

@@ -128,7 +128,10 @@ class SequenceSpace(MaskedSpace[Sequence[T]]):
 
 
     def try_ix_to_path(self, xs: dict, ix: int) -> PathOrRemainder:
-        l = xs["value"].size(1)
+        t = xs["value"]
+        while isinstance(t, dict):
+            t = next(iter(t.values()))
+        l = t.size(1)
         if ix < l:
             return [ix]
         else:

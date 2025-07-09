@@ -20,6 +20,7 @@
 #include "sim/PrintHelpers.h"
 #include "game/Game.h"
 #include "game/GameAction.h"
+#include "game/Neow.h"
 
 #include "slaythespire.h"
 
@@ -232,7 +233,20 @@ PYBIND11_MODULE(slaythespire, m) {
             return cards;
         })
         .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer)
-        .def_readwrite("event_data", &ScreenStateInfo::eventData);
+        .def_readwrite("event_data", &ScreenStateInfo::eventData)
+        .def_readwrite("neowRewards", &ScreenStateInfo::neowRewards)
+        .def_readwrite("hpAmount0", &ScreenStateInfo::hpAmount0)
+        .def_readwrite("hpAmount1", &ScreenStateInfo::hpAmount1)
+        .def_readwrite("hpAmount2", &ScreenStateInfo::hpAmount2)
+        .def_readwrite("goldLoss", &ScreenStateInfo::goldLoss)
+        .def_readwrite("gold", &ScreenStateInfo::gold)
+        .def_readwrite("cardIdx", &ScreenStateInfo::cardIdx)
+        .def_readwrite("potionIdx", &ScreenStateInfo::potionIdx)
+        .def_readwrite("relicIdx0", &ScreenStateInfo::relicIdx0)
+        .def_readwrite("relicIdx1", &ScreenStateInfo::relicIdx1)
+        .def_readwrite("skillCardDeckIdx", &ScreenStateInfo::skillCardDeckIdx)
+        .def_readwrite("powerCardDeckIdx", &ScreenStateInfo::powerCardDeckIdx)
+        .def_readwrite("attackCardDeckIdx", &ScreenStateInfo::attackCardDeckIdx);
 
     pybind11::class_<Shop>(m, "Shop")
         .def_property_readonly("prices", [](const Shop& s) {
@@ -426,6 +440,41 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("WHEEL_OF_CHANGE", Event::WHEEL_OF_CHANGE)
         .value("WINDING_HALLS", Event::WINDING_HALLS)
         .value("WORLD_OF_GOOP", Event::WORLD_OF_GOOP);
+
+    pybind11::enum_<Neow::Bonus>(m, "NeowBonus")
+        .value("THREE_CARDS", Neow::Bonus::THREE_CARDS)
+        .value("ONE_RANDOM_RARE_CARD", Neow::Bonus::ONE_RANDOM_RARE_CARD)
+        .value("REMOVE_CARD", Neow::Bonus::REMOVE_CARD)
+        .value("UPGRADE_CARD", Neow::Bonus::UPGRADE_CARD)
+        .value("TRANSFORM_CARD", Neow::Bonus::TRANSFORM_CARD)
+        .value("RANDOM_COLORLESS", Neow::Bonus::RANDOM_COLORLESS)
+        .value("THREE_SMALL_POTIONS", Neow::Bonus::THREE_SMALL_POTIONS)
+        .value("RANDOM_COMMON_RELIC", Neow::Bonus::RANDOM_COMMON_RELIC)
+        .value("TEN_PERCENT_HP_BONUS", Neow::Bonus::TEN_PERCENT_HP_BONUS)
+        .value("THREE_ENEMY_KILL", Neow::Bonus::THREE_ENEMY_KILL)
+        .value("HUNDRED_GOLD", Neow::Bonus::HUNDRED_GOLD)
+        .value("RANDOM_COLORLESS_2", Neow::Bonus::RANDOM_COLORLESS_2)
+        .value("REMOVE_TWO", Neow::Bonus::REMOVE_TWO)
+        .value("ONE_RARE_RELIC", Neow::Bonus::ONE_RARE_RELIC)
+        .value("THREE_RARE_CARDS", Neow::Bonus::THREE_RARE_CARDS)
+        .value("TWO_FIFTY_GOLD", Neow::Bonus::TWO_FIFTY_GOLD)
+        .value("TRANSFORM_TWO_CARDS", Neow::Bonus::TRANSFORM_TWO_CARDS)
+        .value("TWENTY_PERCENT_HP_BONUS", Neow::Bonus::TWENTY_PERCENT_HP_BONUS)
+        .value("BOSS_RELIC", Neow::Bonus::BOSS_RELIC)
+        .value("INVALID", Neow::Bonus::INVALID);
+
+    pybind11::enum_<Neow::Drawback>(m, "NeowDrawback")
+        .value("INVALID", Neow::Drawback::INVALID)
+        .value("NONE", Neow::Drawback::NONE)
+        .value("TEN_PERCENT_HP_LOSS", Neow::Drawback::TEN_PERCENT_HP_LOSS)
+        .value("NO_GOLD", Neow::Drawback::NO_GOLD)
+        .value("CURSE", Neow::Drawback::CURSE)
+        .value("PERCENT_DAMAGE", Neow::Drawback::PERCENT_DAMAGE)
+        .value("LOSE_STARTER_RELIC", Neow::Drawback::LOSE_STARTER_RELIC);
+
+    pybind11::class_<Neow::Option>(m, "NeowOption")
+        .def_readwrite("r", &Neow::Option::r)
+        .def_readwrite("d", &Neow::Option::d);
 
     pybind11::enum_<CardSelectScreenType> cardSelectScreenType(m, "CardSelectScreenType", pybind11::metaclass(enum_metaclass));
     cardSelectScreenType.value("INVALID", CardSelectScreenType::INVALID)

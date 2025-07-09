@@ -7,6 +7,7 @@
 - [x] potion repr
 - [x] basic event choices
 - [ ] event choice info
+- [ ] shop prices
 - [ ] map repr: less crazy version, mark choice nodes and all reachable nodes
 - [ ] relics repr: add counters
 - [ ] history repr: list of enemies, events, history of rares and potions being offered
