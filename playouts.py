@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import copy
 from enum import IntEnum, auto
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -410,7 +411,10 @@ class NNRequest(NamedTuple):
 class NNService:
     """Background service that batches neural network inference requests"""
     def __init__(self, net: NN, batch_size=32, max_wait_time=0.01, batch_size_factor=8):
-        self.net = net
+        # Create a separate copy of the network for inference to avoid CUDA graph conflicts
+        self.net = self._clone_network(net)
+        self.net.eval()
+        
         # Round batch_size up to nearest multiple of batch_size_factor
         self.batch_size = ((batch_size + batch_size_factor - 1) // batch_size_factor) * batch_size_factor
         self.batch_size_factor = batch_size_factor
@@ -419,6 +423,16 @@ class NNService:
         self.shutdown_event = Event()
         self.thread = Thread(target=self._process_requests, daemon=True)
         self.thread.start()
+    
+    def _clone_network(self, net):
+        """Create a separate copy of the network for inference"""
+        clone = copy.deepcopy(net)
+        clone = torch.compile(clone, mode="reduce-overhead")
+        return clone
+    
+    def update_weights(self, net):
+        """Update the inference network weights from the training network"""
+        self.net.load_state_dict(net.state_dict())
     
     def _process_requests(self):
         while not self.shutdown_event.is_set():
@@ -462,8 +476,9 @@ class NNService:
                 } for choice in choices]
                 
                 # Process through network
-                batch_tensors = collate_fn(batch)
                 with torch.no_grad():
+                    torch.compiler.cudagraph_mark_step_begin()
+                    batch_tensors = collate_fn(batch)
                     output = process_batch(batch_tensors, self.net)
                     responses = output_to_cpu(output, batch_tensors)
                 
@@ -987,4 +1002,3 @@ if __name__ == "__main__":
 
 ## %%
 
-# %%

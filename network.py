@@ -438,9 +438,9 @@ class NN(nn.Module):
             seq_lengths = (~pos_mask).sum(dim=1, keepdim=True).float()  # [batch_size, 1]
             pooled = xn.masked_fill(pos_mask.unsqueeze(-1), 0).sum(dim=1) / seq_lengths  # [batch_size, dim]
             values = self.value_head(pooled).squeeze(-1).float()  # [batch_size]
-            return choice_logits, values
+            return choice_logits.clone(), values.clone()
         else:
-            return choice_logits
+            return choice_logits.clone()
     
     @property
     def device(self):
@@ -739,7 +739,7 @@ class SeparateValuePolicy(nn.Module):
         value_output = self.value_net(batch)
         _, values = value_output  # Extract values from tuple
         
-        return policy_logits, values
+        return policy_logits.clone(), values.clone()
     
     @property
     def device(self):

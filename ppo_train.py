@@ -705,9 +705,6 @@ def main():
         policy_net = NN(policy_hp).to(device)
         value_net = NN(value_hp).to(device)
         
-        if not args.no_torch_compile:
-            policy_net = torch.compile(policy_net, mode="default")
-            value_net = torch.compile(value_net, mode="default")
         
         if config.resume_from_step > 0:
             # Load from specific iteration checkpoints
@@ -734,8 +731,7 @@ def main():
         policy_optimizer = torch.optim.AdamW(policy_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
         value_optimizer = torch.optim.AdamW(value_net.parameters(), lr=config.value_lr, weight_decay=config.weight_decay)
         
-        # Use combined network for action selection
-        service = NNService(combined_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
+        service_net = combined_net
         
         nets = (policy_net, value_net)
         optimizers = (policy_optimizer, value_optimizer)
@@ -744,8 +740,6 @@ def main():
         # Create single network with value head
         model_hp = ModelHP(use_value_head=True)
         net = NN(model_hp).to(device)
-        if not args.no_torch_compile:
-            net = torch.compile(net, mode="default")
         
         
         if config.resume_from_step > 0:
@@ -760,16 +754,26 @@ def main():
             net = load_network_backward_compatible(net, state)
             print(f"Loaded model from {args.init_path}")
         
-        # Create service
-        service = NNService(net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
-        
         # Create optimizer
         optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
         
         nets = net
         optimizers = optimizer
+        service_net = net
         print("Using single network with value head")
     
+    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor)
+
+    # Compile networks after service creation to ensure same compilation state
+    if not args.no_torch_compile:
+        if config.separate_networks:
+            # Compile the whole SeparateValuePolicy
+            service_net = torch.compile(service_net, mode="reduce-overhead")
+        else:
+            net = torch.compile(net, mode="reduce-overhead")
+            service_net = net
+            nets = net
+
     if config.resume_from_step > 0:
         print(f"Resuming PPO training from iteration {config.resume_from_step} with {config.num_games_per_batch} games per batch")
     else:
@@ -781,6 +785,7 @@ def main():
             
             # Collect experience
             start_time = time.time()
+            service.update_weights(service_net)
             trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000)
             collect_time = time.time() - start_time
             
