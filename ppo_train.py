@@ -719,10 +719,12 @@ def main():
             # Load from init path
             state = torch.load(args.init_path, map_location=device, weights_only=True)
             policy_net = load_network_backward_compatible(policy_net, state)
-            # Initialize value network with same weights (excluding value head)
-            value_state = {k: v for k, v in state.items() if not k.startswith('value_head')}
+            # Hack: replace 'policy' with 'value' in the init path to find value weights
+            value_path = args.init_path.replace('policy', 'value')
+            value_state = torch.load(value_path, map_location=device, weights_only=True)
             value_net = load_network_backward_compatible(value_net, value_state)
             print(f"Loaded policy model from {args.init_path}")
+            print(f"Loaded value model from {value_path}")
         
         # Create combined network wrapper
         combined_net = SeparateValuePolicy(policy_net, value_net)
