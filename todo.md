@@ -6,9 +6,10 @@
 - [x] basic relics repr
 - [x] potion repr
 - [x] basic event choices
-- [ ] event choice info
+- [x] event choice info
 - [ ] shop prices
 - [ ] map repr: less crazy version, mark choice nodes and all reachable nodes
+- [ ] eliminate redundancy when showing card choices from deck
 - [ ] relics repr: add counters
 - [ ] history repr: list of enemies, events, history of rares and potions being offered
 
