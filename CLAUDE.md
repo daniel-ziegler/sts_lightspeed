@@ -153,13 +153,14 @@ The system is designed to be extensible - most new action types can be added by 
    - **Why**: `EnumSpace` checks `0 <= x < len(enum_class)` but `auto()` starts at 1
 
 2. **Object Attribute Access**: Check object types before accessing attributes
-   - **Wrong**: `gc.deck.cards[idx]` (deck is a list, not an object)
-   - **Right**: `gc.deck[idx]` (deck is the list itself)
+   - **Wrong**: `gc.deck.cards[idx]`, `gc.relics.relics[idx]` (deck and relics are lists, not objects)
+   - **Right**: `gc.deck[idx]`, `gc.relics[idx]` (they are the lists themselves)
    - **Check**: Use `type(obj)` and `dir(obj)` to verify structure
 
-3. **Card/Relic ID Access**: Use correct attribute names
-   - **Wrong**: `card.getId()` (method doesn't exist)
-   - **Right**: `card.id` (direct attribute access)
+3. **Card/Relic ID Access**: Use correct attribute names and extract IDs from objects
+   - **Wrong**: `card.getId()`, `relic.getId()` (methods don't exist)
+   - **Right**: `card.id`, `relic.id` (direct attribute access)
+   - **Important**: `gc.relics[idx]` returns a `Relic` object, use `gc.relics[idx].id` for the ID
    - **Check**: Test with `hasattr(obj, 'method_name')` first
 
 ### C++ Bindings

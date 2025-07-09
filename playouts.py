@@ -70,9 +70,12 @@ def extract_event_info(gc: sts.GameContext, action: sts.GameAction, fixed_action
     
     elif event == sts.Event.NLOTH:
         # Show which relics are offered
-        if fixed_action == FixedAction.NLOTH_AGREE:
+        if fixed_action == FixedAction.NLOTH_OFFER_0:
             if info.relicIdx0 != -1:
-                relic = gc.relics.relics[info.relicIdx0]
+                relic = gc.relics[info.relicIdx0].id
+        elif fixed_action == FixedAction.NLOTH_OFFER_1:
+            if info.relicIdx1 != -1:
+                relic = gc.relics[info.relicIdx1].id
     
     elif event == sts.Event.WORLD_OF_GOOP:
         # Show gold loss amount
@@ -170,8 +173,8 @@ def map_event_action_to_fixed_action(gc: sts.GameContext, action: sts.GameAction
         elif idx1 == 1: return FixedAction.GOLDEN_SHRINE_DESECRATE
         else: return FixedAction.GOLDEN_SHRINE_LEAVE
     elif event == sts.Event.NLOTH:
-        if idx1 == 0: return FixedAction.NLOTH_AGREE
-        elif idx1 == 1: return FixedAction.NLOTH_DISAGREE
+        if idx1 == 0: return FixedAction.NLOTH_OFFER_0
+        elif idx1 == 1: return FixedAction.NLOTH_OFFER_1
         else: return FixedAction.NLOTH_LEAVE
     elif event == sts.Event.SENSORY_STONE:
         if idx1 == 0: return FixedAction.SENSORY_STONE_MEMORIES

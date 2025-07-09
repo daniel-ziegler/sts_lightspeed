@@ -103,8 +103,8 @@ class FixedAction(IntEnum):
     GOLDEN_SHRINE_LEAVE = auto()
     
     # N'loth (3 choices)
-    NLOTH_AGREE = auto()
-    NLOTH_DISAGREE = auto()
+    NLOTH_OFFER_0 = auto()
+    NLOTH_OFFER_1 = auto()
     NLOTH_LEAVE = auto()
     
     # Sensory Stone (3 choices)
