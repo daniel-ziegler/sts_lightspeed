@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 class PPOConfig:
     """PPO training hyperparameters."""
     # Environment settings
-    num_games_per_batch: int = 256
+    num_games_per_step: int = 256
     num_epochs: int = 4
     num_workers: int = 40
     inf_batch_size: int = 32
@@ -271,7 +271,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         # Single-threaded execution for easier debugging
         # Create a shared executor for battle simulations
         with ThreadPoolExecutor(max_workers=1) as battle_executor:
-            for i in tqdm(range(config.num_games_per_batch), desc="Collecting experience"):
+            for i in tqdm(range(config.num_games_per_step), desc="Collecting experience"):
                 trajectory = run_ppo_episode(start_seed + i, service, reward_fn, battle_executor)
                 trajectories.append(trajectory)
     else:
@@ -281,10 +281,10 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
             with ThreadPoolExecutor(max_workers=config.num_workers) as main_executor:
                 futures = [
                     main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, battle_executor)
-                    for i in range(config.num_games_per_batch)
+                    for i in range(config.num_games_per_step)
                 ]
                 
-                for future in tqdm(as_completed(futures), total=config.num_games_per_batch, desc="Collecting experience"):
+                for future in tqdm(as_completed(futures), total=config.num_games_per_step, desc="Collecting experience"):
                     trajectory = future.result()
                     trajectories.append(trajectory)
     
@@ -776,9 +776,9 @@ def main():
             nets = net
 
     if config.resume_from_step > 0:
-        print(f"Resuming PPO training from iteration {config.resume_from_step} with {config.num_games_per_batch} games per batch")
+        print(f"Resuming PPO training from iteration {config.resume_from_step} with {config.num_games_per_step} games per batch")
     else:
-        print(f"Starting PPO training with {config.num_games_per_batch} games per batch")
+        print(f"Starting PPO training with {config.num_games_per_step} games per batch")
     
     try:
         for iteration in range(config.resume_from_step, config.num_iterations):
