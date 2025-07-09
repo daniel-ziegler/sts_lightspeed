@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from collections import Counter
+import json
 
 import numpy as np
 import pandas as pd
@@ -816,6 +817,29 @@ def main():
             print(f"KL div: {losses.get('kl_div', 0):.6f}, "
                   f"Grad norm: {losses.get('grad_norm', 0):.4f}, "
                   f"Clip frac: {losses.get('clipfrac', 0):.3f}")
+            
+            # Create comprehensive stats dictionary
+            stats = {
+                'iteration': iteration + 1,
+                'num_trajectories': len(trajectories),
+                'collect_time': collect_time,
+                'win_rate': win_rate,
+                'avg_floor': avg_floor,
+                'avg_reward': avg_reward,
+                'num_experiences': len(experiences),
+                'train_time': train_time,
+                'policy_loss': losses.get('policy_loss', 0),
+                'value_loss': losses.get('value_loss', 0),
+                'entropy': losses.get('entropy', 0),
+                'kl_div': losses.get('kl_div', 0),
+                'grad_norm': losses.get('grad_norm', 0),
+                'clipfrac': losses.get('clipfrac', 0)
+            }
+            
+            # Write stats to JSONL file based on save path
+            stats_path = f"{args.save_path}.stats.jsonl"
+            with open(stats_path, 'a') as f:
+                f.write(json.dumps(stats) + '\n')
             
             # Save model periodically
             if (iteration + 1) % config.save_every == 0:
