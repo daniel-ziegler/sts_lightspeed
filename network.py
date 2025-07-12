@@ -30,6 +30,7 @@ MAX_RELICS = 25     # Maximum number of relics a player typically has
 MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
 MAX_MAP_NODES = 100
 MAX_GOLD = 1000
+MAX_PATH_CHOICES = 7  # all possible columns from the start
 
 
 class ActionType(IntEnum):
@@ -103,8 +104,8 @@ class FixedAction(IntEnum):
     GOLDEN_SHRINE_LEAVE = auto()
     
     # N'loth (3 choices)
-    NLOTH_AGREE = auto()
-    NLOTH_DISAGREE = auto()
+    NLOTH_OFFER_0 = auto()
+    NLOTH_OFFER_1 = auto()
     NLOTH_LEAVE = auto()
     
     # Sensory Stone (3 choices)
@@ -340,6 +341,7 @@ choice_space = DictSpace({
         'relic': EnumSpace(sts.RelicId),
         'info': EnumSpace(EventFixedInfo),
     })),
+    'paths': SequenceSpace(FixedVecSpace([7])),
 })
 
 
@@ -647,6 +649,10 @@ def collate_fn(batch):
             },
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         },
+        'paths': {
+            'value': torch.full((len(batch), MAX_PATH_CHOICES, 1), -1, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_PATH_CHOICES), dtype=torch.bool)
+        },
     }
     
     # Fill the batched tensors with assertions to ensure data fits
@@ -717,6 +723,12 @@ def collate_fn(batch):
         assert choice_potions_len <= sts.MAX_POTION_CAPACITY, f"Choice potions count {choice_potions_len} exceeds maximum {sts.MAX_POTION_CAPACITY}"
         batch_choices['potions']['value'][i, :choice_potions_len] = torch.tensor(potions_offered, dtype=torch.int32)
         batch_choices['potions']['mask'][i, :choice_potions_len] = torch.zeros(choice_potions_len, dtype=torch.bool)
+        
+        paths_offered = x['paths_offered']
+        choice_paths_len = len(paths_offered)
+        assert choice_paths_len <= MAX_PATH_CHOICES, f"Choice paths count {choice_paths_len} exceeds maximum {MAX_PATH_CHOICES}"  # max 3 paths from any node
+        batch_choices['paths']['value'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
+        batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         fixed_actions = x['fixed_actions']
         choice_fixed_len = len(fixed_actions)
