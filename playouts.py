@@ -1070,7 +1070,7 @@ def main(args):
             net,
             batch_size=args.batch_size,
             batch_size_factor=min(min(8, args.batch_size), (args.num_threads + 1) // 2),
-            torch_compile_mode=args.torch_compile_mode,
+            torch_compile_mode=args.torch_compile,
         )
         print(f"Loaded neural network from {args.model_path}")
 
@@ -1135,7 +1135,7 @@ if __name__ == "__main__":
                         help='Disable saving results to parquet file')
     parser.add_argument('--temperature', type=float, default=1.0,
                         help='Temperature for Boltzmann sampling (default: 1.0)')
-    parser.add_argument('--torch-compile-mode', type=str, default='default',
+    parser.add_argument('--torch-compile', type=str, default='default',
                         choices=['no', 'default', 'reduce-overhead', 'max-autotune'],
                         help='Torch compile mode for the neural network (default: default)')
     
