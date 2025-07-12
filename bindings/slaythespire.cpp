@@ -42,8 +42,7 @@ pybind11::dict py::NNMapRepresentation::as_dict() const {
     return pybind11::dict("xs"_a=xs,
                           "ys"_a=ys,
                           "roomTypes"_a=roomTypes,
-                          "edgeStarts"_a=edgeStarts,
-                          "edgeEnds"_a=edgeEnds);
+                          "pathXs"_a=pathXs);
 }
 
 pybind11::dict py::NNRepresentation::as_dict() const {
@@ -308,8 +307,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("xs", &sts::py::NNMapRepresentation::xs)
         .def_readwrite("ys", &sts::py::NNMapRepresentation::ys)
         .def_readwrite("room_types", &sts::py::NNMapRepresentation::roomTypes)
-        .def_readwrite("edge_starts", &sts::py::NNMapRepresentation::edgeStarts)
-        .def_readwrite("edge_ends", &sts::py::NNMapRepresentation::edgeEnds)
+        .def_readwrite("path_xs", &sts::py::NNMapRepresentation::pathXs)
         .def("as_dict", &sts::py::NNMapRepresentation::as_dict);
 
     pybind11::class_<sts::py::NNRepresentation> nn_rep(m, "NNRepresentation");

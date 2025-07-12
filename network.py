@@ -324,7 +324,8 @@ obs_space = DictSpace({
     'map_nodes': SequenceSpace(DictAddSpace({
         'room': EnumSpace(sts.Room),
         'is_current': EnumSpace(IsCurrentNode),
-        'data': FixedVecSpace([7, 16, MAX_MAP_NODES])
+        'pos': FixedVecSpace([7, 16]),
+        'path_xs': FixedVecSpace([7, 7, 7]),  # can accept -1
     })),
 })
 
@@ -615,7 +616,8 @@ def collate_fn(batch):
             'value': {
                 'room': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
                 'is_current': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
-                'data': torch.full((len(batch), MAX_MAP_NODES, 3), 0, dtype=torch.int32),  # [x, y, node_id]
+                'pos': torch.full((len(batch), MAX_MAP_NODES, 2), 0, dtype=torch.int32),  # [x, y]
+                'path_xs': torch.full((len(batch), MAX_MAP_NODES, 3), -1, dtype=torch.int32),   # left, straight, right
             },
             'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
         },
@@ -677,17 +679,19 @@ def collate_fn(batch):
         map_xs = x['obs.map.xs']
         map_ys = x['obs.map.ys']
         map_room_types = x['obs.map.roomTypes']
+        map_path_xs = x['obs.map.pathXs']
         map_x_pos = x['obs.mapX']
         map_y_pos = x['obs.mapY']
         nodes_len = len(map_xs)
         assert nodes_len <= MAX_MAP_NODES, f"Map nodes count {nodes_len} exceeds maximum {MAX_MAP_NODES}"
         
-        # Create node data: [room_type, is_current, x, y, node_id]
+        # Create node data: (room_type, is_current, x, y, path_xs)
         for j in range(nodes_len):
             is_current = 1 if (map_xs[j] == map_x_pos and map_ys[j] == map_y_pos) else 0
             batch_obs['map_nodes']['value']['room'][i, j] = torch.tensor(int(map_room_types[j]), dtype=torch.int32)
             batch_obs['map_nodes']['value']['is_current'][i, j] = torch.tensor(is_current, dtype=torch.int32)
-            batch_obs['map_nodes']['value']['data'][i, j] = torch.tensor([map_xs[j], map_ys[j], j], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['pos'][i, j] = torch.tensor([map_xs[j], map_ys[j]], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['path_xs'][i, j] = torch.tensor(map_path_xs[j], dtype=torch.int32)
         batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
         
         # Build choices data inline

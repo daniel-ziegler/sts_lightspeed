@@ -105,8 +105,7 @@ class NNMapRepresentation:
     xs: List[int]
     ys: List[int]
     room_types: List[int]
-    edge_starts: List[int]
-    edge_ends: List[int]
+    pathXs: np.ndarray  # 2D array: [num_rooms, 3] where each row is [left_x, straight_x, right_x] or -1 if no edge
 
 class NNRepresentation:
     fixed_observation: List[float]

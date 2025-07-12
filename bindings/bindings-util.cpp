@@ -172,8 +172,9 @@ namespace sts::py {
         std::array<std::array<int, 7>, 16> ids;
         int id = 0;
         bool haveLastRow = false;
-        std::vector<int> xs, ys, edgeStarts, edgeEnds;
+        std::vector<int> xs, ys;
         std::vector<Room> roomTypes;
+        std::vector<std::vector<int>> pathXs;
 
         // First pass: collect data
         for (int y = 0; y < 15; ++y) {
@@ -197,15 +198,58 @@ namespace sts::py {
             ys.push_back(15);
         }
 
+        // Second pass: create path_xs for each room
         for (int y = 0; y < 15; ++y) {
             for (int x = 0; x < 7; ++x) {
                 const MapNode& node = map.getNode(x,y);
                 if (node.room != Room::NONE) {
+                    std::vector<int> roomPaths(3, -1);  // Initialize with -1 (no edge)
+                    
+                    // For each room, check the three possible directions: left (x-1), straight (x), right (x+1)
                     for (int k = 0; k < node.edgeCount; ++k) {
-                        edgeStarts.push_back(ids[y][x]);
-                        edgeEnds.push_back(ids[y+1][node.edges[k]]);
+                        int edgeX = node.edges[k];
+                        
+                        // For the last row (y=14), edges can go to the boss at x=3
+                        if (y == 14) {
+                            assert(edgeX == 3);  // Boss is always at x=3
+                            // Count the boss edge as "straight" with its actual x value
+                            roomPaths[1] = edgeX;
+                        } else {
+                            // Assert that edgeX is within expected range for normal rows
+                            assert(edgeX >= 0 && edgeX < 7);
+                            
+                            if (edgeX == x - 1) {
+                                roomPaths[0] = edgeX;  // left
+                            } else if (edgeX == x) {
+                                roomPaths[1] = edgeX;  // straight
+                            } else if (edgeX == x + 1) {
+                                roomPaths[2] = edgeX;  // right
+                            } else {
+                                // This should never happen with the current map generation
+                                assert(false && "Unexpected edge direction");
+                            }
+                        }
                     }
+                    pathXs.push_back(roomPaths);
                 }
+            }
+        }
+        
+        // Handle boss room (always at x=3, y=15)
+        if (haveLastRow) {
+            // Boss has no outgoing edges - it's the destination
+            pathXs.push_back({-1, -1, -1});
+        }
+
+        // Create 2D numpy array for pathXs
+        auto pathXsArray = pybind11::array_t<int>(
+            {static_cast<pybind11::ssize_t>(pathXs.size()), static_cast<pybind11::ssize_t>(3)}, 
+            {}
+        );
+        auto pathXsAccessor = pathXsArray.mutable_unchecked<2>();
+        for (pybind11::ssize_t i = 0; i < pathXs.size(); ++i) {
+            for (pybind11::ssize_t j = 0; j < 3; ++j) {
+                pathXsAccessor(i, j) = pathXs[i][j];
             }
         }
 
@@ -214,8 +258,7 @@ namespace sts::py {
             .xs = to_numpy(xs),
             .ys = to_numpy(ys),
             .roomTypes = to_numpy(roomTypes),
-            .edgeStarts = to_numpy(edgeStarts),
-            .edgeEnds = to_numpy(edgeEnds)
+            .pathXs = pathXsArray
         };
     }
 

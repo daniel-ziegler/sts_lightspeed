@@ -63,8 +63,7 @@ namespace sts {
             pybind11::array_t<int> xs;
             pybind11::array_t<int> ys;
             pybind11::array_t<Room> roomTypes;
-            pybind11::array_t<int> edgeStarts;
-            pybind11::array_t<int> edgeEnds;
+            pybind11::array_t<int> pathXs;  // 2D array: [num_rooms, 3] where each row is [left_x, straight_x, right_x] or -1 if no edge
             // todo burning elite pos
 
             pybind11::dict as_dict() const;

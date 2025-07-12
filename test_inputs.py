@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# %%
 """
 Comprehensive test suite for inputs.py to verify roundtrip correctness
 and identify any bugs in the space implementations.
@@ -9,9 +10,11 @@ import torch
 from enum import IntEnum
 from inputs import (
     EnumSpace, IntSpace, SequenceSpace, FixedVecSpace, 
-    TupleAddSpace, TupleConcatSpace, DictSpace
+    TupleAddSpace, TupleConcatSpace, DictSpace, SinusoidalEmbedding
 )
 import slaythespire as sts
+
+# %%
 
 
 class TestEnum(IntEnum):
@@ -265,3 +268,18 @@ def run_all_tests():
 
 if __name__ == "__main__":
     run_all_tests()
+
+# %%
+
+dim = 16
+emb = SinusoidalEmbedding(dim, 2)
+
+x = torch.tensor([[-1, 0,1, 100]])
+
+emb(x).squeeze(0).reshape((-1, dim))
+
+# %%
+x = torch.tensor(np.arange(0, 10).reshape((-1, 1)))
+
+emb(x).squeeze(0).reshape((-1, 2, dim//2))
+# %%

@@ -7,9 +7,10 @@
 - [x] potion repr
 - [x] basic event choices
 - [x] event choice info
-- [ ] map repr: less crazy version, mark choice nodes and all reachable nodes
+- [ ] map repr: less crazy version, mark choice nodes
 - [ ] reenable path choices
 - [ ] share embeds between identical IntSpaces (key it) and EnumSpaces. (maybe even FixedVecSpace proj params for gold?)
+- [ ] map repr: mark reachable nodes from each choice
 - [ ] eliminate redundancy when showing card choices from deck
 - [ ] shop prices
 - [ ] relics repr: add counters
@@ -21,7 +22,7 @@
 - [ ] LR decay
 - [ ] exploration: make more-random states and start from them
 
-# optimization
+# throughput
 
 - [ ] multiprocessing
 
