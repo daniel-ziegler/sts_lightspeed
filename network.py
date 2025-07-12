@@ -302,7 +302,7 @@ class FixedAction(IntEnum):
 
 
 class EventFixedInfo(IntEnum):
-    NONE = auto()
+    NONE = 0
     NEOW_TEN_PERCENT_HP_LOSS = auto()
     NEOW_NO_GOLD = auto()
     NEOW_CURSE = auto()

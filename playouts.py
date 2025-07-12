@@ -1065,7 +1065,7 @@ def main(args):
         else:
             model_path = args.model_path
         # Load neural network and start service
-        net = load_net(model_path, torch_compile_mode=args.torch_compile_mode)
+        net = load_net(model_path, torch_compile_mode=args.torch_compile)
         service = NNService(
             net,
             batch_size=args.batch_size,
