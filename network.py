@@ -460,8 +460,14 @@ class NN(nn.Module):
         x = torch.cat([obs_embed, choice_embed], dim=1)
         pos_mask = torch.cat([obs_mask, choice_mask], dim=1)
 
-        for l in self.layers:
-            x = l(x, pos_mask)
+        # Use activation checkpointing for all but the last layer
+        for i, l in enumerate(self.layers):
+            if i < len(self.layers) - 1:
+                # Checkpoint all but the last layer
+                x = torch.utils.checkpoint.checkpoint(l, x, pos_mask, use_reentrant=False)
+            else:
+                # Don't checkpoint the last layer
+                x = l(x, pos_mask)
         xn = self.norm(x)
 
         action_xs = xn[:, obs_mask.size(1):, :]
