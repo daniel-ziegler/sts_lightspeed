@@ -434,24 +434,19 @@ def experiences_to_batches(experiences: List[PPOExperience], advantages: List[fl
     return batch_data
 
 
-def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig, iteration: int = -1):
+def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig, iteration: int = -1):
     """Perform one PPO training step."""
     if not experiences:
         return {}
     
-    # Determine if we have separate networks
-    separate_networks = isinstance(nets, tuple)
-    
-    if separate_networks:
+    if config.separate_networks:
         policy_net, value_net = nets
-        policy_optimizer, value_optimizer = optimizers
         device = policy_net.device
         # Set networks to training mode
         policy_net.train()
         value_net.train()
     else:
         net = nets
-        optimizer = optimizers
         device = net.device
         # Set network to training mode
         net.train()
@@ -588,30 +583,12 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
                 print(f"Advantages stats - min: {batch_advantages.min().item()}, max: {batch_advantages.max().item()}, mean: {batch_advantages.mean().item()}")
                 continue  # Skip this batch
             
-            # Backward pass
-            if separate_networks:
-                # Update policy network
-                policy_loss_total = policy_loss - config.entropy_coef * entropy
-                policy_loss_total.backward()
-                policy_grad_norm = torch.nn.utils.clip_grad_norm_(policy_net.parameters(), config.max_grad_norm)
-                policy_optimizer.step()
-                policy_optimizer.zero_grad(set_to_none=True)
-                
-                # Update value network
-                value_loss.backward()
-                value_grad_norm = torch.nn.utils.clip_grad_norm_(value_net.parameters(), config.max_grad_norm)
-                value_optimizer.step()
-                value_optimizer.zero_grad(set_to_none=True)
-                
-                # Average gradient norms for reporting
-                grad_norm = (policy_grad_norm + value_grad_norm) / 2
-            else:
-                # Single network with combined loss
-                total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
-                total_loss.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), config.max_grad_norm)
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+            # Backward pass - same logic for both separate and single networks
+            total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+            total_loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(optimizer.param_groups[0]['params'], config.max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
             
             # Accumulate losses and metrics
             total_policy_loss += policy_loss.item()
@@ -746,14 +723,12 @@ def main():
         # Create combined network wrapper
         combined_net = SeparateValuePolicy(policy_net, value_net)
         
-        # Create separate optimizers
-        policy_optimizer = torch.optim.AdamW(policy_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
-        value_optimizer = torch.optim.AdamW(value_net.parameters(), lr=config.value_lr, weight_decay=config.weight_decay)
+        # Create single optimizer using combined parameters from both networks
+        optimizer = torch.optim.AdamW(combined_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
         
         service_net = combined_net
         
         nets = (policy_net, value_net)
-        optimizers = (policy_optimizer, value_optimizer)
         print("Using separate policy and value networks with combined wrapper")
     else:
         # Create single network with value head
@@ -777,7 +752,6 @@ def main():
         optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
         
         nets = net
-        optimizers = optimizer
         service_net = net
         print("Using single network with value head")
     
@@ -832,7 +806,7 @@ def main():
             
             # Perform PPO training step
             train_start = time.time()
-            losses = ppo_train_step(nets, optimizers, experiences, advantages, returns, config)
+            losses = ppo_train_step(nets, optimizer, experiences, advantages, returns, config)
             train_time = time.time() - train_start
             
             print(f"Training completed in {train_time:.1f}s")
