@@ -62,6 +62,9 @@ class PPOConfig:
     # Logging
     log_every: int = 10
     save_every: int = 20
+    
+    # Memory profiling
+    memory_profile_iterations: int = 0  # Number of iterations to profile (0 = disabled)
 
 
 
@@ -395,11 +398,11 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
     return all_experiences, all_advantages, all_returns
 
 
-def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
+def experiences_to_batches(experiences: List[PPOExperience], advantages: List[float], returns: List[float]) -> List[dict]:
     """Convert PPO experiences to training batches."""
     batch_data = []
     
-    for exp in experiences:
+    for i, exp in enumerate(experiences):
         # Convert Choice to the same format as used in collate_fn
         choice_dict = exp.choice.as_dict()
         flat_dict = {}
@@ -422,6 +425,8 @@ def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
         # Add PPO-specific fields
         flat_dict['chosen_idx'] = exp.action_idx
         flat_dict['old_log_prob'] = exp.log_prob
+        flat_dict['advantage'] = advantages[i]
+        flat_dict['return'] = returns[i]
         flat_dict['outcome'] = 1.0  # Dummy, not used in PPO
         
         batch_data.append(flat_dict)
@@ -429,7 +434,7 @@ def experiences_to_batches(experiences: List[PPOExperience]) -> List[dict]:
     return batch_data
 
 
-def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig):
+def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig, iteration: int = -1):
     """Perform one PPO training step."""
     if not experiences:
         return {}
@@ -452,11 +457,33 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
         net.train()
     
     # Convert experiences to batches
-    batch_data = experiences_to_batches(experiences)
+    batch_data = experiences_to_batches(experiences, advantages, returns)
     
-    # Create data loader
-    dataset = torch.utils.data.TensorDataset(torch.arange(len(batch_data)))
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
+    # Create custom collate function that handles PPO fields
+    def ppo_collate_fn(batch):
+        # Extract PPO-specific fields before calling main collate_fn
+        old_log_probs = [x['old_log_prob'] for x in batch]
+        advantage_vals = [x['advantage'] for x in batch]
+        return_vals = [x['return'] for x in batch]
+        
+        # Call the main collate function
+        collated = collate_fn(batch)
+        
+        # Add PPO-specific fields
+        collated['old_log_prob'] = torch.tensor(old_log_probs, dtype=torch.float32)
+        collated['advantage'] = torch.tensor(advantage_vals, dtype=torch.float32)
+        collated['return'] = torch.tensor(return_vals, dtype=torch.float32)
+        
+        return collated
+    
+    # Create data loader with custom collate function
+    dataloader = torch.utils.data.DataLoader(
+        batch_data, 
+        batch_size=config.batch_size, 
+        shuffle=True,
+        collate_fn=ppo_collate_fn,
+        num_workers=2,
+    )
     
     total_policy_loss = 0
     total_value_loss = 0
@@ -467,13 +494,7 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
     num_batches = 0
     
     for epoch in range(config.num_epochs):
-        for batch_indices in dataloader:
-            batch_indices = batch_indices[0]
-            mini_batch = [batch_data[i] for i in batch_indices]
-            
-            # Collate mini-batch
-            collated_batch = collate_fn(mini_batch)
-            
+        for collated_batch in dataloader:
             # Move to device
             collated_batch = move_to_device(collated_batch, device)
             
@@ -487,7 +508,7 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
                 if isinstance(value_output, tuple):
                     _, new_values = value_output
                 else:
-                    new_values = torch.zeros(len(mini_batch), device=device)
+                    new_values = torch.zeros(batch_size, device=device)
             else:
                 # Single network with value head
                 output = net(collated_batch)
@@ -495,24 +516,20 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
                     new_logits, new_values = output
                 else:
                     new_logits = output
-                    new_values = torch.zeros(len(mini_batch), device=device)
+                    new_values = torch.zeros(batch_size, device=device)
             
-            # Get old log probs, advantages, target values
-            old_log_probs = torch.tensor([exp.log_prob for exp in [experiences[i] for i in batch_indices]], 
-                                       device=device, dtype=torch.float32)
-            batch_advantages = torch.tensor([advantages[i] for i in batch_indices], 
-                                    device=device, dtype=torch.float32)
-            target_values = torch.tensor([returns[i] for i in batch_indices], 
-                                       device=device, dtype=torch.float32)
-            chosen_indices = torch.tensor([exp.action_idx for exp in [experiences[i] for i in batch_indices]], 
-                                        device=device, dtype=torch.long)
+            # Get old log probs, advantages, target values from collated batch
+            old_log_probs = collated_batch['old_log_prob'].to(device)
+            batch_advantages = collated_batch['advantage'].to(device)
+            target_values = collated_batch['return'].to(device)
+            chosen_indices = collated_batch['chosen_idx'].to(device)
             
             # Compute new log probabilities with numerical stability
             action_probs = F.softmax(new_logits, dim=-1)
             action_log_probs = F.log_softmax(new_logits, dim=-1)
             
             # Get log probs for chosen actions
-            batch_size = len(mini_batch)
+            batch_size = len(collated_batch['chosen_idx'])
             batch_indices_tensor = torch.arange(batch_size, device=device)
             new_log_probs = action_log_probs[batch_indices_tensor, chosen_indices]
             
