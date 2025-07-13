@@ -575,26 +575,26 @@ def ppo_train_step(nets, optimizers, experiences: List[PPOExperience], advantage
             if separate_networks:
                 # Update policy network
                 policy_loss_total = policy_loss - config.entropy_coef * entropy
-                policy_optimizer.zero_grad()
                 policy_loss_total.backward()
                 policy_grad_norm = torch.nn.utils.clip_grad_norm_(policy_net.parameters(), config.max_grad_norm)
                 policy_optimizer.step()
+                policy_optimizer.zero_grad(set_to_none=True)
                 
                 # Update value network
-                value_optimizer.zero_grad()
                 value_loss.backward()
                 value_grad_norm = torch.nn.utils.clip_grad_norm_(value_net.parameters(), config.max_grad_norm)
                 value_optimizer.step()
+                value_optimizer.zero_grad(set_to_none=True)
                 
                 # Average gradient norms for reporting
                 grad_norm = (policy_grad_norm + value_grad_norm) / 2
             else:
                 # Single network with combined loss
                 total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
-                optimizer.zero_grad()
                 total_loss.backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), config.max_grad_norm)
                 optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
             
             # Accumulate losses and metrics
             total_policy_loss += policy_loss.item()
