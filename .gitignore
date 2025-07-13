@@ -14,6 +14,9 @@
 /small-test
 /main
 /slaythespire.cpython-310-x86_64-linux-gnu.so
+/node-modules
+package-lock.json
 .aider*
 *.parquet
 *.stats.jsonl
+*.pt
