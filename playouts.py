@@ -513,12 +513,12 @@ def load_net(model_path, device=None, torch_compile_mode='default'):
     
     net = NN(ModelHP())
     net = net.to(device)
-    if torch_compile_mode != 'no':
-        net = torch.compile(net, mode=torch_compile_mode)
     
     if model_path is not None:
         state = torch.load(model_path, map_location=device, weights_only=True)
         net = load_network_backward_compatible(net, state)
+    if torch_compile_mode != 'no':
+        net = torch.compile(net, mode=torch_compile_mode)
     net.eval()
     
     return net
