@@ -494,7 +494,7 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             collated_batch = move_to_device(collated_batch, device)
             
             # Forward pass
-            if separate_networks:
+            if config.separate_networks:
                 # Get policy logits from policy network
                 new_logits = policy_net(collated_batch)
                 
