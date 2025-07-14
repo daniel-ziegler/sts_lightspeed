@@ -23,8 +23,7 @@ class ModelHP:
 
 
 # Constants for data processing
-MAX_DECK_SIZE = 128  # Should be enough for most decks
-MAX_CHOICES = 64    # Maximum deck size for card selection screens like smithing
+MAX_DECK_SIZE = 96  # Should be enough for most decks
 MAX_UPGRADE = 21
 MAX_RELICS = 25     # Maximum number of relics a player typically has
 MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
@@ -634,12 +633,12 @@ def collate_fn(batch):
     # Create batched tensors for choices using fixed maximum sizes
     batch_choices = {
         'cards': {
-            'value': torch.full((len(batch), MAX_CHOICES, 3), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
+            'value': torch.full((len(batch), MAX_DECK_SIZE, 3), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), MAX_DECK_SIZE), dtype=torch.bool)
         },
         'relics': {
-            'value': torch.full((len(batch), MAX_CHOICES), 0, dtype=torch.int32),
-            'mask': torch.ones((len(batch), MAX_CHOICES), dtype=torch.bool)
+            'value': torch.full((len(batch), 3), 0, dtype=torch.int32),
+            'mask': torch.ones((len(batch), 3), dtype=torch.bool)
         },
         'potions': {
             'value': torch.full((len(batch), sts.MAX_POTION_CAPACITY), 0, dtype=torch.int32),
@@ -711,7 +710,7 @@ def collate_fn(batch):
         cards_upgrades = x['cards_offered.upgrades']
         select_screen_type = x['select_screen_type']
         choice_cards_len = len(cards_offered)
-        assert choice_cards_len <= MAX_CHOICES, f"Choice cards count {choice_cards_len} exceeds maximum {MAX_CHOICES}; {cards_offered}; {relics}"
+        assert choice_cards_len <= MAX_DECK_SIZE, f"Choice cards count {choice_cards_len} exceeds maximum {MAX_DECK_SIZE}; {cards_offered}; {relics}"
         if choice_cards_len > 0:
             # Create 3-tuple: (card_id, upgrade_count, select_screen_type)
             card_tuples = [(card_id, upgrade, select_screen_type) for card_id, upgrade in zip(cards_offered, cards_upgrades)]
@@ -720,7 +719,7 @@ def collate_fn(batch):
         
         relics_offered = x['relics_offered']
         choice_relics_len = len(relics_offered)
-        assert choice_relics_len <= MAX_CHOICES, f"Choice relics count {choice_relics_len} exceeds maximum {MAX_CHOICES}"
+        assert choice_relics_len <= 3, f"Choice relics count {choice_relics_len} exceeds maximum {3}"
         batch_choices['relics']['value'][i, :choice_relics_len] = torch.tensor(relics_offered, dtype=torch.int32)
         batch_choices['relics']['mask'][i, :choice_relics_len] = torch.zeros(choice_relics_len, dtype=torch.bool)
         
