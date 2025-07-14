@@ -1,4 +1,6 @@
-from typing import Any, Generic, Sequence, Union, Type, TypeVar
+from __future__ import annotations
+
+from typing import Any, Generic, Sequence, Union, Type, TypeVar, Callable
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -8,6 +10,16 @@ from torch import nn
 
 Path = Sequence[Union[str, int]]
 PathOrRemainder = Union[Path, int]
+
+class EmbedCache(dict[tuple, nn.Module]):
+    def __init__(self):
+        super().__init__()
+    
+    def build(self, space: Space, dim: int, make: Callable[[], nn.Module]) -> nn.Module:
+        if (space, dim) not in self:
+            embed = make()
+            self[(space, dim)] = embed
+        return self[(space, dim)]
 
 T = TypeVar('T')
 
@@ -20,13 +32,12 @@ class Space(Generic[T], ABC):
         """Sample a random value from this space."""
         pass
 
+    @abstractmethod
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        pass
 
 class ScalarSpace(Generic[T], Space[T]):
     """Embeds a scalar tensor into a tensor."""
-
-    @abstractmethod
-    def build_embed(self, dim: int) -> nn.Module:
-        pass
 
 
 class MaskedSpace(Generic[T], Space[T]):
@@ -37,10 +48,6 @@ class MaskedSpace(Generic[T], Space[T]):
     embedding has shape [batch, seq, dim]
     mask has shape [batch, seq]
     """
-
-    @abstractmethod
-    def build_embed(self, dim: int) -> nn.Module:
-        pass
 
     @abstractmethod
     def try_ix_to_path(self, x: T, ix: int) -> PathOrRemainder:
@@ -85,8 +92,9 @@ class EnumSpace(ScalarSpace[TEnum]):
         self.enum_class = enum_class
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return EnumEmbedding(self.enum_class, dim)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        return cache.build(self, dim, lambda: EnumEmbedding(self.enum_class, dim))
+
 
     def sample(self, rng: np.random.Generator) -> TEnum:
         values = list(self.enum_class)
@@ -98,8 +106,8 @@ class IntSpace(ScalarSpace[int]):
         self.limit = limit
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return nn.Embedding(self.limit, dim)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        return cache.build(self, dim, lambda: nn.Embedding(self.limit, dim))
 
     def sample(self, rng: np.random.Generator) -> int:
         return rng.integers(0, self.limit)
@@ -119,8 +127,8 @@ class SequenceSpace(MaskedSpace[Sequence[T]]):
         self.element_space = element_space
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return SequenceEmbedding(self.element_space.build_embed(dim))
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        return SequenceEmbedding(self.element_space.build_embed(dim, cache))
 
     def sample(self, rng: np.random.Generator) -> Sequence[T]:
         length = int(rng.exponential(10))
@@ -169,6 +177,7 @@ class SinusoidalEmbedding(nn.Module):
         # [batch_size, n_features * dim]
         return emb.reshape(x.shape[0], -1)
 
+
 class FixedVecEmbedding(nn.Module):
     def __init__(self, dim: int, limits: list[int]):
         super().__init__()
@@ -194,11 +203,12 @@ class FixedVecSpace(ScalarSpace[np.ndarray]):
         self.limits = limits
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return FixedVecEmbedding(dim, self.limits)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        return cache.build(self, dim, lambda: FixedVecEmbedding(dim, self.limits))
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         return np.array([rng.integers(0, limit) for limit in self.limits])
+
 
 class TupleAddEmbedding(nn.Module):
     """Module for embedding tuples by adding component embeddings."""
@@ -222,8 +232,8 @@ class TupleAddSpace(ScalarSpace[tuple]):
         self.spaces = spaces
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return TupleAddEmbedding(nn.ModuleList([space.build_embed(dim) for space in self.spaces]))
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        return TupleAddEmbedding(nn.ModuleList([space.build_embed(dim, cache) for space in self.spaces]))
 
     def sample(self, rng: np.random.Generator) -> tuple:
         return tuple(space.sample(rng) for space in self.spaces)
@@ -255,8 +265,8 @@ class ScalarToSequenceSpace(MaskedSpace[Any]):
         self.scalar_space = scalar_space
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        scalar_embedding = self.scalar_space.build_embed(dim)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        scalar_embedding = self.scalar_space.build_embed(dim, cache)
         return ScalarToSequenceEmbedding(scalar_embedding)
     
     def sample(self, rng: np.random.Generator) -> Any:
@@ -298,9 +308,11 @@ class DictAddSpace(ScalarSpace[dict]):
         self.spaces = spaces
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        component_embeddings = nn.ModuleDict({k: space.build_embed(dim) for k, space in self.spaces.items()})
-        return DictAddEmbedding(component_embeddings)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            component_embeddings = nn.ModuleDict({k: space.build_embed(dim, cache) for k, space in self.spaces.items()})
+            return DictAddEmbedding(component_embeddings)
+        return cache.build(self, dim, make)
     
     def sample(self, rng: np.random.Generator) -> dict:
         return {k: space.sample(rng) for k, space in self.spaces.items()}
@@ -330,6 +342,7 @@ class TupleConcatEmbedding(nn.Module):
         all_embeddings = torch.cat(embeddings, dim=1)
         return all_embeddings + position_embeddings, torch.cat(masks, dim=1)
 
+
 class DictEmbedding(nn.Module):
     """Module for embedding dictionaries by concatenating component embeddings."""
     def __init__(self, component_embeddings: nn.ModuleDict, spaces: dict, dim: int):
@@ -357,17 +370,19 @@ class DictEmbedding(nn.Module):
         all_embeddings = torch.cat(embeddings, dim=1)
         return all_embeddings + position_embeddings, torch.cat(masks, dim=1)
 
+
 class TupleConcatSpace(MaskedSpace[tuple]):
     def __init__(self, *spaces: MaskedSpace[Any]):
         self.spaces = spaces
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return TupleConcatEmbedding(nn.ModuleList([space.build_embed(dim) for space in self.spaces]), dim)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            return TupleConcatEmbedding(nn.ModuleList([space.build_embed(dim, cache) for space in self.spaces]), dim)
+        return cache.build(self, dim, make)
 
     def sample(self, rng: np.random.Generator) -> tuple:
         return tuple(space.sample(rng) for space in self.spaces)
-
 
     def try_ix_to_path(self, x: tuple, ix: int) -> PathOrRemainder:
         for i, (space, elem) in enumerate(zip(self.spaces, x)):
@@ -387,17 +402,19 @@ class TupleConcatSpace(MaskedSpace[tuple]):
             ix += space.length(x)
         return ix + self.spaces[i].path_to_ix(xs[i], subpath)
 
+
 class DictSpace(MaskedSpace[dict[str, Any]]):
     def __init__(self, spaces: dict[str, MaskedSpace[Any]]):
         self.spaces = spaces
         super().__init__()
     
-    def build_embed(self, dim: int) -> nn.Module:
-        return DictEmbedding(nn.ModuleDict({k: space.build_embed(dim) for k, space in self.spaces.items()}), self.spaces, dim)
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            return DictEmbedding(nn.ModuleDict({k: space.build_embed(dim, cache) for k, space in self.spaces.items()}), self.spaces, dim)
+        return cache.build(self, dim, make)
 
     def sample(self, rng: np.random.Generator) -> dict[str, Any]:
         return {k: v.sample(rng) for k, v in self.spaces.items()}
-
 
     def try_ix_to_path(self, x: dict[str, Any], ix: int) -> PathOrRemainder:
         for k, v in x.items():

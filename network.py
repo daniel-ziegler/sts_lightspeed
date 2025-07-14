@@ -8,7 +8,7 @@ from torch import nn
 import torch.nn.functional as F
 
 import slaythespire as sts
-from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace
+from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace, EmbedCache
 
 @dataclass
 class ModelHP:
@@ -313,10 +313,15 @@ class IsCurrentNode(IntEnum):
     NOT_CURRENT = 0
     CURRENT = 1
 
+card_space = EnumSpace(sts.CardId)
+relic_space = EnumSpace(sts.RelicId)
+potion_space = EnumSpace(sts.Potion)
+upgrade_space = IntSpace(MAX_UPGRADE)
+
 obs_space = DictSpace({
-    'deck': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE))),
-    'relics': SequenceSpace(EnumSpace(sts.RelicId)),
-    'potions': SequenceSpace(EnumSpace(sts.Potion)),
+    'deck': SequenceSpace(TupleAddSpace(card_space, upgrade_space)),
+    'relics': SequenceSpace(relic_space),
+    'potions': SequenceSpace(potion_space),
     'fixed_obs': ScalarToSequenceSpace(DictAddSpace({
         'fixed_observation': FixedVecSpace(sts.getFixedObservationMaximums()),
         'screen_state': EnumSpace(sts.ScreenState),
@@ -330,14 +335,14 @@ obs_space = DictSpace({
 })
 
 choice_space = DictSpace({
-    'cards': SequenceSpace(TupleAddSpace(EnumSpace(sts.CardId), IntSpace(MAX_UPGRADE), EnumSpace(sts.CardSelectScreenType))),
-    'relics': SequenceSpace(EnumSpace(sts.RelicId)),
-    'potions': SequenceSpace(EnumSpace(sts.Potion)),
+    'cards': SequenceSpace(TupleAddSpace(card_space, upgrade_space, EnumSpace(sts.CardSelectScreenType))),
+    'relics': SequenceSpace(relic_space),
+    'potions': SequenceSpace(potion_space),
     'fixed': SequenceSpace(DictAddSpace({
         'action': EnumSpace(FixedAction),
         'gold': FixedVecSpace([MAX_GOLD]),
-        'card': EnumSpace(sts.CardId),
-        'relic': EnumSpace(sts.RelicId),
+        'card': card_space,
+        'relic': relic_space,
         'info': EnumSpace(EventFixedInfo),
     })),
     'paths': SequenceSpace(FixedVecSpace([7])),
@@ -392,8 +397,9 @@ class NN(nn.Module):
         super().__init__()
         self.H = H
 
-        self.obs_embed = obs_space.build_embed(H.dim)
-        self.choice_embed = choice_space.build_embed(H.dim)
+        embed_cache = EmbedCache()
+        self.obs_embed = obs_space.build_embed(H.dim, embed_cache)
+        self.choice_embed = choice_space.build_embed(H.dim, embed_cache)
         
         self.layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.n_layers)])
 
