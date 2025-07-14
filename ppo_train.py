@@ -704,6 +704,7 @@ def main():
             # Load from specific iteration checkpoints
             policy_path = f"{args.save_path}.policy.iter_{config.resume_from_step}"
             value_path = f"{args.save_path}.value.iter_{config.resume_from_step}"
+            optimizer_path = f"{args.save_path}.optimizer.iter_{config.resume_from_step}"
             policy_state = torch.load(policy_path, map_location=device, weights_only=True)
             value_state = torch.load(value_path, map_location=device, weights_only=True)
             policy_net = load_network_backward_compatible(policy_net, policy_state)
@@ -725,6 +726,16 @@ def main():
         
         # Create single optimizer using combined parameters from both networks
         optimizer = torch.optim.AdamW(combined_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
+        
+        # Load optimizer state if resuming
+        if config.resume_from_step > 0:
+            optimizer_path = f"{args.save_path}.optimizer.iter_{config.resume_from_step}"
+            try:
+                optimizer_state = torch.load(optimizer_path, map_location=device, weights_only=True)
+                optimizer.load_state_dict(optimizer_state)
+                print(f"Loaded optimizer state from {optimizer_path}")
+            except FileNotFoundError:
+                print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
         
         service_net = combined_net
         
@@ -750,6 +761,16 @@ def main():
         
         # Create optimizer
         optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
+        
+        # Load optimizer state if resuming
+        if config.resume_from_step > 0:
+            optimizer_path = f"{args.save_path}.optimizer.iter_{config.resume_from_step}"
+            try:
+                optimizer_state = torch.load(optimizer_path, map_location=device, weights_only=True)
+                optimizer.load_state_dict(optimizer_state)
+                print(f"Loaded optimizer state from {optimizer_path}")
+            except FileNotFoundError:
+                print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
         
         nets = net
         service_net = net
@@ -844,11 +865,17 @@ def main():
             if (iteration + 1) % config.save_every == 0:
                 if config.separate_networks:
                     policy_net, value_net = nets
+                    # Save model states
                     torch.save(policy_net.state_dict(), f"{args.save_path}.policy.iter_{iteration + 1}")
                     torch.save(value_net.state_dict(), f"{args.save_path}.value.iter_{iteration + 1}")
+                    # Save optimizer state
+                    torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer.iter_{iteration + 1}")
                     print(f"Saved separate network checkpoints at iteration {iteration + 1}")
                 else:
+                    # Save model state
                     torch.save(nets.state_dict(), f"{args.save_path}.iter_{iteration + 1}")
+                    # Save optimizer state
+                    torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer.iter_{iteration + 1}")
                     print(f"Saved model checkpoint at iteration {iteration + 1}")
     
     finally:
@@ -859,9 +886,11 @@ def main():
         policy_net, value_net = nets
         torch.save(policy_net.state_dict(), f"{args.save_path}.policy")
         torch.save(value_net.state_dict(), f"{args.save_path}.value")
+        torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer")
         print(f"Saved final separate networks to {args.save_path}.policy and {args.save_path}.value")
     else:
         torch.save(nets.state_dict(), args.save_path)
+        torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer")
         print(f"Saved final model to {args.save_path}")
 
 
