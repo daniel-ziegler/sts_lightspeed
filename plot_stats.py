@@ -24,16 +24,14 @@ import os
 
 # Define files to load - add your stats files here
 stats_files = [
-    'paths.pt.stats.jsonl',
-    # Add more files like:
-    # 'other_run.stats.jsonl',
-    # 'experiment2.stats.jsonl',
+    'controlledshare.pt.stats.jsonl',
+    'shared.pt.stats.jsonl',
+    '0layer.pt.stats.jsonl',
+    'lowdec.pt.stats.jsonl',
 ]
 
 # Auto-discover stats files if they exist
-auto_files = glob.glob('*.stats.jsonl')
-if auto_files:
-    stats_files = auto_files
+#stats_files = glob.glob('*.stats.jsonl')
 
 # Color palette for different runs
 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']

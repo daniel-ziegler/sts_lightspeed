@@ -967,7 +967,7 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
         except Exception:
             raise
 
-    print(gc.outcome, gc.floor_num)
+    print(seed, gc.outcome, gc.floor_num)
     return (choices, gc.outcome, gc.floor_num)
 
 def run_game_data(seed: int, net: Optional[NNService] = None, temperature: float = 1.0, stats: ChoiceStats = None):

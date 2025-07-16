@@ -88,6 +88,7 @@ class PPOExperience(NamedTuple):
 
 class PPOTrajectory(NamedTuple):
     """Complete game trajectory."""
+    seed: int
     experiences: List[PPOExperience]
     rewards: List[float]  # Reward for each step
     values: List[float]   # Value prediction for each step
@@ -256,6 +257,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -
     # Values were collected during the episode
     
     return PPOTrajectory(
+        seed=seed,
         experiences=experiences,
         rewards=rewards,
         values=values,
@@ -327,7 +329,7 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
         
         # Debug output for random trajectory
         if debug_traj and traj_idx == debug_traj_idx:
-            print(f"=== PPO Advantage Calculation Debug (Random Trajectory {traj_idx}) ===")
+            print(f"=== PPO Advantage Calculation Debug (seed {traj.seed}) ===")
             print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
@@ -656,6 +658,41 @@ def main():
             help=f'PPO config: {field.name} (default: {default_value})'
         )
     
+    # Add ModelHP fields as command line arguments with --model.* prefix
+    model_hp_defaults = ModelHP()
+    model_hp_type_hints = get_type_hints(ModelHP)
+    
+    for field in fields(ModelHP):
+        field_name = f'model.{field.name.replace("_", "-")}'
+        default_value = getattr(model_hp_defaults, field.name)
+        field_type = model_hp_type_hints[field.name]
+        
+        # Handle Optional types
+        if hasattr(field_type, '__origin__') and field_type.__origin__ is Union:
+            # For Optional[T] (which is Union[T, None]), get the non-None type
+            non_none_types = [t for t in field_type.__args__ if t is not type(None)]
+            field_type = non_none_types[0] if non_none_types else str
+        
+        # Map to argparse-compatible types
+        if field_type == int:
+            arg_type = int
+        elif field_type == float:
+            arg_type = float
+        elif field_type == str:
+            arg_type = str
+        elif field_type == bool:
+            arg_type = bool
+        else:
+            # Fallback to the type of the default value
+            arg_type = type(default_value)
+        
+        parser.add_argument(
+            f'--{field_name}',
+            type=arg_type,
+            default=default_value,
+            help=f'Model hyperparameter: {field.name} (default: {default_value})'
+        )
+    
     args = parser.parse_args()
     
     # Configure logging - default level is WARNING, set to INFO to see Perfected Strike logs
@@ -676,6 +713,14 @@ def main():
         config_kwargs[field.name] = getattr(args, field_name.replace('-', '_'))
     config = PPOConfig(**config_kwargs)
     
+    # Create ModelHP from parsed arguments
+    model_hp_kwargs = {}
+    for field in fields(ModelHP):
+        field_name = f'model.{field.name.replace("_", "-")}'
+        arg_name = field_name.replace('-', '_')  # argparse converts dashes to underscores but keeps dots
+        model_hp_kwargs[field.name] = getattr(args, arg_name)
+    model_hp_base = ModelHP(**model_hp_kwargs)
+    
     # Select reward function
     if args.reward_function == 'smooth':
         reward_fn = compute_progress_reward
@@ -693,8 +738,13 @@ def main():
     # Create networks based on configuration
     if config.separate_networks:
         # Create separate policy and value networks
-        policy_hp = ModelHP(use_value_head=False)
-        value_hp = ModelHP(use_value_head=True)
+        policy_hp_kwargs = {k: v for k, v in model_hp_kwargs.items()}
+        policy_hp_kwargs['use_value_head'] = False
+        policy_hp = ModelHP(**policy_hp_kwargs)
+        
+        value_hp_kwargs = {k: v for k, v in model_hp_kwargs.items()}
+        value_hp_kwargs['use_value_head'] = True
+        value_hp = ModelHP(**value_hp_kwargs)
         
         policy_net = NN(policy_hp).to(device)
         value_net = NN(value_hp).to(device)
@@ -743,7 +793,9 @@ def main():
         print("Using separate policy and value networks with combined wrapper")
     else:
         # Create single network with value head
-        model_hp = ModelHP(use_value_head=True)
+        single_hp_kwargs = {k: v for k, v in model_hp_kwargs.items()}
+        single_hp_kwargs['use_value_head'] = True
+        model_hp = ModelHP(**single_hp_kwargs)
         net = NN(model_hp).to(device)
         
         

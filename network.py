@@ -18,7 +18,6 @@ class ModelHP:
     n_heads: int = 8
     norm_eps: float = 1e-5
     n_fixed_obs: int = len(sts.getFixedObservationMaximums())
-    max_relics: int = 25  # Maximum number of relics a player typically has
     use_value_head: bool = False  # Add value head for PPO training
 
 
