@@ -16,14 +16,24 @@
 - [ ] relics repr: add counters
 - [ ] history repr: list of enemies, events, history of rares and potions being offered
 
-# RL
+# learning
 
-- [ ] sensitivity.py to analyze behavior and make sure inputs work
+## aux losses
+- [ ] PPG
+- [ ] winprob
+- [ ] HP loss conditioned on enemy: extra seq item that is masked in attention
+- [ ] how many E, R, ?, $ are on min and max paths starting from each possible path
+
+## tuning
 - [ ] LR decay
+
+## RL
 - [ ] exploration: make more-random states and start from them
 
-# throughput
+## debugging
+- [ ] sensitivity.py to analyze behavior and make sure inputs work
 
+# throughput
 - [ ] multiprocessing
 
 
