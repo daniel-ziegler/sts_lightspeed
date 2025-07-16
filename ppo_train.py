@@ -43,7 +43,7 @@ class PPOConfig:
     clip_ratio: float = 0.2
     entropy_coef: float = 0.01
     value_coef: float = 0.5
-    max_grad_norm: float = 1.0
+    max_grad_norm: float = 5.0
     
     # Learning rates
     policy_lr: float = 5e-5
