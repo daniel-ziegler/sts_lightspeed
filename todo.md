@@ -9,7 +9,7 @@
 - [x] event choice info
 - [x] map repr: less crazy version
 - [x] reenable path choices
-- [ ] share embeds between identical IntSpaces (key it) and EnumSpaces. (maybe even FixedVecSpace proj params for gold?)
+- [x] share embeds between identical IntSpaces (key it) and EnumSpaces. (maybe even FixedVecSpace proj params for gold?)
 - [ ] map repr: mark reachable nodes from each choice
 - [ ] eliminate redundancy when showing card choices from deck
 - [ ] shop prices
