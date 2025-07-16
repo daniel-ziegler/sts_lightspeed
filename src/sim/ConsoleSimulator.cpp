@@ -300,7 +300,7 @@ void ConsoleSimulator::printBossRelicRewardsActions(std::ostream &os) const {
 
 GameAction ConsoleSimulator::parseBossRelicRewardsAction(const std::string &action) {
     int idx = std::stoi(action);
-    return GameAction(idx);
+    return GameAction(GameAction::RewardsActionType::RELIC, idx);
 }
 
 void ConsoleSimulator::printRestRoomActions(std::ostream &os) const {
