@@ -197,10 +197,7 @@ class UnifiedTrainer:
     
     def policy_phase_update(self, experiences: List[Experience], advantages: List[float], returns: List[float]) -> Dict[str, float]:
         """Perform policy phase update (PPO training step)."""
-        if not experiences:
-            return {'policy_loss': 0.0, 'value_loss': 0.0, 'entropy': 0.0}
-        
-        # Convert experiences to batches
+
         batch_data = experiences_to_batches(experiences, advantages, returns)
         
         # Create data loader
@@ -219,12 +216,7 @@ class UnifiedTrainer:
         total_clipfrac = 0.0
         num_batches = 0
         
-        # Set networks to training mode
-        if self.config.separate_networks:
-            self.policy_net.train()
-            self.value_net.train()
-        else:
-            self.net.train()
+        self.net.train()
         
         for epoch in range(self.config.num_epochs):
             for collated_batch in dataloader:
@@ -336,24 +328,17 @@ class UnifiedTrainer:
     
     def auxiliary_phase_update(self) -> Dict[str, float]:
         """Perform auxiliary phase update (PPG-specific)."""
-        if not self.config.is_ppg_mode or len(self.trajectory_buffer) == 0:
-            return {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
+        assert self.config.is_ppg_mode, "Auxiliary phase update only supported in PPG mode"
         
         # Collect all trajectories from buffer for data diversity
         all_trajectories = []
         for trajectory_batch in self.trajectory_buffer:
             all_trajectories.extend(trajectory_batch)
         
-        if len(all_trajectories) == 0:
-            return {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
-        
         # Compute advantages for auxiliary phase trajectories
         all_experiences, advantages, returns = compute_advantages_for_trajectories(
             all_trajectories, self.config.gamma, self.config.gae_lambda
         )
-        
-        if len(all_experiences) == 0:
-            return {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
         
         # Convert to training format
         batch_data = experiences_to_batches(all_experiences, advantages, returns)
@@ -372,12 +357,7 @@ class UnifiedTrainer:
         total_bc_loss = 0.0
         num_batches = 0
         
-        # Set networks to training mode
-        if self.config.separate_networks:
-            self.policy_net.train()
-            self.value_net.train()
-        else:
-            self.net.train()
+        self.net.train()
         
         for epoch in range(self.config.n_aux_epochs):
             for collated_batch in dataloader:
@@ -541,10 +521,6 @@ class UnifiedTrainer:
                 experiences, advantages, returns = compute_advantages_for_trajectories(
                     trajectories, self.config.gamma, self.config.gae_lambda
                 )
-                
-                if not experiences:
-                    print("No experiences to train on, skipping iteration")
-                    continue
                 
                 print(f"Training on {len(experiences)} experiences")
                 

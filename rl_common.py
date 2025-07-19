@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import List, NamedTuple, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
 
 import numpy as np
 import torch
@@ -233,6 +234,60 @@ def collect_experience(num_games: int, num_workers: int, service: NNService, rew
     return trajectories
 
 
+def print_traj(traj: Trajectory, advantages: List[float], returns: List[float]):
+    print(f"=== PPO Advantage Calculation Debug (seed {traj.seed}) ===")
+    print(f"Trajectory length: {len(traj.experiences)} steps")
+    print(f"Step | {'State':13s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
+    print("-" * 120)
+    
+    for t in range(len(traj.experiences)):
+        exp = traj.experiences[t]
+        
+        # Get choice summary - what was offered
+        offered_items = []
+        if exp.choice.cards_offered:
+            offered_items.append(f"{len(exp.choice.cards_offered)}card")
+        if exp.choice.relics_offered:
+            offered_items.append(f"{len(exp.choice.relics_offered)}rel")
+        if exp.choice.potions_offered:
+            offered_items.append(f"{len(exp.choice.potions_offered)}pot")
+        if exp.choice.fixed_actions:
+            offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
+        if exp.choice.paths_offered:
+            offered_items.append(f"{len(exp.choice.paths_offered)}path")
+        
+        choice_desc = f"{'+'.join(offered_items)}" if offered_items else "none"
+        
+        # Get action description - use the clean description generated during experience collection
+        action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
+        
+        # Create state string: 18: 20/72hp format
+        state_str = f"{exp.metrics.floor_num:>2}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
+        
+        print(f"{t:4d} | {state_str:13s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {traj.rewards[t]:6.3f} | {exp.value:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
+    
+    print("-" * 120)
+    print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
+    final_metrics = traj.final_metrics
+    final_state = f"{final_metrics.floor_num}: {final_metrics.cur_hp}/{final_metrics.max_hp}hp"
+    print(f"Final reward: {traj.final_reward:.3f}, Final state: {final_state}")
+    
+    # Show final deck and relics
+    print(f"Final deck ({len(traj.final_deck)} cards):")
+    deck_summary = Counter(str(card) for card in traj.final_deck)
+    for card_str, count in deck_summary.most_common():
+        if count > 1:
+            print(f"  {count}x {card_str}")
+        else:
+            print(f"  {card_str}")
+    
+    print(f"Final relics ({len(traj.final_relics)}):") 
+    for relic in traj.final_relics:
+        print(f"  {relic.id}")
+    
+    print("=" * 80)
+
+
 def compute_gae(rewards: List[float], values: List[float], gamma: float, gae_lambda: float) -> Tuple[List[float], List[float]]:
     """Compute Generalized Advantage Estimation."""
     advantages = []
@@ -254,13 +309,18 @@ def compute_advantages_for_trajectories(trajectories: List[Trajectory], gamma: f
     all_experiences = []
     all_advantages = []
     all_returns = []
+
+    print_traj_index = random.randrange(len(trajectories))
     
-    for traj in trajectories:
+    for traj_idx, traj in enumerate(trajectories):
         if not traj.experiences:
             continue
             
         # Compute GAE for this trajectory
         advantages, returns = compute_gae(traj.rewards, traj.values, gamma, gae_lambda)
+
+        if traj_idx == print_traj_index:
+            print_traj(traj, advantages, returns)
         
         # Normalize advantages for this trajectory
         if len(advantages) > 1:
