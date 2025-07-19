@@ -835,18 +835,25 @@ class SeparateValuePolicy(nn.Module):
         self.policy_net = policy_net
         self.value_net = value_net
         
-        # Ensure networks have correct configurations
-        if policy_net.H.use_value_head:
-            raise ValueError("Policy network should not have value head when using separate networks")
+        # Validate network configurations
         if not value_net.H.use_value_head:
             raise ValueError("Value network should have value head when using separate networks")
+        
+        # Policy network may or may not have value head (PPG vs PPO)
+        self.policy_has_value_head = policy_net.H.use_value_head
     
     def forward(self, batch: dict):
         """Forward pass that combines policy and value outputs."""
-        # Get policy logits
-        policy_logits = self.policy_net(batch)
+        # Get policy output
+        policy_output = self.policy_net(batch)
+        if self.policy_has_value_head:
+            # Policy network with auxiliary value head (PPG mode)
+            policy_logits, policy_aux_values = policy_output
+        else:
+            # Policy network without value head (PPO mode)
+            policy_logits = policy_output
         
-        # Get value prediction - value network returns (logits, values) tuple
+        # Get value prediction from value network
         value_output = self.value_net(batch)
         _, values = value_output  # Extract values from tuple
         

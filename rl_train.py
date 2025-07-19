@@ -54,6 +54,7 @@ class RLConfig:
     
     # PPO/PPG shared parameters
     learning_rate: float = 3e-4
+    weight_decay: float = 1e-2
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_coef: float = 0.2
@@ -66,7 +67,14 @@ class RLConfig:
     
     # PPG-specific parameters  
     policy_reg_coef: float = 0.5      # KL regularization coefficient for auxiliary phase
-    data_diversity_buffer_size: int = 10  # Number of experience batches to keep for diversity
+    behavioral_cloning_coef: float = 1.0  # Behavioral cloning coefficient for auxiliary phase
+    data_diversity_buffer_size: int = 10  # Number of trajectory batches to keep for diversity
+    
+    # PPG Reloaded enhancements
+    adaptive_kl_reg: bool = False     # Enable adaptive KL regularization
+    kl_target: float = 0.01           # Target KL divergence for adaptive regularization
+    kl_adapt_rate: float = 1.5        # Adaptation rate for KL coefficient
+    reduced_aux_frequency: bool = True  # Use reduced auxiliary phase frequency for efficiency
     
     # Network settings
     separate_networks: bool = False    # Use separate policy and value networks
@@ -114,10 +122,11 @@ class UnifiedTrainer:
         if self.config.separate_networks:
             self.optimizer = torch.optim.AdamW(
                 list(self.policy_net.parameters()) + list(self.value_net.parameters()),
-                lr=config.learning_rate
+                lr=config.learning_rate,
+                weight_decay=config.weight_decay,
             )
         else:
-            self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=config.learning_rate)
+            self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         
         # Initialize service
         self.service = NNService(
@@ -131,8 +140,8 @@ class UnifiedTrainer:
         if torch_compile_mode != 'no':
             self.net = torch.compile(self.net, mode=torch_compile_mode)
         
-        # PPG-specific: experience buffer for data diversity
-        self.experience_buffer = []
+        # PPG-specific: trajectory buffer for data diversity
+        self.trajectory_buffer = []
         
         # Logging
         if TENSORBOARD_AVAILABLE:
@@ -142,6 +151,9 @@ class UnifiedTrainer:
         
         # Training state
         self.iteration = config.resume_from_step
+        
+        # PPG Reloaded: adaptive KL regularization
+        self.current_kl_coef = config.policy_reg_coef
         
         print(f"Initialized trainer in {'PPG' if config.is_ppg_mode else 'PPO'} mode on {self.device}")
     
@@ -157,10 +169,12 @@ class UnifiedTrainer:
         
         if self.config.separate_networks:
             # Create separate policy and value networks
+            # For PPG, policy network needs auxiliary value head for joint training
+            policy_needs_value_head = self.config.is_ppg_mode
             policy_hp = ModelHP(
                 dim=self.config.model_dim,
                 n_layers=self.config.model_layers,
-                use_value_head=False,  # Policy network without value head
+                use_value_head=policy_needs_value_head,  # PPG needs auxiliary value head
                 num_value_layers=self.config.num_value_layers,
                 value_fork_layer=self.config.value_fork_layer,
             )
@@ -220,7 +234,13 @@ class UnifiedTrainer:
                 # Forward pass
                 if self.config.separate_networks:
                     # Get policy logits from policy network
-                    new_logits = self.policy_net(collated_batch)
+                    policy_output = self.policy_net(collated_batch)
+                    if isinstance(policy_output, tuple):
+                        # PPG mode: policy network has auxiliary value head
+                        new_logits, _ = policy_output  # Ignore aux values in policy phase
+                    else:
+                        # PPO mode: policy network only outputs logits
+                        new_logits = policy_output
                     
                     # Get values from value network
                     value_output = self.value_net(collated_batch)
@@ -316,20 +336,26 @@ class UnifiedTrainer:
     
     def auxiliary_phase_update(self) -> Dict[str, float]:
         """Perform auxiliary phase update (PPG-specific)."""
-        if not self.config.is_ppg_mode or len(self.experience_buffer) == 0:
-            return {'aux_value_loss': 0.0, 'kl_loss': 0.0}
+        if not self.config.is_ppg_mode or len(self.trajectory_buffer) == 0:
+            return {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
         
-        # Collect all experiences from buffer for data diversity
-        all_experiences = []
-        for batch in self.experience_buffer:
-            all_experiences.extend(batch)
+        # Collect all trajectories from buffer for data diversity
+        all_trajectories = []
+        for trajectory_batch in self.trajectory_buffer:
+            all_trajectories.extend(trajectory_batch)
+        
+        if len(all_trajectories) == 0:
+            return {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
+        
+        # Compute advantages for auxiliary phase trajectories
+        all_experiences, advantages, returns = compute_advantages_for_trajectories(
+            all_trajectories, self.config.gamma, self.config.gae_lambda
+        )
         
         if len(all_experiences) == 0:
-            return {'aux_value_loss': 0.0, 'kl_loss': 0.0}
+            return {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
         
         # Convert to training format
-        advantages = [0.0] * len(all_experiences)  # Dummy advantages for auxiliary phase
-        returns = [exp.value for exp in all_experiences]  # Use stored values as targets
         batch_data = experiences_to_batches(all_experiences, advantages, returns)
         
         # Create data loader
@@ -343,6 +369,7 @@ class UnifiedTrainer:
         
         total_aux_value_loss = 0.0
         total_kl_loss = 0.0
+        total_bc_loss = 0.0
         num_batches = 0
         
         # Set networks to training mode
@@ -370,21 +397,35 @@ class UnifiedTrainer:
                     old_policy_probs = F.softmax(old_logits, dim=-1)
                 
                 # Forward pass for auxiliary phase
+                target_values = collated_batch['return']
+                old_log_probs = collated_batch['old_log_prob']
+                chosen_indices = collated_batch['chosen_idx']
+                
                 if self.config.separate_networks:
-                    # Update value network
+                    # PPG: Joint training of both networks
+                    # Get value network output
                     value_output = self.value_net(collated_batch)
                     if isinstance(value_output, tuple):
-                        _, aux_values = value_output
+                        _, value_net_values = value_output
                     else:
-                        aux_values = torch.zeros(len(collated_batch['chosen_idx']), device=self.device)
+                        value_net_values = torch.zeros(len(chosen_indices), device=self.device)
                     
-                    # Update policy network's auxiliary value head (if it has one)
+                    # Get policy network output (includes auxiliary value head in PPG mode)
                     policy_output = self.policy_net(collated_batch)
                     if isinstance(policy_output, tuple):
                         new_logits, policy_aux_values = policy_output
                     else:
                         new_logits = policy_output
-                        policy_aux_values = None
+                        policy_aux_values = torch.zeros(len(chosen_indices), device=self.device)
+                    
+                    # Value losses: train both value network and policy auxiliary head
+                    value_net_loss = F.mse_loss(value_net_values, target_values)
+                    if policy_aux_values is not None and policy_aux_values.numel() > 0:
+                        policy_aux_loss = F.mse_loss(policy_aux_values, target_values)
+                    else:
+                        policy_aux_loss = torch.tensor(0.0, device=self.device)
+                    
+                    aux_value_loss = value_net_loss + policy_aux_loss
                 else:
                     # Single network
                     output = self.net(collated_batch)
@@ -392,12 +433,10 @@ class UnifiedTrainer:
                         new_logits, aux_values = output
                     else:
                         new_logits = output
-                        aux_values = torch.zeros(len(collated_batch['chosen_idx']), device=self.device)
-                
-                target_values = collated_batch['return']
-                
-                # Auxiliary value loss
-                aux_value_loss = F.mse_loss(aux_values, target_values)
+                        aux_values = torch.zeros(len(chosen_indices), device=self.device)
+                    
+                    # Auxiliary value loss
+                    aux_value_loss = F.mse_loss(aux_values, target_values)
                 
                 # KL regularization to prevent policy drift
                 new_policy_probs = F.softmax(new_logits, dim=-1)
@@ -407,8 +446,38 @@ class UnifiedTrainer:
                     reduction='batchmean'
                 )
                 
-                # Combined auxiliary loss
-                total_aux_loss = aux_value_loss + self.config.policy_reg_coef * kl_loss
+                # PPG Reloaded: Adaptive KL regularization
+                if self.config.adaptive_kl_reg:
+                    # Adapt KL coefficient based on measured KL divergence
+                    kl_value = kl_loss.item()
+                    if kl_value > self.config.kl_target:
+                        # KL too high, increase regularization
+                        self.current_kl_coef *= self.config.kl_adapt_rate
+                    elif kl_value < self.config.kl_target * 0.5:
+                        # KL too low, decrease regularization
+                        self.current_kl_coef /= self.config.kl_adapt_rate
+                    
+                    # Clamp to reasonable bounds
+                    self.current_kl_coef = torch.clamp(torch.tensor(self.current_kl_coef), 0.1, 10.0).item()
+                    
+                    effective_kl_coef = self.current_kl_coef
+                else:
+                    effective_kl_coef = self.config.policy_reg_coef
+                
+                # Behavioral cloning loss (PPG component)
+                # Compute log probs for chosen actions
+                action_log_probs = F.log_softmax(new_logits, dim=-1)
+                batch_size = len(chosen_indices)
+                batch_indices_tensor = torch.arange(batch_size, device=self.device)
+                new_log_probs = action_log_probs[batch_indices_tensor, chosen_indices]
+                
+                # BC loss: minimize negative log likelihood of old actions
+                bc_loss = -new_log_probs.mean()
+                
+                # Combined auxiliary loss (PPG Reloaded formulation)
+                total_aux_loss = (aux_value_loss + 
+                                effective_kl_coef * kl_loss + 
+                                self.config.behavioral_cloning_coef * bc_loss)
                 
                 # Backward pass
                 self.optimizer.zero_grad()
@@ -418,12 +487,20 @@ class UnifiedTrainer:
                 
                 total_aux_value_loss += aux_value_loss.item()
                 total_kl_loss += kl_loss.item()
+                total_bc_loss += bc_loss.item()
                 num_batches += 1
         
-        return {
+        metrics = {
             'aux_value_loss': total_aux_value_loss / max(num_batches, 1),
             'kl_loss': total_kl_loss / max(num_batches, 1),
+            'bc_loss': total_bc_loss / max(num_batches, 1),
         }
+        
+        # Add adaptive KL coefficient to metrics
+        if self.config.adaptive_kl_reg:
+            metrics['adaptive_kl_coef'] = self.current_kl_coef
+        
+        return metrics
     
     def train(self):
         """Main training loop supporting both PPO and PPG."""
@@ -475,20 +552,26 @@ class UnifiedTrainer:
                 train_start = time.time()
                 policy_metrics = self.policy_phase_update(experiences, advantages, returns)
                 
-                # PPG: Add experiences to buffer and run auxiliary phase
+                # PPG: Add trajectories to buffer and run auxiliary phase
                 if self.config.is_ppg_mode:
-                    # Add to experience buffer for data diversity
-                    self.experience_buffer.append(experiences)
-                    if len(self.experience_buffer) > self.config.data_diversity_buffer_size:
-                        self.experience_buffer.pop(0)
+                    # Add trajectories to buffer for data diversity (preserving trajectory structure)
+                    self.trajectory_buffer.append(trajectories)
+                    if len(self.trajectory_buffer) > self.config.data_diversity_buffer_size:
+                        self.trajectory_buffer.pop(0)
                     
                     # Run auxiliary phase every N policy iterations
-                    if (iteration + 1) % self.config.n_policy_iterations == 0:
+                    # PPG Reloaded: Use reduced frequency for computational efficiency
+                    aux_frequency = self.config.n_policy_iterations
+                    if self.config.reduced_aux_frequency:
+                        # Double the frequency for efficiency (run less often)
+                        aux_frequency = max(1, self.config.n_policy_iterations * 2)
+                    
+                    if (iteration + 1) % aux_frequency == 0:
                         aux_metrics = self.auxiliary_phase_update()
                     else:
-                        aux_metrics = {'aux_value_loss': 0.0, 'kl_loss': 0.0}
+                        aux_metrics = {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
                 else:
-                    aux_metrics = {'aux_value_loss': 0.0, 'kl_loss': 0.0}
+                    aux_metrics = {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
                 
                 train_time = time.time() - train_start
                 
@@ -500,7 +583,8 @@ class UnifiedTrainer:
                 
                 if self.config.is_ppg_mode:
                     print(f"Aux value loss: {aux_metrics['aux_value_loss']:.4f}, "
-                          f"KL loss: {aux_metrics['kl_loss']:.4f}")
+                          f"KL loss: {aux_metrics['kl_loss']:.4f}, "
+                          f"BC loss: {aux_metrics['bc_loss']:.4f}")
                 
                 # Create stats
                 stats = {
@@ -530,6 +614,9 @@ class UnifiedTrainer:
                     if self.config.is_ppg_mode:
                         self.writer.add_scalar('Loss/AuxValueLoss', aux_metrics['aux_value_loss'], iteration + 1)
                         self.writer.add_scalar('Loss/KLLoss', aux_metrics['kl_loss'], iteration + 1)
+                        self.writer.add_scalar('Loss/BCLoss', aux_metrics['bc_loss'], iteration + 1)
+                        if 'adaptive_kl_coef' in aux_metrics:
+                            self.writer.add_scalar('PPG/AdaptiveKLCoef', aux_metrics['adaptive_kl_coef'], iteration + 1)
                 
                 # Save checkpoint
                 if (iteration + 1) % self.config.save_every == 0:
@@ -614,7 +701,13 @@ def main():
             config_kwargs['n_policy_iterations'] = 4  # Default PPG setting
         if config_kwargs['n_aux_epochs'] == 0:
             config_kwargs['n_aux_epochs'] = 2  # Reduced from original PPG
-        print("Configured for PPG mode (with auxiliary phase)")
+        
+        # PPG Reloaded defaults
+        config_kwargs['adaptive_kl_reg'] = True  # Enable adaptive KL by default
+        config_kwargs['policy_reg_coef'] = 1.0   # Stronger regularization
+        config_kwargs['reduced_aux_frequency'] = True  # Computational efficiency
+        
+        print("Configured for PPG mode with PPG Reloaded enhancements")
     
     config = RLConfig(**config_kwargs)
     
