@@ -20,7 +20,7 @@ from tqdm.auto import tqdm
 
 import slaythespire as sts
 from network import move_to_device, collate_fn
-from playouts import NNService, construct_choice, Choice, path_to_action_and_desc, choice_space
+from playouts import NNServiceManager, construct_choice, Choice, path_to_action_and_desc, choice_space
 
 
 @dataclass
@@ -78,7 +78,7 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
-def run_episode(seed: int, service: NNService, reward_fn, battle_executor, max_floor: int | None = None) -> Trajectory:
+def run_episode(seed: int, service_client, reward_fn, battle_executor, max_floor: int | None = None) -> Trajectory:
     """Run a complete game episode and collect experience."""
     if max_floor is None:
         max_floor = 100
@@ -116,7 +116,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, max_f
                     
                     if total_choices > 1:
                         # Get network predictions
-                        batch_tensors, output = service.get_logits(choice)
+                        batch_tensors, output = service_client.get_logits(choice)
                         
                         # Handle value head output
                         if isinstance(output, tuple):
@@ -208,24 +208,30 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, max_f
     )
 
 
-def collect_experience(num_games: int, num_workers: int, service: NNService, reward_fn, start_seed: int = 0, max_floor: int = 3) -> List[Trajectory]:
+def collect_experience(num_games: int, num_workers: int, service: NNServiceManager, reward_fn, start_seed: int = 0, max_floor: int = 3) -> List[Trajectory]:
     """Collect experience from multiple game episodes."""
     trajectories = []
     
     if num_workers == 1:
         # Single-threaded execution
+        client = service.create_client()
         with ThreadPoolExecutor(max_workers=1) as battle_executor:
             for i in tqdm(range(num_games), desc="Collecting experience"):
-                trajectory = run_episode(start_seed + i, service, reward_fn, battle_executor, max_floor)
+                trajectory = run_episode(start_seed + i, client, reward_fn, battle_executor, max_floor)
                 trajectories.append(trajectory)
     else:
-        # Multi-threaded execution
+        # Multi-threaded execution - each thread gets its own client
         with ThreadPoolExecutor(max_workers=num_workers) as battle_executor:
             with ThreadPoolExecutor(max_workers=num_workers) as main_executor:
-                futures = [
-                    main_executor.submit(run_episode, start_seed + i, service, reward_fn, battle_executor, max_floor)
-                    for i in range(num_games)
-                ]
+                # Create clients for each worker
+                clients = [service.create_client() for _ in range(num_workers)]
+                
+                futures = []
+                for i in range(num_games):
+                    client = clients[i % num_workers]  # Round-robin client assignment
+                    futures.append(
+                        main_executor.submit(run_episode, start_seed + i, client, reward_fn, battle_executor, max_floor)
+                    )
                 
                 for future in tqdm(as_completed(futures), total=num_games, desc="Collecting experience"):
                     trajectory = future.result()

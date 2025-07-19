@@ -6,8 +6,10 @@ import copy
 from enum import IntEnum, auto
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue, Empty
-from threading import Thread, Event, Timer
+import multiprocessing as mp
+from multiprocessing import Process, Queue, Event
+from queue import Empty
+from threading import Timer
 from typing import NamedTuple, Optional, List
 import time
 import threading
@@ -523,120 +525,268 @@ def load_net(model_path, device=None, torch_compile_mode='default'):
     
     return net
 
-class NNRequest(NamedTuple):
-    choice: Choice
-    response_queue: Queue
+@dataclass
+class NNRequest:
+    request_id: str
+    choice_data: dict  # Serialized choice data
+    worker_id: int
 
-class NNService:
-    """Background service that batches neural network inference requests"""
-    def __init__(self, net: NN, batch_size=32, max_wait_time=0.01, batch_size_factor=8, torch_compile_mode='default'):
-        # Create a separate copy of the network for inference to avoid CUDA graph conflicts
-        self.net = self._clone_network(net, torch_compile_mode)
+@dataclass 
+class NNResponse:
+    request_id: str
+    result: tuple  # (batch_tensors, output) tuple
+    worker_id: int
+
+@dataclass
+class WeightUpdate:
+    state_dict: dict  # CPU state dict
+
+class NNWorkerProcess:
+    """GPU process that handles neural network inference"""
+    def __init__(self, request_queue: Queue, response_queues: dict, weight_queue: Queue, 
+                 initial_state_dict: dict, net_constructor, batch_size: int = 32, max_wait_time: float = 0.01, 
+                 batch_size_factor: int = 8, torch_compile_mode: str = 'default'):
+        self.request_queue = request_queue
+        self.response_queues = response_queues
+        self.weight_queue = weight_queue
+        self.initial_state_dict = initial_state_dict
+        self.net_constructor = net_constructor  # Function that creates the network
+        self.batch_size = batch_size
+        self.max_wait_time = max_wait_time
+        self.batch_size_factor = batch_size_factor
+        self.torch_compile_mode = torch_compile_mode
+        self.net = None
+        
+    def run(self):
+        """Main GPU worker loop"""
+        # Initialize the network in this process
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.net = self.net_constructor().to(device)
+        
+        # Load initial weights
+        self.net.load_state_dict(self.initial_state_dict)
+        
+        # Apply torch.compile if needed
+        if self.torch_compile_mode != 'no':
+            self.net = torch.compile(self.net, mode=self.torch_compile_mode)
         self.net.eval()
         
+        # Create local battle executor for timeouts
+        battle_executor = ThreadPoolExecutor(max_workers=1)
+        
+        while True:
+            # Check for weight updates (non-blocking)
+            try:
+                weight_update = self.weight_queue.get_nowait()
+                if weight_update is None:  # Shutdown signal
+                    break
+                self._update_weights(weight_update, device)
+            except Empty:
+                pass
+            
+            # Collect batch of inference requests
+            batch = self._collect_batch()
+            if batch:
+                self._process_batch(batch, device)
+        
+        # Cleanup
+        battle_executor.shutdown(wait=True)
+    
+    def _collect_batch(self):
+        """Collect requests into a batch"""
+        requests = []
+        try:
+            # Get at least one request
+            first_request = self.request_queue.get(timeout=0.1)
+            if first_request is None:  # Shutdown signal
+                return None
+            requests.append(first_request)
+            
+            # Try to get more requests up to next multiple of batch_size_factor
+            start_time = time.time()
+            target_size = ((len(requests) + self.batch_size_factor - 1) 
+                         // self.batch_size_factor) * self.batch_size_factor
+            target_size = min(target_size, self.batch_size)
+            
+            while len(requests) < target_size and time.time() - start_time < self.max_wait_time:
+                try:
+                    request = self.request_queue.get_nowait()
+                    if request is None:  # Shutdown signal
+                        break
+                    requests.append(request)
+                except Empty:
+                    break
+
+            unpadded_len = len(requests)
+            
+            # Pad batch to multiple of batch_size_factor if needed
+            if len(requests) < target_size:
+                target_size = ((len(requests) + self.batch_size_factor - 1) 
+                             // self.batch_size_factor) * self.batch_size_factor
+                # Duplicate last request to pad batch
+                while len(requests) < target_size:
+                    requests.append(requests[-1])
+            
+            return requests, unpadded_len
+            
+        except Empty:
+            return None
+    
+    def _process_batch(self, batch_info, device):
+        """Process a batch of requests"""
+        requests, unpadded_len = batch_info
+        
+        try:
+            # Process batch - requests now contain serialized choice data
+            batch = [req.choice_data for req in requests]
+            
+            # Process through network
+            with torch.no_grad():
+                torch.compiler.cudagraph_mark_step_begin()
+                batch_tensors = collate_fn(batch)
+                # Move batch to device
+                batch_tensors = move_to_device(batch_tensors, device)
+                output = process_batch(batch_tensors, self.net)
+                responses = output_to_cpu(output, batch_tensors)
+            
+            # Send responses back to appropriate workers
+            if isinstance(responses, tuple):
+                # Handle (logits, values) from value head
+                logits, values = responses
+                for i, req in enumerate(requests[:unpadded_len]):
+                    response = NNResponse(
+                        request_id=req.request_id,
+                        result=(batch_tensors, (logits[i], values[i])),
+                        worker_id=req.worker_id
+                    )
+                    self.response_queues[req.worker_id].put(response)
+            else:
+                # Handle logits only
+                for i, req in enumerate(requests[:unpadded_len]):
+                    response = NNResponse(
+                        request_id=req.request_id,
+                        result=(batch_tensors, responses[i]),
+                        worker_id=req.worker_id
+                    )
+                    self.response_queues[req.worker_id].put(response)
+                    
+        except Exception as e:
+            print(f"Error in NN worker process: {type(e)} {e}")
+            # Send error response to all waiting requests
+            for req in requests[:unpadded_len]:
+                self.response_queues[req.worker_id].put(e)
+    
+    def _update_weights(self, weight_update: WeightUpdate, device):
+        """Update model weights"""
+        # Move state dict to GPU and load
+        device_state_dict = {k: v.to(device) for k, v in weight_update.state_dict.items()}
+        self.net.load_state_dict(device_state_dict)
+
+class NNClient:
+    """CPU worker client for communicating with GPU process"""
+    def __init__(self, worker_id: int, request_queue: Queue, response_queue: Queue):
+        self.worker_id = worker_id
+        self.request_queue = request_queue
+        self.response_queue = response_queue
+        self.request_counter = 0
+        self.pending_requests = {}
+    
+    def get_logits(self, choice: Choice) -> tuple[dict, np.ndarray]:
+        """Get (batch_tensors, logits) from the network. Process-safe."""
+        # Serialize the choice data before sending
+        choice_data = {
+            **flatten_dict(choice.as_dict()),
+            'choice_type': 0,  # Dummy value
+            'chosen_idx': 0,  # Dummy value
+            'outcome': 0.0,   # Dummy value
+        }
+        
+        # Create request
+        request_id = f"worker_{self.worker_id}_req_{self.request_counter}"
+        request = NNRequest(
+            request_id=request_id,
+            choice_data=choice_data,
+            worker_id=self.worker_id
+        )
+        
+        # Send request
+        self.request_queue.put(request)
+        self.request_counter += 1
+        
+        # Wait for response
+        while True:
+            response = self.response_queue.get()
+            if isinstance(response, Exception):
+                raise response
+            if response.request_id == request_id:
+                return response.result
+            # Handle out-of-order responses (shouldn't happen in this simple case)
+            self.pending_requests[response.request_id] = response
+
+class NNServiceManager:
+    """Manages neural network inference process and creates client interfaces"""
+    def __init__(self, net: NN, net_constructor, batch_size=32, max_wait_time=0.01, batch_size_factor=8, torch_compile_mode='default', num_workers=4):
         # Round batch_size up to nearest multiple of batch_size_factor
         self.batch_size = ((batch_size + batch_size_factor - 1) // batch_size_factor) * batch_size_factor
         self.batch_size_factor = batch_size_factor
         self.max_wait_time = max_wait_time
-        self.request_queue = Queue()
-        self.shutdown_event = Event()
-        self.thread = Thread(target=self._process_requests, daemon=True)
-        self.thread.start()
+        self.torch_compile_mode = torch_compile_mode
+        self.num_workers = num_workers
+        
+        # Create queues
+        self.request_queue = Queue(maxsize=1000)
+        self.weight_queue = Queue(maxsize=10)
+        self.response_queues = {i: Queue() for i in range(num_workers)}
+        
+        # Serialize the initial network state for the worker process
+        initial_state_dict = {k: v.cpu() for k, v in net.state_dict().items()}
+        
+        # Process handles
+        self.gpu_process = None
+        self.worker_processes = []
+        
+        # Start GPU process
+        gpu_worker = NNWorkerProcess(
+            self.request_queue,
+            self.response_queues, 
+            self.weight_queue,
+            initial_state_dict,
+            net_constructor,
+            batch_size,
+            max_wait_time,
+            batch_size_factor,
+            torch_compile_mode
+        )
+        self.gpu_process = Process(target=gpu_worker.run)
+        self.gpu_process.start()
     
-    def _clone_network(self, net, torch_compile_mode):
-        """Create a separate copy of the network for inference"""
-        clone = copy.deepcopy(net)
-        if torch_compile_mode != 'no':
-            clone = torch.compile(clone, mode=torch_compile_mode)
-        return clone
+    def create_client(self) -> NNClient:
+        """Create a client interface for communicating with this service"""
+        # Find the next available worker ID (simple round-robin)
+        worker_id = len(self.worker_processes) % self.num_workers
+        return NNClient(worker_id, self.request_queue, self.response_queues[worker_id])
     
     def update_weights(self, net):
         """Update the inference network weights from the training network"""
-        self.net.load_state_dict(net.state_dict())
-    
-    def _process_requests(self):
-        while not self.shutdown_event.is_set():
-            # Collect requests
-            requests = []
-            try:
-                # Get at least one request
-                requests.append(self.request_queue.get(timeout=0.1))
-                
-                # Try to get more requests up to next multiple of batch_size_factor
-                start_time = time.time()
-                target_size = ((len(requests) + self.batch_size_factor - 1) 
-                             // self.batch_size_factor) * self.batch_size_factor
-                target_size = min(target_size, self.batch_size)
-                
-                while len(requests) < target_size and time.time() - start_time < self.max_wait_time:
-                    try:
-                        requests.append(self.request_queue.get_nowait())
-                    except Empty:
-                        break
-
-                unpadded_len = len(requests)
-                
-                # Pad batch to multiple of batch_size_factor if needed
-                if len(requests) < target_size:
-                    target_size = ((len(requests) + self.batch_size_factor - 1) 
-                                 // self.batch_size_factor) * self.batch_size_factor
-                    # Duplicate last request to pad batch
-                    while len(requests) < target_size:
-                        requests.append(requests[-1])
-                
-                # Process batch
-                choices = [req.choice for req in requests]
-                
-                # Create batch
-                batch = [{
-                    **flatten_dict(choice.as_dict()),
-                    'choice_type': 0,  # Dummy value
-                    'chosen_idx': 0,  # Dummy value
-                    'outcome': 0.0,   # Dummy value
-                } for choice in choices]
-                
-                # Process through network
-                with torch.no_grad():
-                    torch.compiler.cudagraph_mark_step_begin()
-                    batch_tensors = collate_fn(batch)
-                    output = process_batch(batch_tensors, self.net)
-                    responses = output_to_cpu(output, batch_tensors)
-                
-                # Send responses as (batch_tensors, output) pairs
-                # output can be logits only, or (logits, values) tuple
-                if isinstance(responses, tuple):
-                    # Handle (logits, values) from value head
-                    logits, values = responses
-                    for i, req in enumerate(requests[:unpadded_len]):
-                        req.response_queue.put((batch_tensors, (logits[i], values[i])))
-                else:
-                    # Handle logits only
-                    for i, req in enumerate(requests[:unpadded_len]):
-                        req.response_queue.put((batch_tensors, responses[i]))
-                
-            except Empty:
-                continue
-            except Exception as e:
-                print(f"Error in NN service: {type(e)} {e}")
-                # Send error response to all waiting requests
-                for req in requests:
-                    req.response_queue.put(e)
-    
-    def get_logits(self, choice: Choice) -> tuple[dict, np.ndarray]:
-        """Get (batch_tensors, logits) from the network. Thread-safe."""
-        response_queue = Queue()
-        self.request_queue.put(NNRequest(choice, response_queue))
-        response = response_queue.get()
-        
-        if isinstance(response, Exception):
-            raise response
-        
-        return response
+        # Serialize the state dict and send to worker process
+        state_dict = net.state_dict()
+        # Move state dict to CPU for serialization
+        cpu_state_dict = {k: v.cpu() for k, v in state_dict.items()}
+        weight_update = WeightUpdate(state_dict=cpu_state_dict)
+        self.weight_queue.put(weight_update)
     
     def stop(self):
         """Stop the service and wait for it to finish"""
-        self.shutdown_event.set()
-        self.thread.join()
+        # Send shutdown signals
+        self.request_queue.put(None)
+        self.weight_queue.put(None)
+        
+        # Wait for GPU process to finish
+        self.gpu_process.join(timeout=5.0)
+        if self.gpu_process.is_alive():
+            print("Warning: Force terminating GPU process")
+            self.gpu_process.terminate()
+            self.gpu_process.join()
 
 def get_card_probs(logits: np.ndarray) -> np.ndarray:
     """Convert logits to probabilities"""
@@ -663,7 +813,7 @@ def sample_boltzmann(probs: np.ndarray, temperature: float, rng: random.Random =
         return int(np.random.choice(len(probs), p=softmax_probs))
     return int(rng.choices(range(len(probs)), weights=softmax_probs, k=1)[0])
 
-def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.GameAction], 
+def pick_card_with_net(service, choice: Choice, actions: list[sts.GameAction], 
                       temperature: float = 1.0, stats: ChoiceStats = None, rng: random.Random = None) -> tuple[sts.GameAction, Path]:
     """Use neural network to pick a card/relic from the choices using Boltzmann sampling"""
     collated_input, output = service.get_logits(choice)
@@ -875,7 +1025,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                   potions_offered=potions_offered, potion_actions=potion_actions,
                   screen_state=gc.screen_state, select_screen_type=gc.screen_state_info.select_screen_type)
 
-def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.0, verbose: bool = False, stats: ChoiceStats = None):
+def run_game(seed: int, net=None, temperature: float = 1.0, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     # Create seeded RNG instance for this game
     rng = random.Random(seed)
@@ -970,7 +1120,48 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
     print(seed, gc.outcome, gc.floor_num)
     return (choices, gc.outcome, gc.floor_num)
 
-def run_game_data(seed: int, net: Optional[NNService] = None, temperature: float = 1.0, stats: ChoiceStats = None):
+# Global variables for multiprocessing worker initialization
+_global_service_manager = None
+_global_temperature = 1.0
+
+def _init_worker_process(request_queue, response_queues, temperature):
+    """Initialize worker process with communication channels"""
+    global _global_service_manager, _global_temperature
+    import os
+    # Use process ID as worker ID for uniqueness
+    worker_id = os.getpid() % len(response_queues)
+    # Create client for this worker
+    _global_service_manager = NNClient(worker_id, request_queue, response_queues[worker_id])
+    _global_temperature = temperature
+
+def _worker_run_game_data(seed: int):
+    """Worker function for multiprocessing.Pool"""
+    global _global_service_manager, _global_temperature
+    try:
+        choices, outcome, final_floor = run_game(seed, net=_global_service_manager, temperature=_global_temperature, verbose=False, stats=None)
+    except Exception as e:
+        print(f"Error in worker run_game_data for seed {seed}: {e}")
+        raise
+
+    df = pd.DataFrame([{
+        **flatten_dict(c.choice.as_dict()),
+        'choice_type': c.choice_type,
+        'chosen_idx': c.chosen_idx,
+    } for c in choices])
+    df["outcome"] = {sts.GameOutcome.PLAYER_LOSS: 0, sts.GameOutcome.PLAYER_VICTORY: 1}[outcome]
+    df["seed"] = seed
+    df["final_floor"] = final_floor
+    
+    # Add pstrike count for each choice
+    df["pstrike_count"] = [
+        sum(1 for card_id in c.choice.obs.deck.cards if card_id == int(sts.CardId.PERFECTED_STRIKE))
+        for c in choices
+    ]
+    
+    return df
+
+def run_game_data(seed: int, net=None, temperature: float = 1.0, stats: ChoiceStats = None):
+    """Backward compatibility function for threading-based execution"""
     try:
         choices, outcome, final_floor = run_game(seed, net=net, temperature=temperature, verbose=False, stats=stats)
     except Exception as e:
@@ -1051,7 +1242,7 @@ def main(args):
     if args.model_path == "<simple>":
         model_path = None
         print("Using SimpleAgent (no network)")
-        service: Optional[NNService] = None
+        service_manager = None
     else:
         if args.model_path in ("", "-"):
             model_path = None
@@ -1059,8 +1250,14 @@ def main(args):
             model_path = args.model_path
         # Load neural network and start service
         net = load_net(model_path, torch_compile_mode=args.torch_compile)
-        service = NNService(
+        
+        # Create network constructor for worker process
+        from network import NN, ModelHP
+        net_constructor = lambda: NN(ModelHP())
+        
+        service_manager = NNServiceManager(
             net,
+            net_constructor,
             batch_size=args.batch_size,
             batch_size_factor=min(min(8, args.batch_size), (args.num_threads + 1) // 2),
             torch_compile_mode=args.torch_compile,
@@ -1069,26 +1266,60 @@ def main(args):
 
     stats = ChoiceStats()
     
-    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
-        futures = [
-            executor.submit(run_game_data, s, service, args.temperature, stats) 
-            for s in range(args.start_seed, args.start_seed + args.num_games)
-        ]
-        df = pd.concat([
-            future.result()
-            for future
-            in tqdm(
-                as_completed(futures),
+    if service_manager is None:
+        # Use threading for SimpleAgent
+        with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+            futures = [
+                executor.submit(run_game_data, s, None, args.temperature, stats) 
+                for s in range(args.start_seed, args.start_seed + args.num_games)
+            ]
+            df = pd.concat([
+                future.result()
+                for future
+                in tqdm(
+                    as_completed(futures),
+                    total=args.num_games,
+                    mininterval=5,
+                    maxinterval=60,
+                    miniters=args.num_threads,
+                    smoothing=0.1,
+                )
+            ])
+    else:
+        # Use multiprocessing for neural network
+        import functools
+        
+        # Create partial initializer function with the service manager's queues
+        init_func = functools.partial(
+            _init_worker_process,
+            service_manager.request_queue,
+            service_manager.response_queues,
+            args.temperature
+        )
+        
+        with mp.Pool(
+            processes=args.num_threads,
+            initializer=init_func
+        ) as pool:
+            # Map seeds to the worker function
+            seeds = list(range(args.start_seed, args.start_seed + args.num_games))
+            
+            # Use imap_unordered for better progress tracking
+            results = []
+            for result in tqdm(
+                pool.imap_unordered(_worker_run_game_data, seeds),
                 total=args.num_games,
                 mininterval=5,
                 maxinterval=60,
                 miniters=args.num_threads,
                 smoothing=0.1,
-            )
-        ])
+            ):
+                results.append(result)
+            
+            df = pd.concat(results)
 
-    if service is not None:
-        service.stop()
+    if service_manager is not None:
+        service_manager.stop()
 
     # Shuffle the DataFrame
     df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)

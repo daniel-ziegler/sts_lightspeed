@@ -20,7 +20,7 @@ from torch import nn
 
 import slaythespire as sts
 from network import NN, ModelHP, move_to_device, process_batch, load_network_backward_compatible, SeparateValuePolicy
-from playouts import NNService
+from playouts import NNServiceManager
 from rl_common import (
     Experience, Trajectory, GameMetrics, REWARD_FUNCTIONS,
     collect_experience, compute_advantages_for_trajectories, experiences_to_batches,
@@ -127,12 +127,23 @@ class UnifiedTrainer:
         else:
             self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         
-        # Initialize service
-        self.service = NNService(
-            self.net, 
+        # Initialize service with network constructor
+        model_hp = ModelHP(
+            dim=config.model_dim,
+            n_layers=config.model_layers,
+            use_value_head=config.use_value_head,
+            num_value_layers=config.num_value_layers,
+            value_fork_layer=config.value_fork_layer,
+        )
+        net_constructor = lambda: NN(model_hp)
+        
+        self.service = NNServiceManager(
+            self.net,
+            net_constructor,
             batch_size=config.inf_batch_size,
             batch_size_factor=config.inf_batch_size_factor,
-            torch_compile_mode=torch_compile_mode
+            torch_compile_mode=torch_compile_mode,
+            num_workers=config.num_workers
         )
 
         # Compile after setting up the service so the state dicts are consistent

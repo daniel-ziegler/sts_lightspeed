@@ -1,4 +1,4 @@
-G# sts_lightspeed
+# sts_lightspeed
 
 High-performance C++20 implementation of Slay the Spire designed for tree search algorithms and machine learning training.
 
@@ -8,9 +8,10 @@ High-performance C++20 implementation of Slay the Spire designed for tree search
 * **Complete Implementation**: All Ironclad cards, colorless cards, enemies, relics, and game mechanics
 * **Python Integration**: PyBind11 bindings for seamless ML workflows
 * **Advanced RL**: PPO and PPG (Phasic Policy Gradient) with PPG Reloaded enhancements
+* **Multiprocessing Architecture**: Dedicated GPU inference process with optimal batching
 * **Playable Console**: Interactive game simulation
 * **Save File Support**: Load and convert game states to/from JSON
-* **Multi-threaded**: Parallel simulation and training support
+* **Parallel Execution**: High-performance multiprocessing for neural network inference
 
 ## Quick Start
 
@@ -53,7 +54,7 @@ pyenv shell 3.10.14 && python rl_train.py --algorithm ppg --separate-networks tr
 
 * **`rl_train.py`**: Unified PPO/PPG trainer with PPG Reloaded algorithm
 * **`network.py`**: Transformer-based neural network architecture
-* **`playouts.py`**: High-performance data generation with neural network guidance  
+* **`playouts.py`**: High-performance data generation with multiprocessing neural network inference
 * **`train.py`**: Supervised learning pipeline for choice prediction
 
 ## Architecture
@@ -61,7 +62,22 @@ pyenv shell 3.10.14 && python rl_train.py --algorithm ppg --separate-networks tr
 * **C++20 Core**: High-performance game simulation engine
 * **Python Bindings**: PyBind11 integration for ML workflows
 * **Fixed-size Containers**: Optimized for speed and memory efficiency
-* **Multi-threading**: Parallel game execution and neural network inference
+* **Multiprocessing Inference**: Dedicated GPU process for neural network batching
+* **Process Isolation**: Separate game workers communicate with central inference service
+* **Efficient Batching**: Automatic request batching optimizes GPU utilization
+
+## Multiprocessing Neural Network System
+
+The inference architecture uses a high-performance multiprocessing design:
+
+* **`NNServiceManager`**: Orchestrates GPU worker and provides client interfaces
+* **`NNWorkerProcess`**: Dedicated GPU process for batched neural network inference  
+* **`NNClient`**: Lightweight client for game workers to communicate with GPU process
+* **Serialized Communication**: Cross-process data transfer via serialized choice representations
+* **Weight Updates**: Real-time model weight synchronization during training
+* **Battle Timeouts**: Local threading for MCTS battle simulation timeouts
+
+This architecture eliminates Python GIL limitations and provides optimal GPU utilization for both data generation and reinforcement learning.
 
 ## PPG Reloaded Features
 

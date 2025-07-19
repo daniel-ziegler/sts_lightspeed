@@ -105,7 +105,7 @@ pyenv shell 3.10.14 && python rl_train.py --algorithm ppg \
 - **Performance**: Fixed-size containers (`fixed_list.h`), compile flags `-O1 -Wno-shift-count-overflow`
 - **Dependencies**: nlohmann/json and PyBind11 as git submodules
 - **Data Generation**: Focused on generating training data for neural networks rather than RNG accuracy
-- **Multi-threading**: Built-in parallel simulation support across agents
+- **Multiprocessing**: High-performance parallel execution using multiprocessing for neural network inference and threading for battle timeouts
 
 ### Python Integration
 
@@ -113,7 +113,7 @@ The codebase includes Python files for ML training and data generation:
 
 - **`network.py`** - Complete neural network architecture using transformer layers to predict win probabilities for card/relic choices and fixed actions. Includes custom embeddings, attention mechanisms, and data processing utilities
 - **`train.py`** - Training pipeline with hyperparameter sweeping, validation splits, and comprehensive evaluation including ROC curves and card/relic statistics. Supports command-line arguments for flexible training configuration
-- **`playouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multi-threaded batched inference, choice statistics, and parallel game execution
+- **`playouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multiprocessing architecture with dedicated GPU inference process, batched inference, choice statistics, and parallel game execution
 - **`rl_train.py`** - Unified PPO and PPG (Phasic Policy Gradient) reinforcement learning training system with full PPG Reloaded algorithm implementation. Supports both single and separate network architectures with adaptive regularization
 - **`inputs.py`** - Generic input space framework with embedding builders for sequences, enums, fixed vectors, and composite types. Provides abstraction layer for neural network input processing
 - **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
@@ -146,7 +146,7 @@ The **`rl_train.py`** implements both PPO (Proximal Policy Optimization) and PPG
 #### Common Features
 - **Reward Functions**: Multiple options including sparse victory, dense floor progress, and perfected strike counting
 - **Checkpointing**: Automatic model saving with resume functionality using `--resume-from-step`
-- **Multi-threading**: Parallel experience collection with configurable worker count
+- **Multiprocessing**: Parallel experience collection with dedicated GPU inference process and configurable worker count
 - **TensorBoard Logging**: Comprehensive metrics tracking including adaptive coefficients
 
 ### Neural Network Action Support
@@ -185,6 +185,68 @@ If you needed to add a completely new choice type (like `events_offered` field t
 - **Consistency**: Both `playouts.py` and `rl_train.py` must handle the same screen states identically
 
 The system is designed to be extensible - most new action types can be added by following these established patterns without changing the core neural network architecture.
+
+## Multiprocessing Architecture
+
+The neural network inference system uses a high-performance multiprocessing architecture for optimal GPU utilization:
+
+### Core Components
+
+- **`NNServiceManager`**: Orchestrates the entire inference system
+  - Creates and manages the GPU worker process
+  - Provides client interfaces for game worker processes
+  - Handles weight updates and process lifecycle
+
+- **`NNWorkerProcess`**: Dedicated GPU process for neural network inference
+  - Runs on GPU with dedicated CUDA context
+  - Batches inference requests for optimal throughput
+  - Handles weight updates via serialized state dicts
+  - Uses threading internally only for battle timeouts
+
+- **`NNClient`**: Lightweight client interface for game processes
+  - Serializes choice data for cross-process communication
+  - Manages request/response communication with GPU process
+  - Can be used by multiple game worker processes simultaneously
+
+### Usage Patterns
+
+```python
+# Create service manager with network constructor
+from network import NN, ModelHP
+net = NN(ModelHP())
+net_constructor = lambda: NN(ModelHP())
+
+service_manager = NNServiceManager(
+    net, net_constructor,
+    batch_size=32,
+    num_workers=4
+)
+
+# Create clients for worker processes
+client = service_manager.create_client()
+result = client.get_logits(choice)
+
+# Update weights during training
+service_manager.update_weights(updated_net)
+
+# Clean shutdown
+service_manager.stop()
+```
+
+### Key Benefits
+
+- **GPU Efficiency**: Single dedicated GPU process eliminates CUDA context switching
+- **Batching**: Automatic request batching optimizes inference throughput
+- **Isolation**: Each game worker process runs independently
+- **Scalability**: Support for arbitrary numbers of worker processes
+- **Memory Safety**: Proper serialization prevents multiprocessing issues
+
+### Architecture Requirements
+
+- **Network Constructor**: Must provide callable that creates network instances
+- **Serializable Data**: Choice objects are flattened before cross-process communication
+- **State Dict Updates**: Weight updates use CPU-serialized state dictionaries
+- **Process Management**: Proper cleanup and termination handling
 
 ## Development Notes
 
