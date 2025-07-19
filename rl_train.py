@@ -46,7 +46,7 @@ class RLConfig:
     # Environment settings
     num_games_per_step: int = 256
     num_workers: int = 40
-    max_floor: int = 3
+    max_floor: int | None = None
     
     # Training settings
     num_iterations: int = 1000

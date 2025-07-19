@@ -77,8 +77,11 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
-def run_episode(seed: int, service: NNService, reward_fn, battle_executor, max_floor: int = 3) -> Trajectory:
+def run_episode(seed: int, service: NNService, reward_fn, battle_executor, max_floor: int | None = None) -> Trajectory:
     """Run a complete game episode and collect experience."""
+    if max_floor is None:
+        max_floor = 100
+
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
     
