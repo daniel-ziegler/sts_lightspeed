@@ -281,6 +281,6 @@ The system is designed to be extensible - most new action types can be added by 
 - Always make everything *uniform*! Never handle multiple possible input data types or formats. Instead refactor at least one of the sources of input so that they are the same.
 - DO NOT assume warnings are not a problem. They are a problem! Figure out why they are being produced.
 - NO DEFENSIVE PROGRAMMING! DO NOT swallow errors or handle unexpected states. Add in asserts and throw exceptions liberally. If anything surprising could be due to a bug or a bad input, *throw an exception*!
-- Either figure things out or give up. Do not revert to simpler approaches or hack around issues.
+- If you cannot figure out how to fully satisfy request, say so and give up! Do not revert to simpler approaches or hack around issues.
 - Never leave comments like "# Changed to new thing". Only leave comments that describe the current state of the code. And do so sparingly - prefer not to comment, unless the code would be unclear without.
 - NEVER swallow errors just to make tests pass.
