@@ -120,13 +120,16 @@ class UnifiedTrainer:
             self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=config.learning_rate)
         
         # Initialize service
-        service_net = self.combined_net if self.config.separate_networks else self.net
         self.service = NNService(
-            service_net, 
+            self.net, 
             batch_size=config.inf_batch_size,
             batch_size_factor=config.inf_batch_size_factor,
             torch_compile_mode=torch_compile_mode
         )
+
+        # Compile after setting up the service so the state dicts are consistent
+        if torch_compile_mode != 'no':
+            self.net = torch.compile(self.net, mode=torch_compile_mode)
         
         # PPG-specific: experience buffer for data diversity
         self.experience_buffer = []
@@ -171,7 +174,7 @@ class UnifiedTrainer:
             
             self.policy_net = NN(policy_hp).to(self.device)
             self.value_net = NN(value_hp).to(self.device)
-            self.combined_net = SeparateValuePolicy(self.policy_net, self.value_net)
+            self.net = SeparateValuePolicy(self.policy_net, self.value_net)
             self.nets = (self.policy_net, self.value_net)
         else:
             # Single network with value head
@@ -434,7 +437,7 @@ class UnifiedTrainer:
                 
                 # Collect experience
                 start_time = time.time()
-                self.service.update_weights(self.combined_net if self.config.separate_networks else self.net)
+                self.service.update_weights(self.net)
                 trajectories = collect_experience(
                     num_games=self.config.num_games_per_step,
                     num_workers=self.config.num_workers,
