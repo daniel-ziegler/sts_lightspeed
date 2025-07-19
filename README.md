@@ -1,32 +1,73 @@
 G# sts_lightspeed
 
-For tree search and simulation of the popular rogue-like deckbuilder game Slay The Spire
+High-performance C++20 implementation of Slay the Spire designed for tree search algorithms and machine learning training.
 
 **Features**
-* c++ 17 compiled with gcc
-* Standalone
-* Optimized for machine learning training and data generation
-* Playable in console
-* Speed: 1M random playouts in 5s with 16 threads
-* Loading from save files (loading into combat currently only supported)
-* Tree Search (best result, knowing the state of the game's rng)
+* **Performance**: 1M random playouts in 5 seconds with 16 threads
+* **ML Optimized**: Focused on training data generation and neural network integration
+* **Complete Implementation**: All Ironclad cards, colorless cards, enemies, relics, and game mechanics
+* **Python Integration**: PyBind11 bindings for seamless ML workflows
+* **Advanced RL**: PPO and PPG (Phasic Policy Gradient) with PPG Reloaded enhancements
+* **Playable Console**: Interactive game simulation
+* **Save File Support**: Load and convert game states to/from JSON
+* **Multi-threaded**: Parallel simulation and training support
 
-**Planned Features**
-* Tree search of possible game outcomes (not given the state of rng)
+## Quick Start
 
-**Implementation Progress**
-* All enemies
-* All relics
-* All Ironclad cards
-* All colorless cards
-* Everything outside of combat / all acts
+### Building
+```bash
+# Standard build
+cmake .
+make -j8
 
-**Getting Started**
-* The project was built with Clion2021 and the [mingw64 toolchain](https://www.msys2.org/) on Windows 10
-* The main target creates a simulator of the game that can be played in console.
-* The test target creates a program with various commands that can be run, including random simulation
-* Click the star button at the top of the repo :)
+# Python bindings (install dependencies first)
+pyenv shell 3.10.14 && pip install pyarrow tqdm
+```
 
-**Build tips**
-* If your build fails with an error about not-return-only `constexpr` methods, ensure your compiler supports c++17.
-* If CLion shows an error about not finding python libs when loading the cmake project, try opening CLion from the msys2 shell.
+### Training Neural Networks
+```bash
+# PPO training
+pyenv shell 3.10.14 && python rl_train.py --algorithm ppo --separate-networks true
+
+# PPG training (recommended)
+pyenv shell 3.10.14 && python rl_train.py --algorithm ppg --separate-networks true
+```
+
+### Interactive Play
+```bash
+./main
+# Input: seed character(I/S/D/W) ascensionLevel
+# Example: 12345 I 0
+```
+
+### Testing & Simulation
+```bash
+# Multi-threaded agent testing
+./test agent_mt [threads] [depth] [ascension] [seed] [playouts] [print_level]
+
+# Convert save files to JSON
+./test json [save_file_path] [json_output_path]
+```
+
+## Machine Learning Components
+
+* **`rl_train.py`**: Unified PPO/PPG trainer with PPG Reloaded algorithm
+* **`network.py`**: Transformer-based neural network architecture
+* **`playouts.py`**: High-performance data generation with neural network guidance  
+* **`train.py`**: Supervised learning pipeline for choice prediction
+
+## Architecture
+
+* **C++20 Core**: High-performance game simulation engine
+* **Python Bindings**: PyBind11 integration for ML workflows
+* **Fixed-size Containers**: Optimized for speed and memory efficiency
+* **Multi-threading**: Parallel game execution and neural network inference
+
+## PPG Reloaded Features
+
+* **Adaptive KL Regularization**: Dynamic policy regularization based on drift measurement
+* **Trajectory Sampling**: Complete rollout sampling for auxiliary phase data diversity
+* **Behavioral Cloning**: Policy preservation during feature distillation
+* **Computational Efficiency**: Configurable auxiliary phase frequency for optimal performance
+
+See `CLAUDE.md` for detailed development guidelines and implementation details.

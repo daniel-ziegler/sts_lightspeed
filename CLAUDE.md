@@ -53,6 +53,41 @@ The `test` executable provides various testing and simulation modes:
 # Example: 12345 I 0
 ```
 
+## Reinforcement Learning Training
+
+The unified RL trainer supports both PPO and PPG algorithms:
+
+```bash
+# PPO training (single-phase)
+pyenv shell 3.10.14 && python rl_train.py --algorithm ppo --separate-networks true
+
+# PPG training with Reloaded enhancements (recommended)
+pyenv shell 3.10.14 && python rl_train.py --algorithm ppg --separate-networks true
+
+# PPG with custom settings
+pyenv shell 3.10.14 && python rl_train.py --algorithm ppg \
+  --separate-networks true \
+  --adaptive-kl-reg true \
+  --policy-reg-coef 1.0 \
+  --n-policy-iterations 4 \
+  --n-aux-epochs 2
+
+# Training with specific parameters
+pyenv shell 3.10.14 && python rl_train.py --algorithm ppg \
+  --num-iterations 1000 \
+  --num-games-per-step 256 \
+  --num-workers 40 \
+  --reward-function victory \
+  --save-path my_model
+```
+
+**Key Parameters:**
+- `--algorithm`: Choose `ppo` or `ppg`
+- `--separate-networks`: Use separate policy/value networks (recommended for PPG)
+- `--adaptive-kl-reg`: Enable adaptive KL regularization (PPG Reloaded)
+- `--n-policy-iterations`: Auxiliary phase frequency (higher = less frequent, more efficient)
+- `--reward-function`: Choose from `victory`, `smooth`, `perfected_strike`, `no_pstrikes`
+
 ## Architecture Overview
 
 ### Core Components
@@ -79,24 +114,40 @@ The codebase includes Python files for ML training and data generation:
 - **`network.py`** - Complete neural network architecture using transformer layers to predict win probabilities for card/relic choices and fixed actions. Includes custom embeddings, attention mechanisms, and data processing utilities
 - **`train.py`** - Training pipeline with hyperparameter sweeping, validation splits, and comprehensive evaluation including ROC curves and card/relic statistics. Supports command-line arguments for flexible training configuration
 - **`playouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multi-threaded batched inference, choice statistics, and parallel game execution
-- **`ppo_train.py`** - Proximal Policy Optimization (PPO) reinforcement learning training system. Collects experience trajectories from games and trains policy/value networks using GAE advantages
+- **`rl_train.py`** - Unified PPO and PPG (Phasic Policy Gradient) reinforcement learning training system with full PPG Reloaded algorithm implementation. Supports both single and separate network architectures with adaptive regularization
 - **`inputs.py`** - Generic input space framework with embedding builders for sequences, enums, fixed vectors, and composite types. Provides abstraction layer for neural network input processing
 - **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
 - Various `.parquet` files contain training data rollouts from different experiments
 
 To use the right Python environment, prefix all python commands with `pyenv shell 3.10.14 &&`
 
-### PPO Training Details
+### Reinforcement Learning Training Details
 
-The **`ppo_train.py`** implements Proximal Policy Optimization reinforcement learning with the following key characteristics:
+The **`rl_train.py`** implements both PPO (Proximal Policy Optimization) and PPG (Phasic Policy Gradient) with PPG Reloaded enhancements:
 
-- **Experience Collection**: Runs parallel game episodes using `ThreadPoolExecutor` and `as_completed()` to collect trajectories
-- **Trajectory Bias**: Since `as_completed()` returns finished games in completion order, shorter (typically worse-performing) games complete first and appear earlier in the batch. This creates a systematic bias where the first trajectories are often poor performers
-- **Debug Output**: Uses random trajectory selection instead of first trajectory to avoid the completion order bias when displaying training progress
-- **Network Architecture**: Supports both single network with value head or separate policy/value networks
-- **Reward Functions**: Multiple reward function options including sparse victory rewards, dense floor progress, and perfected strike counting
-- **Checkpointing**: Automatic model saving with resume functionality using `--resume-from-step` and checkpoint paths based on `--save-path`
-- **GAE Advantages**: Computes Generalized Advantage Estimation for stable policy gradient training
+#### PPO Mode (`--algorithm ppo`)
+- **Standard PPO**: Single-phase training with policy and value updates
+- **Network Options**: Single network with value head or separate policy/value networks
+- **Experience Collection**: Parallel game episodes using trajectory collection
+- **GAE Advantages**: Generalized Advantage Estimation for stable policy gradients
+
+#### PPG Mode (`--algorithm ppg`)
+- **Two-Phase Training**: Alternates between policy phase (PPO) and auxiliary phase (feature distillation)
+- **Auxiliary Value Heads**: Policy network includes auxiliary value head for joint training during auxiliary phase
+- **Behavioral Cloning**: Preserves original policy distribution during auxiliary phase updates
+- **Trajectory Sampling**: Uses complete trajectory sampling for auxiliary phase data diversity
+
+#### PPG Reloaded Enhancements
+- **Adaptive KL Regularization**: Dynamically adjusts regularization strength based on measured policy drift
+- **Enhanced Policy Regularization**: Stronger default regularization (1.0 vs 0.5) for better stability
+- **Computational Efficiency**: Configurable auxiliary phase frequency via `n_policy_iterations` parameter
+- **Data Diversity**: Trajectory-level buffer management for better experience diversity
+
+#### Common Features
+- **Reward Functions**: Multiple options including sparse victory, dense floor progress, and perfected strike counting
+- **Checkpointing**: Automatic model saving with resume functionality using `--resume-from-step`
+- **Multi-threading**: Parallel experience collection with configurable worker count
+- **TensorBoard Logging**: Comprehensive metrics tracking including adaptive coefficients
 
 ### Neural Network Action Support
 
@@ -110,7 +161,7 @@ When adding actions that map to existing choice categories (like rest site actio
    - Add new screen state case in `construct_choice()` function
    - Map C++ action indices to appropriate `FixedAction` types
    - Add screen state to neural network condition in `run_game()`
-3. **`ppo_train.py`**: Add screen state to neural network condition in `run_ppo_episode()`
+3. **`rl_train.py`**: Add screen state to neural network condition in training episodes
 
 #### Adding New Choice Categories
 If you needed to add a completely new choice type (like `events_offered` field to `Choice`):
@@ -124,14 +175,14 @@ If you needed to add a completely new choice type (like `events_offered` field t
    - Add new `ActionType` enum value
    - Add new field to `choice_space` DictSpace definition
    - Update network architecture if needed for new input dimensions
-3. **`ppo_train.py`**: Add path handling for new choice type in experience collection
+3. **`rl_train.py`**: Add path handling for new choice type in experience collection
 4. **`train.py`**: Update validation and statistics collection for new choice type
 
 #### Key Patterns
 - **C++ Integration**: Game actions use `idx1`, `idx2` fields and `rewards_action_type` for structured actions
 - **Choice Mapping**: `construct_choice()` maps C++ actions to typed Python choice objects
 - **Path System**: `choice_space.ix_to_path()` converts flat neural network indices back to semantic choices
-- **Consistency**: Both `playouts.py` and `ppo_train.py` must handle the same screen states identically
+- **Consistency**: Both `playouts.py` and `rl_train.py` must handle the same screen states identically
 
 The system is designed to be extensible - most new action types can be added by following these established patterns without changing the core neural network architecture.
 

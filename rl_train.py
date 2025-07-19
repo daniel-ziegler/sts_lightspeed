@@ -74,7 +74,6 @@ class RLConfig:
     adaptive_kl_reg: bool = False     # Enable adaptive KL regularization
     kl_target: float = 0.01           # Target KL divergence for adaptive regularization
     kl_adapt_rate: float = 1.5        # Adaptation rate for KL coefficient
-    reduced_aux_frequency: bool = True  # Use reduced auxiliary phase frequency for efficiency
     
     # Network settings
     separate_networks: bool = False    # Use separate policy and value networks
@@ -536,13 +535,7 @@ class UnifiedTrainer:
                         self.trajectory_buffer.pop(0)
                     
                     # Run auxiliary phase every N policy iterations
-                    # PPG Reloaded: Use reduced frequency for computational efficiency
-                    aux_frequency = self.config.n_policy_iterations
-                    if self.config.reduced_aux_frequency:
-                        # Double the frequency for efficiency (run less often)
-                        aux_frequency = max(1, self.config.n_policy_iterations * 2)
-                    
-                    if (iteration + 1) % aux_frequency == 0:
+                    if (iteration + 1) % self.config.n_policy_iterations == 0:
                         aux_metrics = self.auxiliary_phase_update()
                     else:
                         aux_metrics = {'aux_value_loss': 0.0, 'kl_loss': 0.0, 'bc_loss': 0.0}
@@ -681,7 +674,6 @@ def main():
         # PPG Reloaded defaults
         config_kwargs['adaptive_kl_reg'] = True  # Enable adaptive KL by default
         config_kwargs['policy_reg_coef'] = 1.0   # Stronger regularization
-        config_kwargs['reduced_aux_frequency'] = True  # Computational efficiency
         
         print("Configured for PPG mode with PPG Reloaded enhancements")
     
