@@ -19,6 +19,8 @@ class ModelHP:
     norm_eps: float = 1e-5
     n_fixed_obs: int = len(sts.getFixedObservationMaximums())
     use_value_head: bool = False  # Add value head for PPO training
+    num_value_layers: int = 0  # Number of separate transformer layers for value function
+    value_fork_layer: int = 0  # How many layers from the end to fork value layers (0 = after all shared layers)
 
 
 # Constants for data processing
@@ -408,8 +410,13 @@ class NN(nn.Module):
         nn.init.uniform_(self.choice_logits.weight, -0.01, 0.01)
         nn.init.zeros_(self.choice_logits.bias)
         
-        # Add value head if enabled
+        # Add value-specific layers if specified
+        if H.num_value_layers > 0:
+            self.value_layers = nn.ModuleList([TransformerBlock(H=H) for _ in range(H.num_value_layers)])
+        
+        # Add value head RMSNorm (always present if value head is used)
         if H.use_value_head:
+            self.value_head_norm = RMSNorm(H.dim, H.norm_eps)
             self.value_head = nn.Linear(H.dim, 1, bias=True)
             nn.init.uniform_(self.value_head.weight, -0.01, 0.01)
             nn.init.zeros_(self.value_head.bias)
@@ -464,8 +471,16 @@ class NN(nn.Module):
         x = torch.cat([obs_embed, choice_embed], dim=1)
         pos_mask = torch.cat([obs_mask, choice_mask], dim=1)
 
+        # Determine where to fork for value computation
+        fork_point = len(self.layers) - self.H.value_fork_layer
+        value_x = None
+        
         # Use activation checkpointing for all but the last layer
         for i, l in enumerate(self.layers):
+            # Save intermediate representation for value forking
+            if self.H.use_value_head and self.H.num_value_layers > 0 and i == fork_point:
+                value_x = x.clone()
+            
             if i < len(self.layers) - 1:
                 # Checkpoint all but the last layer
                 x = torch.utils.checkpoint.checkpoint(l, x, pos_mask, use_reentrant=False)
@@ -480,10 +495,30 @@ class NN(nn.Module):
         
         # Compute value if value head is enabled
         if self.H.use_value_head:
+            # Use separate value layers if specified
+            if self.H.num_value_layers > 0:
+                # Start from the forked representation (or final if fork_point >= n_layers)
+                if value_x is None:
+                    value_x = x
+                    
+                # Apply value-specific transformer layers
+                for i, l in enumerate(self.value_layers):
+                    if i < len(self.value_layers) - 1:
+                        # Checkpoint all but the last value layer
+                        value_x = torch.utils.checkpoint.checkpoint(l, value_x, pos_mask, use_reentrant=False)
+                    else:
+                        # Don't checkpoint the last value layer
+                        value_x = l(value_x, pos_mask)
+                # Apply value head normalization
+                value_xn = self.value_head_norm(value_x)
+            else:
+                # Use the shared representation with value head normalization
+                value_xn = self.value_head_norm(xn)
+            
             # Pool over non-masked elements for value prediction
-            # xn: [batch_size, seq_len, dim], pos_mask: [batch_size, seq_len]
+            # value_xn: [batch_size, seq_len, dim], pos_mask: [batch_size, seq_len]
             seq_lengths = (~pos_mask).sum(dim=1, keepdim=True).float()  # [batch_size, 1]
-            pooled = xn.masked_fill(pos_mask.unsqueeze(-1), 0).sum(dim=1) / seq_lengths  # [batch_size, dim]
+            pooled = value_xn.masked_fill(pos_mask.unsqueeze(-1), 0).sum(dim=1) / seq_lengths  # [batch_size, dim]
             values = self.value_head(pooled).squeeze(-1).float()  # [batch_size]
             return choice_logits.clone(), values.clone()
         else:

@@ -11,7 +11,7 @@
 - [x] reenable path choices
 - [x] share embeds between identical IntSpaces (key it) and EnumSpaces. (maybe even FixedVecSpace proj params for gold?)
 - [ ] map repr: mark reachable nodes from each choice
-- [ ] eliminate redundancy when showing card choices from deck
+- [ ] eliminate redundancy when showing card choices from deck and in map choices
 - [ ] shop prices
 - [ ] relics repr: add counters
 - [ ] history repr: list of enemies, events, history of rares and potions being offered
