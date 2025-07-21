@@ -127,24 +127,17 @@ class UnifiedTrainer:
         else:
             self.optimizer = torch.optim.AdamW(self.net.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         
-        # Initialize service with network constructor
-        model_hp = ModelHP(
-            dim=config.model_dim,
-            n_layers=config.model_layers,
-            use_value_head=config.use_value_head,
-            num_value_layers=config.num_value_layers,
-            value_fork_layer=config.value_fork_layer,
-        )
-        net_constructor = lambda: NN(model_hp)
-        
+        # Initialize service with enough workers for parallel collection
+        # Add 1 extra for the main client
         self.service = NNServiceManager(
             self.net,
-            net_constructor,
             batch_size=config.inf_batch_size,
             batch_size_factor=config.inf_batch_size_factor,
             torch_compile_mode=torch_compile_mode,
-            num_workers=config.num_workers
+            num_workers=config.num_workers + 1
         )
+
+        # Client will be created as needed
 
         # Compile after setting up the service so the state dicts are consistent
         if torch_compile_mode != 'no':
@@ -511,7 +504,7 @@ class UnifiedTrainer:
                     service=self.service,
                     reward_fn=self.reward_fn,
                     start_seed=iteration * 1000,
-                    max_floor=self.config.max_floor
+                    max_floor=self.config.max_floor,
                 )
                 collect_time = time.time() - start_time
                 

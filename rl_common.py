@@ -10,7 +10,8 @@ import os
 import json
 from dataclasses import dataclass
 from typing import List, NamedTuple, Dict, Any, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 
 import numpy as np
@@ -78,7 +79,7 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
-def run_episode(seed: int, service_client, reward_fn, battle_executor, max_floor: int | None = None) -> Trajectory:
+def run_episode(seed: int, service_client, reward_fn, max_floor: int | None = None) -> Trajectory:
     """Run a complete game episode and collect experience."""
     if max_floor is None:
         max_floor = 100
@@ -92,88 +93,94 @@ def run_episode(seed: int, service_client, reward_fn, battle_executor, max_floor
     values = []
     reward_fn_vals = []
     
-    while gc.outcome == sts.GameOutcome.UNDECIDED and gc.floor_num <= max_floor:
-        try:
-            if gc.screen_state == sts.ScreenState.BATTLE:
-                # Use MCTS agent for battles
-                future = battle_executor.submit(agent.playout_battle, gc)
-                
-                try:
-                    future.result(timeout=30.0)
-                except TimeoutError:
-                    break
+    # Create local battle executor for timeouts
+    battle_executor = ThreadPoolExecutor(max_workers=1)
+    
+    try:
+        while gc.outcome == sts.GameOutcome.UNDECIDED and gc.floor_num <= max_floor:
+            try:
+                if gc.screen_state == sts.ScreenState.BATTLE:
+                    # Use MCTS agent for battles
+                    future = battle_executor.submit(agent.playout_battle, gc)
                     
-            else:
-                # Use neural network for non-battle decisions
-                obs = sts.getNNRepresentation(gc)
-                actions = sts.GameAction.getAllActionsInState(gc)
-                
-                choice = construct_choice(gc, obs, actions)
-                
-                if choice is not None:
-                    total_choices = (len(choice.cards_offered) + len(choice.relics_offered) + 
-                                   len(choice.potions_offered) + len(choice.fixed_actions) + len(choice.paths_offered))
-                    
-                    if total_choices > 1:
-                        # Get network predictions
-                        batch_tensors, output = service_client.get_logits(choice)
+                    try:
+                        future.result(timeout=30.0)
+                    except TimeoutError:
+                        break
                         
-                        # Handle value head output
-                        if isinstance(output, tuple):
-                            logits, value_output = output
-                            value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
+                else:
+                    # Use neural network for non-battle decisions
+                    obs = sts.getNNRepresentation(gc)
+                    actions = sts.GameAction.getAllActionsInState(gc)
+                    
+                    choice = construct_choice(gc, obs, actions)
+                    
+                    if choice is not None:
+                        total_choices = (len(choice.cards_offered) + len(choice.relics_offered) + 
+                                       len(choice.potions_offered) + len(choice.fixed_actions) + len(choice.paths_offered))
+                        
+                        if total_choices > 1:
+                            # Get network predictions
+                            batch_tensors, output = service_client.get_logits(choice)
+                            
+                            # Handle value head output
+                            if isinstance(output, tuple):
+                                logits, value_output = output
+                                value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
+                            else:
+                                logits = output
+                                value = 0.0
+                            
+                            # Convert to probabilities and sample action
+                            logits_tensor = torch.tensor(logits)
+                            log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
+                            probs = np.exp(log_probs)
+                            
+                            chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
+                            log_prob = log_probs[chosen_idx]
+                            
+                            # Convert back to game action
+                            path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
+                            action, action_desc = path_to_action_and_desc(choice, path, gc)
+                            
+                            # Extract metrics BEFORE action execution
+                            perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
+                            metrics = GameMetrics(
+                                floor_num=gc.floor_num,
+                                cur_hp=gc.cur_hp,
+                                max_hp=gc.max_hp,
+                                perfected_strike_count=perfected_strike_count,
+                                outcome=gc.outcome,
+                            )
+                            reward_fn_vals.append(reward_fn(metrics))
+                            
+                            assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                            action.execute(gc)
+                            
+                            exp = Experience(
+                                choice=choice,
+                                action_idx=chosen_idx,
+                                log_prob=log_prob,
+                                value=value,
+                                metrics=metrics,
+                                action_str=action_desc
+                            )
+                            experiences.append(exp)
+                            values.append(value)
                         else:
-                            logits = output
-                            value = 0.0
-                        
-                        # Convert to probabilities and sample action
-                        logits_tensor = torch.tensor(logits)
-                        log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
-                        probs = np.exp(log_probs)
-                        
-                        chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
-                        log_prob = log_probs[chosen_idx]
-                        
-                        # Convert back to game action
-                        path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
-                        action, action_desc = path_to_action_and_desc(choice, path, gc)
-                        
-                        # Extract metrics BEFORE action execution
-                        perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
-                        metrics = GameMetrics(
-                            floor_num=gc.floor_num,
-                            cur_hp=gc.cur_hp,
-                            max_hp=gc.max_hp,
-                            perfected_strike_count=perfected_strike_count,
-                            outcome=gc.outcome,
-                        )
-                        reward_fn_vals.append(reward_fn(metrics))
-                        
-                        assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
-                        action.execute(gc)
-                        
-                        exp = Experience(
-                            choice=choice,
-                            action_idx=chosen_idx,
-                            log_prob=log_prob,
-                            value=value,
-                            metrics=metrics,
-                            action_str=action_desc
-                        )
-                        experiences.append(exp)
-                        values.append(value)
+                            action = agent.pick_gameaction(gc)
+                            assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                            action.execute(gc)
                     else:
                         action = agent.pick_gameaction(gc)
                         assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
                         action.execute(gc)
-                else:
-                    action = agent.pick_gameaction(gc)
-                    assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
-                    action.execute(gc)
                 
-        except Exception as e:
-            print(f"Error in episode {seed}: {e}")
-            break
+            except Exception as e:
+                print(f"Error in episode {seed}: {e}")
+                break
+    finally:
+        battle_executor.shutdown(wait=True)
     
     # Create final metrics for reward computation
     final_metrics = GameMetrics(
@@ -208,34 +215,119 @@ def run_episode(seed: int, service_client, reward_fn, battle_executor, max_floor
     )
 
 
-def collect_experience(num_games: int, num_workers: int, service: NNServiceManager, reward_fn, start_seed: int = 0, max_floor: int = 3) -> List[Trajectory]:
-    """Collect experience from multiple game episodes."""
-    trajectories = []
+def _worker_run_episodes_with_queue(worker_id: int, seeds: list, request_queue, response_queue, reward_fn, max_floor: int, result_queue, worker_index: int) -> None:
+    """Worker function that runs multiple episodes and puts results in a queue."""
+    from playouts import NNClient
+    import pickle
     
-    if num_workers == 1:
-        # Single-threaded execution
-        client = service.create_client()
-        with ThreadPoolExecutor(max_workers=1) as battle_executor:
-            for i in tqdm(range(num_games), desc="Collecting experience"):
-                trajectory = run_episode(start_seed + i, client, reward_fn, battle_executor, max_floor)
-                trajectories.append(trajectory)
-    else:
-        # Multi-threaded execution - each thread gets its own client
-        with ThreadPoolExecutor(max_workers=num_workers) as battle_executor:
-            with ThreadPoolExecutor(max_workers=num_workers) as main_executor:
-                # Create clients for each worker
-                clients = [service.create_client() for _ in range(num_workers)]
-                
-                futures = []
-                for i in range(num_games):
-                    client = clients[i % num_workers]  # Round-robin client assignment
-                    futures.append(
-                        main_executor.submit(run_episode, start_seed + i, client, reward_fn, battle_executor, max_floor)
-                    )
-                
-                for future in tqdm(as_completed(futures), total=num_games, desc="Collecting experience"):
-                    trajectory = future.result()
-                    trajectories.append(trajectory)
+    try:
+        # Create client using the shared queues
+        client = NNClient(worker_id, request_queue, response_queue)
+        
+        trajectories = []
+        
+        for seed in seeds:
+            trajectory = run_episode(seed, client, reward_fn, max_floor)
+            trajectories.append(trajectory)
+        
+        # Convert trajectories to serializable format using as_dict() on Choice objects
+        serializable_trajectories = []
+        for traj in trajectories:
+            # Create a copy of the trajectory with serializable experiences
+            serializable_experiences = []
+            for exp in traj.experiences:
+                # Convert Choice to dict for serialization
+                choice_dict = exp.choice.as_dict() if exp.choice else None
+                serializable_exp = Experience(
+                    choice=choice_dict,  # Use dict instead of Choice object
+                    action_idx=exp.action_idx,
+                    log_prob=exp.log_prob,
+                    value=exp.value,
+                    metrics=exp.metrics,
+                    action_str=exp.action_str
+                )
+                serializable_experiences.append(serializable_exp)
+            
+            # Create serializable trajectory - convert Card and Relic objects to strings
+            serializable_traj = Trajectory(
+                seed=traj.seed,
+                experiences=serializable_experiences,
+                rewards=traj.rewards,
+                values=traj.values,
+                final_reward=traj.final_reward,
+                final_metrics=traj.final_metrics,
+                final_deck=[str(card) for card in traj.final_deck],  # Convert cards to strings
+                final_relics=[relic.id for relic in traj.final_relics]  # Convert relics to IDs
+            )
+            serializable_trajectories.append(serializable_traj)
+        
+        result_data = (worker_index, serializable_trajectories)
+        
+        # Put results in the result queue with worker index
+        result_queue.put(result_data)
+    except Exception as e:
+        try:
+            result_queue.put((worker_index, []))
+        except:
+            pass
+
+
+def collect_experience(num_games: int, num_workers: int, service: NNServiceManager, reward_fn, start_seed: int = 0, max_floor: int = 3) -> List[Trajectory]:
+    """Collect experience from multiple game episodes using parallel workers."""
+    # Distribute seeds across workers
+    all_seeds = [start_seed + i for i in range(num_games)]
+    seeds_per_worker = [[] for _ in range(num_workers)]
+    for i, seed in enumerate(all_seeds):
+        seeds_per_worker[i % num_workers].append(seed)
+    
+    # Create clients for multiprocessing workers
+    additional_clients = []
+    for i in range(num_workers):
+        worker_client = service.create_client(i)
+        additional_clients.append(worker_client)
+    
+    # Create a single shared result queue
+    shared_result_queue = mp.Queue()
+    
+    # Start worker processes
+    processes = []
+    active_workers = 0
+    for i, worker_seeds in enumerate(seeds_per_worker):
+        if worker_seeds:  # Only start process if it has seeds
+            worker_client = additional_clients[i]
+            p = mp.Process(
+                target=_worker_run_episodes_with_queue,
+                args=(
+                    worker_client.worker_id, 
+                    worker_seeds, 
+                    worker_client.request_queue, 
+                    worker_client.response_queue, 
+                    reward_fn, 
+                    max_floor,
+                    shared_result_queue,
+                    i  # worker index
+                )
+            )
+            p.start()
+            processes.append(p)
+            active_workers += 1
+    
+    # Collect results
+    trajectories = []
+    results_received = 0
+    with tqdm(total=num_games, desc="Collecting experience") as pbar:
+        while results_received < active_workers:
+            try:
+                worker_index, worker_trajectories = shared_result_queue.get(timeout=30)  # 30 second timeout
+                trajectories.extend(worker_trajectories)
+                pbar.update(len(worker_trajectories))
+                results_received += 1
+            except Exception as e:
+                break
+    
+    # Join all processes
+    for p in processes:
+        p.join()
     
     return trajectories
 
@@ -249,18 +341,32 @@ def print_traj(traj: Trajectory, advantages: List[float], returns: List[float]):
     for t in range(len(traj.experiences)):
         exp = traj.experiences[t]
         
-        # Get choice summary - what was offered
+        # Get choice summary - what was offered (choices are always dicts now)
         offered_items = []
-        if exp.choice.cards_offered:
-            offered_items.append(f"{len(exp.choice.cards_offered)}card")
-        if exp.choice.relics_offered:
-            offered_items.append(f"{len(exp.choice.relics_offered)}rel")
-        if exp.choice.potions_offered:
-            offered_items.append(f"{len(exp.choice.potions_offered)}pot")
-        if exp.choice.fixed_actions:
-            offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
-        if exp.choice.paths_offered:
-            offered_items.append(f"{len(exp.choice.paths_offered)}path")
+        if exp.choice:
+            cards_offered = exp.choice.get('cards_offered', {})
+            if isinstance(cards_offered, dict) and 'mask' in cards_offered:
+                card_count = sum(cards_offered['mask']) if cards_offered['mask'] else 0
+            else:
+                card_count = len(cards_offered) if cards_offered else 0
+            if card_count > 0:
+                offered_items.append(f"{card_count}card")
+            
+            relics_offered = exp.choice.get('relics_offered')
+            if relics_offered is not None and len(relics_offered) > 0:
+                offered_items.append(f"{len(relics_offered)}rel")
+            
+            potions_offered = exp.choice.get('potions_offered')
+            if potions_offered is not None and len(potions_offered) > 0:
+                offered_items.append(f"{len(potions_offered)}pot")
+            
+            fixed_actions = exp.choice.get('fixed_actions')
+            if fixed_actions is not None and len(fixed_actions) > 0:
+                offered_items.append(f"{len(fixed_actions)}fix")
+            
+            paths_offered = exp.choice.get('paths_offered')
+            if paths_offered is not None and len(paths_offered) > 0:
+                offered_items.append(f"{len(paths_offered)}path")
         
         choice_desc = f"{'+'.join(offered_items)}" if offered_items else "none"
         
@@ -289,7 +395,7 @@ def print_traj(traj: Trajectory, advantages: List[float], returns: List[float]):
     
     print(f"Final relics ({len(traj.final_relics)}):") 
     for relic in traj.final_relics:
-        print(f"  {relic.id}")
+        print(f"  {relic}")  # Relics are now relic IDs
     
     print("=" * 80)
 
@@ -351,8 +457,8 @@ def experiences_to_batches(experiences: List[Experience], advantages: List[float
     batch_data = []
     
     for i, exp in enumerate(experiences):
-        # Convert Choice to the same format as used in collate_fn
-        choice_dict = exp.choice.as_dict()
+        # Choice is already a dict from multiprocessing
+        choice_dict = exp.choice if exp.choice else {}
         flat_dict = {}
         
         # Flatten the nested choice dictionary

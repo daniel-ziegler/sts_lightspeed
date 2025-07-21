@@ -27,6 +27,8 @@ from network import NN, ActionType, FixedAction, EventFixedInfo, ModelHP, collat
 from inputs import Path
 import slaythespire as sts
 
+mp.set_start_method('fork', force=True)
+
 # %%
 def extract_event_info(gc: sts.GameContext, action: sts.GameAction, fixed_action: FixedAction) -> tuple[int, int, int, EventFixedInfo]:
     """Extract event-specific information for the neural network."""
@@ -544,13 +546,12 @@ class WeightUpdate:
 class NNWorkerProcess:
     """GPU process that handles neural network inference"""
     def __init__(self, request_queue: Queue, response_queues: dict, weight_queue: Queue, 
-                 initial_state_dict: dict, net_constructor, batch_size: int = 32, max_wait_time: float = 0.01, 
+                 pickled_net: bytes, batch_size: int = 32, max_wait_time: float = 0.01, 
                  batch_size_factor: int = 8, torch_compile_mode: str = 'default'):
         self.request_queue = request_queue
         self.response_queues = response_queues
         self.weight_queue = weight_queue
-        self.initial_state_dict = initial_state_dict
-        self.net_constructor = net_constructor  # Function that creates the network
+        self.pickled_net = pickled_net
         self.batch_size = batch_size
         self.max_wait_time = max_wait_time
         self.batch_size_factor = batch_size_factor
@@ -559,35 +560,69 @@ class NNWorkerProcess:
         
     def run(self):
         """Main GPU worker loop"""
-        # Initialize the network in this process
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.net = self.net_constructor().to(device)
+        import sys
         
-        # Load initial weights
-        self.net.load_state_dict(self.initial_state_dict)
-        
-        # Apply torch.compile if needed
-        if self.torch_compile_mode != 'no':
-            self.net = torch.compile(self.net, mode=self.torch_compile_mode)
-        self.net.eval()
-        
-        # Create local battle executor for timeouts
-        battle_executor = ThreadPoolExecutor(max_workers=1)
-        
-        while True:
-            # Check for weight updates (non-blocking)
-            try:
-                weight_update = self.weight_queue.get_nowait()
-                if weight_update is None:  # Shutdown signal
-                    break
-                self._update_weights(weight_update, device)
-            except Empty:
-                pass
+        try:
+            # Initialize the network in this process
+            import pickle
+            import torch
+            import slaythespire as sts
+            from concurrent.futures import ThreadPoolExecutor
+            from queue import Empty
+            from network import collate_fn, move_to_device, process_batch, output_to_cpu
             
-            # Collect batch of inference requests
-            batch = self._collect_batch()
-            if batch:
-                self._process_batch(batch, device)
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            
+            # Unpickle and move network to device
+            self.net = pickle.loads(self.pickled_net).to(device)
+            
+            # Apply torch.compile if needed
+            if self.torch_compile_mode != 'no':
+                self.net = torch.compile(self.net, mode=self.torch_compile_mode)
+            self.net.eval()
+            
+            # Create local battle executor for timeouts
+            battle_executor = ThreadPoolExecutor(max_workers=1)
+            
+        except Exception as e:
+            print(f"FATAL: GPU worker initialization failed: {type(e)} {e}")
+            import traceback
+            traceback.print_exc()
+            # Send error to all response queues to unblock any waiting clients
+            error_msg = f"GPU worker init failed: {e}"
+            for response_queue in self.response_queues.values():
+                try:
+                    response_queue.put(Exception(error_msg))
+                except:
+                    pass
+            return
+        
+        try:
+            while True:
+                # Check for weight updates (non-blocking)
+                try:
+                    weight_update = self.weight_queue.get_nowait()
+                    if weight_update is None:  # Shutdown signal
+                        break
+                    self._update_weights(weight_update, device)
+                except Empty:
+                    pass
+                
+                # Collect batch of inference requests
+                batch = self._collect_batch()
+                if batch:
+                    self._process_batch(batch, device)
+        except Exception as e:
+            print(f"FATAL: GPU worker process crashed: {type(e)} {e}")
+            import traceback
+            traceback.print_exc()
+            # Try to send error to all response queues to unblock clients
+            error_msg = f"GPU worker crashed: {e}"
+            for response_queue in self.response_queues.values():
+                try:
+                    response_queue.put(Exception(error_msg))
+                except:
+                    pass
         
         # Cleanup
         battle_executor.shutdown(wait=True)
@@ -723,9 +758,19 @@ class NNClient:
             # Handle out-of-order responses (shouldn't happen in this simple case)
             self.pending_requests[response.request_id] = response
 
+def _gpu_worker_main(request_queue, response_queues, weight_queue, pickled_net, 
+                     batch_size, max_wait_time, batch_size_factor, torch_compile_mode):
+    """Main function for GPU worker process - avoids queue serialization issues"""
+    worker = NNWorkerProcess(
+        request_queue, response_queues, weight_queue, pickled_net,
+        batch_size, max_wait_time, batch_size_factor, torch_compile_mode
+    )
+    worker.run()
+
+
 class NNServiceManager:
     """Manages neural network inference process and creates client interfaces"""
-    def __init__(self, net: NN, net_constructor, batch_size=32, max_wait_time=0.01, batch_size_factor=8, torch_compile_mode='default', num_workers=4):
+    def __init__(self, net: NN, batch_size=32, max_wait_time=0.01, batch_size_factor=8, torch_compile_mode='default', num_workers=4):
         # Round batch_size up to nearest multiple of batch_size_factor
         self.batch_size = ((batch_size + batch_size_factor - 1) // batch_size_factor) * batch_size_factor
         self.batch_size_factor = batch_size_factor
@@ -738,37 +783,45 @@ class NNServiceManager:
         self.weight_queue = Queue(maxsize=10)
         self.response_queues = {i: Queue() for i in range(num_workers)}
         
-        # Serialize the initial network state for the worker process
-        initial_state_dict = {k: v.cpu() for k, v in net.state_dict().items()}
+        # Pickle the network for the worker process
+        import pickle
+        pickled_net = pickle.dumps(net.cpu())
         
         # Process handles
         self.gpu_process = None
-        self.worker_processes = []
         
-        # Start GPU process
-        gpu_worker = NNWorkerProcess(
-            self.request_queue,
-            self.response_queues, 
-            self.weight_queue,
-            initial_state_dict,
-            net_constructor,
-            batch_size,
-            max_wait_time,
-            batch_size_factor,
-            torch_compile_mode
+        
+        # Start GPU process - pass arguments directly to avoid queue serialization issues
+        self.gpu_process = Process(
+            target=_gpu_worker_main,
+            args=(
+                self.request_queue,
+                self.response_queues, 
+                self.weight_queue,
+                pickled_net,
+                batch_size,
+                max_wait_time,
+                batch_size_factor,
+                torch_compile_mode
+            )
         )
-        self.gpu_process = Process(target=gpu_worker.run)
         self.gpu_process.start()
     
-    def create_client(self) -> NNClient:
-        """Create a client interface for communicating with this service"""
-        # Find the next available worker ID (simple round-robin)
-        worker_id = len(self.worker_processes) % self.num_workers
-        return NNClient(worker_id, self.request_queue, self.response_queues[worker_id])
+    def create_client(self, worker_index: int) -> NNClient:
+        """Create a client with a specific worker index"""
+        # Check if GPU process is still alive
+        if self.gpu_process and not self.gpu_process.is_alive():
+            raise RuntimeError(f"GPU worker process has died (exit code: {self.gpu_process.exitcode})")
+        
+        # Ensure we have enough response queues
+        if worker_index >= len(self.response_queues):
+            raise ValueError(f"Worker index {worker_index} exceeds available response queues ({len(self.response_queues)})")
+        
+        return NNClient(worker_index, self.request_queue, self.response_queues[worker_index])
     
     def update_weights(self, net):
         """Update the inference network weights from the training network"""
-        # Serialize the state dict and send to worker process
+        # Serialize the state dict and send to inference process
         state_dict = net.state_dict()
         # Move state dict to CPU for serialization
         cpu_state_dict = {k: v.cpu() for k, v in state_dict.items()}
@@ -1251,13 +1304,8 @@ def main(args):
         # Load neural network and start service
         net = load_net(model_path, torch_compile_mode=args.torch_compile)
         
-        # Create network constructor for worker process
-        from network import NN, ModelHP
-        net_constructor = lambda: NN(ModelHP())
-        
         service_manager = NNServiceManager(
             net,
-            net_constructor,
             batch_size=args.batch_size,
             batch_size_factor=min(min(8, args.batch_size), (args.num_threads + 1) // 2),
             torch_compile_mode=args.torch_compile,
