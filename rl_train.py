@@ -209,7 +209,7 @@ class UnifiedTrainer:
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=create_ppo_collate_fn(),
-            num_workers=2,
+            num_workers=0,  # Disable multiprocessing for spawn compatibility
         )
         
         total_policy_loss = 0.0
@@ -352,7 +352,7 @@ class UnifiedTrainer:
             batch_size=self.config.batch_size,
             shuffle=True,
             collate_fn=create_ppo_collate_fn(),
-            num_workers=2,
+            num_workers=0,  # Disable multiprocessing for spawn compatibility
         )
         
         total_aux_value_loss = 0.0

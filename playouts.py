@@ -27,7 +27,7 @@ from network import NN, ActionType, FixedAction, EventFixedInfo, ModelHP, collat
 from inputs import Path
 import slaythespire as sts
 
-mp.set_start_method('fork', force=True)
+mp.set_start_method('spawn', force=True)
 
 # %%
 def extract_event_info(gc: sts.GameContext, action: sts.GameAction, fixed_action: FixedAction) -> tuple[int, int, int, EventFixedInfo]:
@@ -570,6 +570,8 @@ class NNWorkerProcess:
             from concurrent.futures import ThreadPoolExecutor
             from queue import Empty
             from network import collate_fn, move_to_device, process_batch, output_to_cpu
+
+            torch._dynamo.config.cache_size_limit = 24
             
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             
