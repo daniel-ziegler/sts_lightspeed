@@ -84,7 +84,7 @@ class EnumEmbedding(nn.Module):
         self.embedding = nn.Embedding(len(enum_class), dim)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        assert ((0 <= x) & (x < len(self.enum_class))).all(), f"Enum values {x} out of bounds for {self.enum_class}"
+        # assert ((0 <= x) & (x < len(self.enum_class))).all(), f"Enum values {x} out of bounds for {self.enum_class}"
         return self.embedding(x)
 
 class EnumSpace(ScalarSpace[TEnum]):

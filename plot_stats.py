@@ -24,11 +24,8 @@ import os
 
 # Define files to load - add your stats files here
 stats_files = [
-    'shared.pt.stats.jsonl',
-    'controlledshare.pt.stats.jsonl',
-    'lowdec.pt.stats.jsonl',
-    '0layer.pt.stats.jsonl',
-    # '0layer2x4.pt.stats.jsonl',
+    'bigger.pt.stats.jsonl',
+    'lr3e-5.pt.stats.jsonl',
 ]
 
 # Auto-discover stats files if they exist
