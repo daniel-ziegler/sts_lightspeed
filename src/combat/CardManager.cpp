@@ -5,6 +5,7 @@
 #include "combat/CardManager.h"
 
 #include <set>
+#include <algorithm>
 
 #include "combat/BattleContext.h"
 

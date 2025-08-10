@@ -3,6 +3,9 @@
 //
 
 #include "combat/Monster.h"
+
+#include <algorithm>
+
 #include "game/Random.h"
 #include "combat/BattleContext.h"
 #include "game/GameContext.h"
