@@ -488,6 +488,12 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
     total_kl_div = 0
     total_grad_norm = 0
     total_clipfrac = 0
+    # Accumulate components for explained variance calculation
+    sum_targets = 0
+    sum_predictions = 0
+    sum_targets_squared = 0
+    sum_residuals_squared = 0
+    total_samples = 0
     num_batches = 0
     
     for epoch in range(config.num_epochs):
@@ -552,6 +558,17 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             # Value loss
             value_loss = F.mse_loss(new_values, target_values)
             
+            # Accumulate components for explained variance calculation
+            batch_size = target_values.shape[0]
+            if batch_size > 0:
+                # Accumulate sums and sums of squares
+                sum_targets += torch.sum(target_values).item()
+                sum_predictions += torch.sum(new_values).item()
+                sum_targets_squared += torch.sum(target_values ** 2).item()
+                residuals = target_values - new_values
+                sum_residuals_squared += torch.sum(residuals ** 2).item()
+                total_samples += batch_size
+            
             # Entropy bonus (with numerical stability for masked actions)
             # Only compute entropy for valid actions (non-inf logits)
             valid_mask = ~torch.isinf(new_logits)
@@ -601,6 +618,25 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             total_clipfrac += clipfrac.item()
             num_batches += 1
     
+    # Calculate explained variance from accumulated sums and sums of squares
+    if total_samples > 1:
+        # Calculate target variance: Var(Y) = E[Y²] - E[Y]²
+        mean_targets = sum_targets / total_samples
+        target_variance = (sum_targets_squared / total_samples) - (mean_targets ** 2)
+        
+        # Calculate residual variance: Var(Y - Ŷ) = E[(Y - Ŷ)²] - E[Y - Ŷ]²
+        # Since E[Y - Ŷ] = E[Y] - E[Ŷ], we can use: Var(residuals) = E[residuals²] - E[residuals]²
+        mean_residuals = (sum_targets - sum_predictions) / total_samples
+        residual_variance = (sum_residuals_squared / total_samples) - (mean_residuals ** 2)
+        
+        # Explained variance = 1 - Var(residuals) / Var(targets)
+        if target_variance > 1e-8:
+            explained_variance = 1.0 - (residual_variance / target_variance)
+        else:
+            explained_variance = 0.0
+    else:
+        explained_variance = 0.0
+    
     return {
         'policy_loss': total_policy_loss / num_batches if num_batches > 0 else 0,
         'value_loss': total_value_loss / num_batches if num_batches > 0 else 0,
@@ -608,6 +644,7 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
         'kl_div': total_kl_div / num_batches if num_batches > 0 else 0,
         'grad_norm': total_grad_norm / num_batches if num_batches > 0 else 0,
         'clipfrac': total_clipfrac / num_batches if num_batches > 0 else 0,
+        'explained_variance': explained_variance,
     }
 
 
@@ -889,6 +926,7 @@ def main():
             print(f"KL div: {losses.get('kl_div', 0):.6f}, "
                   f"Grad norm: {losses.get('grad_norm', 0):.4f}, "
                   f"Clip frac: {losses.get('clipfrac', 0):.3f}")
+            print(f"Value explained variance: {losses.get('explained_variance', 0):.3f}")
             
             # Create comprehensive stats dictionary
             stats = {
@@ -905,7 +943,8 @@ def main():
                 'entropy': losses.get('entropy', 0),
                 'kl_div': losses.get('kl_div', 0),
                 'grad_norm': losses.get('grad_norm', 0),
-                'clipfrac': losses.get('clipfrac', 0)
+                'clipfrac': losses.get('clipfrac', 0),
+                'explained_variance': losses.get('explained_variance', 0)
             }
             
             # Write stats to JSONL file based on save path

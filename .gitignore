@@ -20,4 +20,4 @@ package-lock.json
 *.parquet
 *.stats.jsonl
 *.pt
-*.pt.*.iter_*
+*.pt.*iter_*
