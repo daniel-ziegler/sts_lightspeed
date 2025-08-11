@@ -763,7 +763,6 @@ def main():
         field_name = f'model.{field.name.replace("_", "-")}'
         arg_name = field_name.replace('-', '_')  # argparse converts dashes to underscores but keeps dots
         model_hp_kwargs[field.name] = getattr(args, arg_name)
-    model_hp_base = ModelHP(**model_hp_kwargs)
     
     # Select reward function
     if args.reward_function == 'smooth':
@@ -868,8 +867,7 @@ def main():
             except FileNotFoundError:
                 print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
         
-        nets = net
-        service_net = net
+        orig_net = nets = service_net = net  # lol TODO
         print("Using single network with value head")
     
     service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=args.torch_compile)
@@ -971,7 +969,7 @@ def main():
                     print(f"Saved separate network checkpoints at iteration {iteration + 1}")
                 else:
                     # Save model state
-                    torch.save(nets.state_dict(), f"{args.save_path}.iter_{iteration + 1}")
+                    torch.save(orig_net.state_dict(), f"{args.save_path}.iter_{iteration + 1}")
                     # Save optimizer state
                     torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer.iter_{iteration + 1}")
                     print(f"Saved model checkpoint at iteration {iteration + 1}")
