@@ -26,6 +26,7 @@ import os
 stats_files = [
     'bigger.pt.stats.jsonl',
     'lr3e-5.pt.stats.jsonl',
+    'shared.pt.stats.jsonl',
 ]
 
 # Auto-discover stats files if they exist
@@ -79,9 +80,6 @@ print(f"Loaded {len(runs)} runs:")
 for run in runs:
     print(f"  {run['label']}: {len(run['iterations'])} iterations")
 
-# %% [markdown]
-# ## Performance Metrics
-
 # %%
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
 
@@ -133,9 +131,6 @@ ax4.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# %% [markdown]
-# ## Training Losses and Optimization
-
 # %%
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
 
@@ -186,9 +181,6 @@ if len(runs) > 1:
 plt.tight_layout()
 plt.show()
 
-# %% [markdown]
-# ## Optimization Details
-
 # %%
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
 
@@ -216,30 +208,5 @@ if len(runs) > 1:
 
 plt.tight_layout()
 plt.show()
-
-# %% [markdown]
-# ## Summary Statistics
-
-# %%
-print("Training Summary:")
-print("=" * 50)
-
-for run in runs:
-    print(f"\n{run['label']}:")
-    print(f"  Final win rate: {run['win_rates'][-1]:.1%}")
-    print(f"  Final average floor: {run['avg_floors'][-1]:.1f}")
-    print(f"  Final average reward: {run['avg_rewards'][-1]:.3f}")
-    print(f"  Peak win rate: {max(run['win_rates']):.1%} at iteration {run['iterations'][run['win_rates'].index(max(run['win_rates']))]}")
-    print(f"  Peak average floor: {max(run['avg_floors']):.1f} at iteration {run['iterations'][run['avg_floors'].index(max(run['avg_floors']))]}")
-    print(f"  Average collection time: {np.mean(run['collect_times']):.1f}s")
-    print(f"  Average training time: {np.mean(run['train_times']):.1f}s")
-    print(f"  Total iterations: {len(run['iterations'])}")
-
-if len(runs) > 1:
-    print(f"\nComparison:")
-    best_final_wr = max(runs, key=lambda r: r['win_rates'][-1])
-    best_peak_wr = max(runs, key=lambda r: max(r['win_rates']))
-    print(f"  Best final win rate: {best_final_wr['label']} ({best_final_wr['win_rates'][-1]:.1%})")
-    print(f"  Best peak win rate: {best_peak_wr['label']} ({max(best_peak_wr['win_rates']):.1%})")
-
+%%
 # %%
