@@ -11,6 +11,7 @@
 #include "sim/ConsoleSimulator.h"
 #include "sim/PrintHelpers.h"
 #include "sim/BattleSimulator.h"
+#include "constants/MonsterEncounters.h"
 
 using namespace sts;
 
@@ -72,6 +73,19 @@ void ConsoleSimulator::play(std::istream &is, std::ostream &os, SimulatorContext
     bool firstLine = true;
 
     while (!c.quitCommandGiven && !(c.failedTest && c.quitOnTestFailed) && gc->outcome == GameOutcome::UNDECIDED && !is.eof()) {
+        // Handle auto-battle mode - automatically run battles without user input
+        if (gc->screenState == ScreenState::BATTLE && c.autoBattleMode) {
+            handleAutoBattle(os, c);
+            if (battleSim.isBattleComplete()) {
+                battleSim.exitBattle(*gc);
+                battleSim.initialized = false;
+                if (gc->screenState == ScreenState::BATTLE) {
+                    battleSim.initBattle(*gc);
+                }
+            }
+            continue; // Skip normal input loop and check conditions again
+        }
+
         if (c.printPrompts && (c.printFirstLine || !firstLine)) {
             printActions(os);
         }
@@ -134,7 +148,7 @@ void ConsoleSimulator::handleInputLine(const std::string &line, std::ostream &os
 
     } else if (line.length() >= 4 && line.substr(0, 4) == "set ") {
         c.tookAction = true;
-        doSetCommand(line.substr(4));
+        doSetCommand(line.substr(4), c);
 
     } else {
         c.tookAction = true;
@@ -175,7 +189,7 @@ void ConsoleSimulator::doPrintCommand(std::ostream &os, const std::string &cmd) 
     os.flush();
 }
 
-void ConsoleSimulator::doSetCommand(const std::string &cmd) {
+void ConsoleSimulator::doSetCommand(const std::string &cmd, SimulatorContext &c) {
     std::istringstream ss(cmd);
     std::string command;
     ss >> command;
@@ -192,6 +206,15 @@ void ConsoleSimulator::doSetCommand(const std::string &cmd) {
         int gold;
         ss >> gold;
         gc->gold = gold;
+    } else if (command == "autoBattle") {
+        std::string value;
+        ss >> value;
+        if (value == "on" || value == "true" || value == "1") {
+            c.autoBattleMode = true;
+        } else if (value == "off" || value == "false" || value == "0") {
+            c.autoBattleMode = false;
+        }
+        std::cout << "set autoBattleMode=" << c.autoBattleMode << std::endl;
     }
 }
 
@@ -245,6 +268,24 @@ void ConsoleSimulator::printActions(std::ostream &os) const {
     }
 
     os.flush();
+}
+
+void ConsoleSimulator::handleAutoBattle(std::ostream &os, SimulatorContext &c) {
+    if (!battleSim.isInitialized()) {
+        battleSim.initBattle(*gc);
+    }
+    
+    os << "[AUTO-BATTLE] Fighting " << monsterEncounterStrings[static_cast<int>(battleSim.bc->encounter)] << " - Running AI battle solver..." << std::endl;
+    
+    // Configure agent for battle-only mode
+    autoBattleAgent.printLogs = c.printBattleDecisions;
+    autoBattleAgent.pauseOnCardReward = false;  // No pausing in auto-mode
+    
+    // Run the proven battle automation
+    autoBattleAgent.playoutBattle(*battleSim.bc);
+    
+    os << "[AUTO-BATTLE] Battle complete! " << gc->curHp << "/" << gc->maxHp << "hp" << std::endl;
+    c.tookAction = true;
 }
 
 GameAction ConsoleSimulator::parseAction(const std::string &action) {
