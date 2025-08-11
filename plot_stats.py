@@ -24,9 +24,9 @@ import os
 
 # Define files to load - add your stats files here
 stats_files = [
-    'bigger.pt.stats.jsonl',
     'lr3e-5.pt.stats.jsonl',
     'shared.pt.stats.jsonl',
+    'simpler.pt.stats.jsonl',
 ]
 
 # Auto-discover stats files if they exist

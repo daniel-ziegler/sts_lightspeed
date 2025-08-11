@@ -28,6 +28,32 @@ import slaythespire as sts
 log = logging.getLogger(__name__)
 
 
+class Stats:
+    """Helper class for accumulating statistics across batches."""
+    
+    def __init__(self):
+        self.sum = 0.0
+        self.sum_squared = 0.0
+        self.count = 0
+    
+    def add_samples(self, values: torch.Tensor):
+        """Add a batch of values to the running statistics."""
+        self.sum += torch.sum(values).item()
+        self.sum_squared += torch.sum(values ** 2).item()
+        self.count += values.numel()
+    
+    def mean(self) -> float:
+        """Calculate the mean of all accumulated samples."""
+        return self.sum / self.count if self.count > 0 else 0.0
+    
+    def var(self) -> float:
+        """Calculate the variance of all accumulated samples."""
+        if self.count <= 1:
+            return 0.0
+        mean_val = self.mean()
+        return (self.sum_squared / self.count) - (mean_val ** 2)
+
+
 @dataclass
 class PPOConfig:
     """PPO training hyperparameters."""
@@ -488,12 +514,9 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
     total_kl_div = 0
     total_grad_norm = 0
     total_clipfrac = 0
-    # Accumulate components for explained variance calculation
-    sum_targets = 0
-    sum_predictions = 0
-    sum_targets_squared = 0
-    sum_residuals_squared = 0
-    total_samples = 0
+    # Stats for explained variance calculation
+    target_stats = Stats()
+    residual_stats = Stats()
     num_batches = 0
     
     for epoch in range(config.num_epochs):
@@ -558,16 +581,10 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             # Value loss
             value_loss = F.mse_loss(new_values, target_values)
             
-            # Accumulate components for explained variance calculation
-            batch_size = target_values.shape[0]
-            if batch_size > 0:
-                # Accumulate sums and sums of squares
-                sum_targets += torch.sum(target_values).item()
-                sum_predictions += torch.sum(new_values).item()
-                sum_targets_squared += torch.sum(target_values ** 2).item()
-                residuals = target_values - new_values
-                sum_residuals_squared += torch.sum(residuals ** 2).item()
-                total_samples += batch_size
+            # Accumulate statistics for explained variance calculation
+            target_stats.add_samples(target_values)
+            residuals = target_values - new_values
+            residual_stats.add_samples(residuals)
             
             # Entropy bonus (with numerical stability for masked actions)
             # Only compute entropy for valid actions (non-inf logits)
@@ -618,22 +635,12 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             total_clipfrac += clipfrac.item()
             num_batches += 1
     
-    # Calculate explained variance from accumulated sums and sums of squares
-    if total_samples > 1:
-        # Calculate target variance: Var(Y) = E[Y²] - E[Y]²
-        mean_targets = sum_targets / total_samples
-        target_variance = (sum_targets_squared / total_samples) - (mean_targets ** 2)
-        
-        # Calculate residual variance: Var(Y - Ŷ) = E[(Y - Ŷ)²] - E[Y - Ŷ]²
-        # Since E[Y - Ŷ] = E[Y] - E[Ŷ], we can use: Var(residuals) = E[residuals²] - E[residuals]²
-        mean_residuals = (sum_targets - sum_predictions) / total_samples
-        residual_variance = (sum_residuals_squared / total_samples) - (mean_residuals ** 2)
-        
-        # Explained variance = 1 - Var(residuals) / Var(targets)
-        if target_variance > 1e-8:
-            explained_variance = 1.0 - (residual_variance / target_variance)
-        else:
-            explained_variance = 0.0
+    # Calculate explained variance using Stats helper classes
+    target_variance = target_stats.var()
+    residual_variance = residual_stats.var()
+    
+    if target_variance > 1e-8:
+        explained_variance = 1.0 - (residual_variance / target_variance)
     else:
         explained_variance = 0.0
     
