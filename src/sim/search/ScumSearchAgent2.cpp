@@ -399,13 +399,11 @@ GameAction search::ScumSearchAgent2::pickEventAction(const GameContext &gc) {
 }
 
 void search::ScumSearchAgent2::printConciseAction(const BattleContext &bc, const Action &action) {
-    // Print action description
-    action.printDesc(std::cout, bc);
     
     // Print player status: HP and block
-    std::cout << " [Player: " << bc.player.curHp << "/" << bc.player.maxHp << "hp";
+    std::cout << "Player: " << bc.player.curHp << "/" << bc.player.maxHp << "hp";
     if (bc.player.block > 0) {
-        std::cout << " " << bc.player.block << "blk";
+        std::cout << "(" << bc.player.block << "blk)";
     }
     
     // Print monster status: HP and block for each alive monster
@@ -419,5 +417,10 @@ void search::ScumSearchAgent2::printConciseAction(const BattleContext &bc, const
             }
         }
     }
-    std::cout << "]" << std::endl;
+    std::cout << " ";
+
+    // Print action description
+    action.printDesc(std::cout, bc);
+
+    std::cout << std::endl;
 }

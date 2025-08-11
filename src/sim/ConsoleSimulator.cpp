@@ -75,9 +75,11 @@ void ConsoleSimulator::play(std::istream &is, std::ostream &os, SimulatorContext
     while (!c.quitCommandGiven && !(c.failedTest && c.quitOnTestFailed) && gc->outcome == GameOutcome::UNDECIDED && !is.eof()) {
         // Handle auto-battle mode - automatically run battles without user input
         if (gc->screenState == ScreenState::BATTLE && c.autoBattleMode) {
+            autoBattleAgent.simulationCountBase = 5000;
             handleAutoBattle(os, c);
             if (battleSim.isBattleComplete()) {
                 battleSim.exitBattle(*gc);
+                os << "[AUTO-BATTLE] Battle complete! " << gc->curHp << "/" << gc->maxHp << "hp" << std::endl;
                 battleSim.initialized = false;
                 if (gc->screenState == ScreenState::BATTLE) {
                     battleSim.initBattle(*gc);
@@ -290,8 +292,6 @@ void ConsoleSimulator::handleAutoBattle(std::ostream &os, SimulatorContext &c) {
     
     // Run the proven battle automation
     autoBattleAgent.playoutBattle(*battleSim.bc);
-    
-    os << "[AUTO-BATTLE] Battle complete! " << gc->curHp << "/" << gc->maxHp << "hp" << std::endl;
     c.tookAction = true;
 }
 
