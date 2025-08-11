@@ -45,7 +45,7 @@ void search::ScumSearchAgent2::playout(GameContext &gc) {
             continue;
         }
 
-        if (printLogs) {
+        if (verbosityLevel >= 2) {
             std::cout << gc << std::endl;
         }
         stepOutOfCombatPolicy(gc);
@@ -99,8 +99,10 @@ void search::ScumSearchAgent2::stepThroughSolution(BattleContext &bc, std::vecto
         }
 
         auto &a = actions.back();
-        if (printLogs) {
+        if (verbosityLevel == 2) {
             printHelper(bc, a);
+        } else if (verbosityLevel == 1) {
+            printConciseAction(bc, a);
         }
 
         takeAction(bc, a);
@@ -129,8 +131,10 @@ void search::ScumSearchAgent2::stepThroughSearchTree(BattleContext &bc, const se
             break;
         }
 
-        if (printLogs) {
+        if (verbosityLevel == 2) {
             printHelper(bc, maxEdge->action);
+        } else if (verbosityLevel == 1) {
+            printConciseAction(bc, maxEdge->action);
         }
 
         takeAction(bc, maxEdge->action);
@@ -291,7 +295,7 @@ GameAction search::ScumSearchAgent2::pickWeightedCardRewardAction(const GameCont
     for (int rIdx = r.cardRewardCount-1; rIdx >= 0; --rIdx) {
 
         const auto deckWeight = getAvgDeckWeight(gc);
-        if (printLogs) {
+        if (verbosityLevel >= 2) {
             std::cout << "evaluating card reward " << rIdx << " avgDeckWeight: " << deckWeight << std::endl;
         }
         fixed_list<std::pair<int,double>,4> weights;
@@ -308,7 +312,7 @@ GameAction search::ScumSearchAgent2::pickWeightedCardRewardAction(const GameCont
             weights.push_back({cIdx, weight});
             weightSum += weight;
 
-            if (printLogs) {
+            if (verbosityLevel >= 2) {
                 std::cout << "card:" << r.cardRewards[rIdx][cIdx] << " eval: " << weight << std::endl;
             }
         }
@@ -392,4 +396,28 @@ GameAction search::ScumSearchAgent2::pickEventAction(const GameContext &gc) {
         default:
             return pickRandomAction(gc);
     }
+}
+
+void search::ScumSearchAgent2::printConciseAction(const BattleContext &bc, const Action &action) {
+    // Print action description
+    action.printDesc(std::cout, bc);
+    
+    // Print player status: HP and block
+    std::cout << " [Player: " << bc.player.curHp << "/" << bc.player.maxHp << "hp";
+    if (bc.player.block > 0) {
+        std::cout << " " << bc.player.block << "blk";
+    }
+    
+    // Print monster status: HP and block for each alive monster
+    std::cout << " | Monsters:";
+    for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+        const auto &monster = bc.monsters.arr[i];
+        if (monster.isAlive()) {
+            std::cout << " " << monster.curHp << "/" << monster.maxHp << "hp";
+            if (monster.block > 0) {
+                std::cout << "(" << monster.block << "blk)";
+            }
+        }
+    }
+    std::cout << "]" << std::endl;
 }

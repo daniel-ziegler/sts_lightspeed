@@ -25,7 +25,7 @@ namespace sts::search {
         bool pauseOnCardReward = false;
 
         bool printActions = false;
-        bool printLogs = false;
+        int verbosityLevel = 1; // 0=quiet, 1=concise, 2=full
 
         int simulationCountBase = 50000;
         double bossSimulationMultiplier = 3;
@@ -45,6 +45,8 @@ namespace sts::search {
 
         void stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions);
         void stepThroughSearchTree(BattleContext &bc, const search::BattleScumSearcher2 &s);
+        
+        void printConciseAction(const BattleContext &bc, const Action &action);
 
         void stepOutOfCombatPolicy(GameContext &gc);
         GameAction pickOutOfCombatAction(const GameContext &gc);

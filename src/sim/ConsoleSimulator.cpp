@@ -215,6 +215,13 @@ void ConsoleSimulator::doSetCommand(const std::string &cmd, SimulatorContext &c)
             c.autoBattleMode = false;
         }
         std::cout << "set autoBattleMode=" << c.autoBattleMode << std::endl;
+    } else if (command == "autoBattleVerbosity") {
+        int level;
+        ss >> level;
+        if (level >= 0 && level <= 2) {
+            c.autoBattleVerbosity = level;
+        }
+        std::cout << "set autoBattleVerbosity=" << c.autoBattleVerbosity << " (0=quiet, 1=concise, 2=full)" << std::endl;
     }
 }
 
@@ -278,7 +285,7 @@ void ConsoleSimulator::handleAutoBattle(std::ostream &os, SimulatorContext &c) {
     os << "[AUTO-BATTLE] Fighting " << monsterEncounterStrings[static_cast<int>(battleSim.bc->encounter)] << " - Running AI battle solver..." << std::endl;
     
     // Configure agent for battle-only mode
-    autoBattleAgent.printLogs = c.printBattleDecisions;
+    autoBattleAgent.verbosityLevel = c.autoBattleVerbosity; // 0=quiet, 1=concise, 2=full
     autoBattleAgent.pauseOnCardReward = false;  // No pausing in auto-mode
     
     // Run the proven battle automation

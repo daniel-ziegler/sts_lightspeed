@@ -70,7 +70,7 @@ PYBIND11_MODULE(slaythespire, m) {
     agent.def_readwrite("simulation_count_base", &search::ScumSearchAgent2::simulationCountBase, "number of simulations the agent uses for monte carlo tree search each turn")
         .def_readwrite("boss_simulation_multiplier", &search::ScumSearchAgent2::bossSimulationMultiplier, "bonus multiplier to the simulation count for boss fights")
         .def_readwrite("pause_on_card_reward", &search::ScumSearchAgent2::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
-        .def_readwrite("print_logs", &search::ScumSearchAgent2::printLogs, "when set to true, the agent prints state information as it makes actions")
+        .def_readwrite("verbosity_level", &search::ScumSearchAgent2::verbosityLevel, "verbosity level: 0=quiet, 1=concise, 2=full")
         .def("pick_gameaction", &search::ScumSearchAgent2::pickOutOfCombatAction)
         .def("playout_battle", [](search::ScumSearchAgent2 &agent, GameContext &gc) {
             pybind11::gil_scoped_release release;

@@ -153,7 +153,7 @@ void agentMtRunner(AgentMtInfo *info) {
         agent.rng = std::default_random_engine(gc.seed);
 
         agent.printActions = g_print_level & 0x1;
-        agent.printLogs = g_print_level & 0x2;
+        agent.verbosityLevel = (g_print_level & 0x2) ? 2 : 0;
 
         agent.playout(gc);
 

@@ -36,7 +36,7 @@ namespace sts {
         
         // auto-battle settings
         bool autoBattleMode = false;
-        bool printBattleDecisions = false;
+        int autoBattleVerbosity = 1; // 0=quiet, 1=concise, 2=full
     };
 
     struct ConsoleSimulator {
