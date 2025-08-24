@@ -155,7 +155,7 @@ namespace sts {
         bool skipBattles = false;
 
         // ********* hidden from player *********
-        std::uint64_t seed;
+        std::int64_t seed;
 
         Random aiRng;
         Random cardRandomRng;
@@ -238,7 +238,7 @@ namespace sts {
         GameContextAction regainControlAction = nullptr;
 
         GameContext() = default;
-        GameContext(CharacterClass cc, std::uint64_t seed, int ascensionLevel);
+        GameContext(CharacterClass cc, std::int64_t seed, int ascensionLevel);
 
         void initFromSave(const SaveFile &s);
         void initRelicsFromSave(const SaveFile &s);

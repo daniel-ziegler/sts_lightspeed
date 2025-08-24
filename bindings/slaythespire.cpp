@@ -14,6 +14,14 @@
 #include "constants/MonsterEncounters.h"
 #include "constants/Potions.h"
 #include "constants/Events.h"
+#include "constants/PlayerStatusEffects.h"
+#include "constants/MonsterStatusEffects.h"
+#include "combat/BattleContext.h"
+#include "combat/Player.h"
+#include "combat/Monster.h"
+#include "combat/MonsterGroup.h"
+#include "combat/CardManager.h"
+#include "combat/CardInstance.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/ScumSearchAgent2.h"
 #include "sim/SimHelpers.h"
@@ -83,7 +91,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("playout", &search::ScumSearchAgent2::playout);
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
-    gameContext.def(pybind11::init<CharacterClass, std::uint64_t, int>())
+    gameContext.def(pybind11::init<CharacterClass, std::int64_t, int>())
         .def("get_card_reward", &sts::py::getCardReward, "return the current card reward list")
         .def_property_readonly("encounter", [](const GameContext &gc) { return gc.info.encounter; })
         .def_property_readonly("deck",
@@ -94,6 +102,7 @@ PYBIND11_MODULE(slaythespire, m) {
              [](GameContext &gc, Card card) { gc.deck.obtain(gc, card); },
              "add a card to the deck"
         )
+        .def("obtain_relic", &GameContext::obtainRelic, "add a relic to the player")
         .def("remove_card",
             [](GameContext &gc, int idx) {
                 if (idx < 0 || idx >= gc.deck.size()) {
@@ -146,7 +155,15 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("shop_remove_count", &GameContext::shopRemoveCount)
         .def_readwrite("speedrun_pace", &GameContext::speedrunPace)
         .def_readwrite("note_for_yourself_card", &GameContext::noteForYourselfCard)
-        .def_readwrite("potion_capacity", &GameContext::potionCapacity);
+        .def_readwrite("potion_capacity", &GameContext::potionCapacity)
+        .def("create_battle_context", [](GameContext &gc) -> BattleContext* {
+            BattleContext *bc = new BattleContext();
+            bc->init(gc);
+            return bc;
+        }, pybind11::return_value_policy::take_ownership, "create a new BattleContext initialized from this GameContext")
+        .def("sync_from_battle_context", [](GameContext &gc, BattleContext &bc) {
+            bc.exitBattle(gc);
+        }, "sync changes from BattleContext back to GameContext");
 
     pybind11::class_<GameAction> gameAction(m, "GameAction");
     gameAction.def("getAllActionsInState", &GameAction::getAllActionsInState);
@@ -209,7 +226,7 @@ PYBIND11_MODULE(slaythespire, m) {
 
     pybind11::class_<ScreenStateInfo> screenStateInfo(m, "ScreenStateInfo");
         screenStateInfo
-        //.def_readwrite("encounter", &ScreenStateInfo::encounter)
+        .def_readwrite("encounter", &ScreenStateInfo::encounter)
         .def_readwrite("select_screen_type", &ScreenStateInfo::selectScreenType)
         .def_property_readonly("boss_relics", [](const ScreenStateInfo &s) {
             return std::vector<RelicId>(s.bossRelics, s.bossRelics+3);
@@ -271,7 +288,9 @@ PYBIND11_MODULE(slaythespire, m) {
         });
 
     pybind11::class_<RelicInstance> relic(m, "Relic");
-    relic.def_readwrite("id", &RelicInstance::id)
+    relic.def(pybind11::init<>())
+        .def(pybind11::init<RelicId, int>())
+        .def_readwrite("id", &RelicInstance::id)
         .def_readwrite("data", &RelicInstance::data);
 
     pybind11::class_<Map, std::shared_ptr<Map>> map(m, "SpireMap");
@@ -347,6 +366,159 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_property_readonly("is_starter_strike_or_defend", &Card::isStarterStrikeOrDefend)
         .def_property_readonly("rarity", &Card::getRarity)
         .def_property_readonly("type", &Card::getType);
+
+    // Battle Context bindings
+    pybind11::class_<BattleContext> battleContext(m, "BattleContext");
+    battleContext.def_readwrite("turn", &BattleContext::turn)
+        .def_readwrite("potionCount", &BattleContext::potionCount)
+        .def_property_readonly("player", [](BattleContext &bc) -> Player& { 
+            return bc.player; 
+        }, pybind11::return_value_policy::reference_internal)
+        .def_property_readonly("monsters", [](BattleContext &bc) -> MonsterGroup& { 
+            return bc.monsters; 
+        }, pybind11::return_value_policy::reference_internal)
+        .def_property_readonly("cards", [](BattleContext &bc) -> CardManager& { 
+            return bc.cards; 
+        }, pybind11::return_value_policy::reference_internal);
+
+    // Player bindings
+    pybind11::class_<Player> player(m, "Player");
+    player.def_readwrite("energy", &Player::energy)
+        .def_readwrite("curHp", &Player::curHp)
+        .def_readwrite("maxHp", &Player::maxHp)
+        .def_readwrite("block", &Player::block)
+        .def_readwrite("energyPerTurn", &Player::energyPerTurn)
+        .def_readwrite("stance", &Player::stance)
+        .def_readwrite("orbSlots", &Player::orbSlots)
+        .def_readwrite("artifact", &Player::artifact)
+        .def_readwrite("dexterity", &Player::dexterity)
+        .def_readwrite("focus", &Player::focus)
+        .def_readwrite("strength", &Player::strength)
+        .def_readwrite("gold", &Player::gold)
+        .def_readwrite("cardDrawPerTurn", &Player::cardDrawPerTurn)
+        .def_readwrite("cardsPlayedThisTurn", &Player::cardsPlayedThisTurn)
+        .def_readwrite("attacksPlayedThisTurn", &Player::attacksPlayedThisTurn)
+        .def_readwrite("skillsPlayedThisTurn", &Player::skillsPlayedThisTurn)
+        .def_readwrite("cardsDiscardedThisTurn", &Player::cardsDiscardedThisTurn)
+        .def("hasStatus", [](const Player &p, PlayerStatus s) -> bool {
+            return p.hasStatusRuntime(s);
+        })
+        .def("getStatus", [](const Player &p, PlayerStatus s) -> int {
+            return p.getStatusRuntime(s);
+        })
+        .def("buff", [](Player &p, PlayerStatus s, int amount) {
+            p.buff(s, amount);
+        }, pybind11::arg("status"), pybind11::arg("amount") = 1)
+        .def("debuff", [](Player &p, PlayerStatus s, int amount, bool isSourceMonster) {
+            p.debuff(s, amount, isSourceMonster);
+        }, pybind11::arg("status"), pybind11::arg("amount"), pybind11::arg("isSourceMonster") = true)
+        .def("hasRelic", [](const Player &p, RelicId r) -> bool {
+            return p.hasRelicRuntime(r);
+        })
+        .def("gainBlock", [](Player &p, BattleContext &bc, int amount) {
+            p.gainBlock(bc, amount);
+        })
+        .def("gainEnergy", &Player::gainEnergy)
+        .def("useEnergy", &Player::useEnergy)
+        .def("heal", &Player::heal)
+        .def("increaseMaxHp", &Player::increaseMaxHp);
+
+    // Monster bindings
+    pybind11::class_<Monster> monster(m, "Monster");
+    monster.def_readwrite("curHp", &Monster::curHp)
+        .def_readwrite("maxHp", &Monster::maxHp)
+        .def_readwrite("block", &Monster::block)
+        .def_readwrite("halfDead", &Monster::halfDead)
+        .def_readwrite("id", &Monster::id)
+        .def_readwrite("idx", &Monster::idx)
+        .def_readwrite("artifact", &Monster::artifact)
+        .def_readwrite("strength", &Monster::strength)
+        .def_readwrite("vulnerable", &Monster::vulnerable)
+        .def_readwrite("weak", &Monster::weak)
+        .def_readwrite("poison", &Monster::poison)
+        .def_readwrite("regen", &Monster::regen)
+        .def_readwrite("metallicize", &Monster::metallicize)
+        .def_readwrite("platedArmor", &Monster::platedArmor)
+        .def("getName", &Monster::getName)
+        .def("hasStatus", [](const Monster &m, MonsterStatus s) -> bool {
+            return m.hasStatusInternal(s);
+        })
+        .def("getStatus", [](const Monster &m, MonsterStatus s) -> int {
+            return m.getStatusInternal(s);
+        })
+        .def("buff", [](Monster &m, MonsterStatus s, int amount) {
+            m.buff(s, amount);
+        }, pybind11::arg("status"), pybind11::arg("amount") = 1)
+        .def("addDebuff", [](Monster &m, MonsterStatus s, int amount, bool isSourceMonster) {
+            m.addDebuff(s, amount, isSourceMonster);
+        }, pybind11::arg("status"), pybind11::arg("amount"), pybind11::arg("isSourceMonster") = true)
+        .def("isAlive", &Monster::isAlive)
+        .def("isTargetable", &Monster::isTargetable)
+        .def("isDying", &Monster::isDying)
+        .def("isEscaping", &Monster::isEscaping)
+        .def("addBlock", &Monster::addBlock)
+        .def("heal", &Monster::heal);
+
+    // MonsterGroup bindings
+    pybind11::class_<MonsterGroup> monsterGroup(m, "MonsterGroup");
+    monsterGroup.def_readwrite("monsterCount", &MonsterGroup::monsterCount)
+        .def_readwrite("monstersAlive", &MonsterGroup::monstersAlive)
+        .def("__getitem__", [](MonsterGroup &mg, int idx) -> Monster& {
+            if (idx < 0 || idx >= mg.monsterCount) throw pybind11::index_error();
+            return mg.arr[idx];
+        }, pybind11::return_value_policy::reference_internal)
+        .def("__len__", [](const MonsterGroup &mg) { return mg.monsterCount; })
+        .def("getAliveCount", &MonsterGroup::getAliveCount)
+        .def("getTargetableCount", &MonsterGroup::getTargetableCount)
+        .def("getFirstTargetable", &MonsterGroup::getFirstTargetable)
+        .def("areMonstersBasicallyDead", &MonsterGroup::areMonstersBasicallyDead);
+
+    // CardInstance bindings
+    pybind11::class_<CardInstance> cardInstance(m, "CardInstance");
+    cardInstance.def(pybind11::init<>())
+        .def(pybind11::init<CardId, bool>(), pybind11::arg("id"), pybind11::arg("upgraded") = false)
+        .def(pybind11::init<const Card&>())
+        .def_readwrite("id", &CardInstance::id)
+        .def_readwrite("uniqueId", &CardInstance::uniqueId)
+        .def_readwrite("upgraded", &CardInstance::upgraded)
+        .def_readwrite("specialData", &CardInstance::specialData)
+        .def_readwrite("cost", &CardInstance::cost)
+        .def_readwrite("costForTurn", &CardInstance::costForTurn)
+        .def_readwrite("freeToPlayOnce", &CardInstance::freeToPlayOnce)
+        .def_readwrite("retain", &CardInstance::retain)
+        .def("getName", &CardInstance::getName)
+        .def("getType", &CardInstance::getType)
+        .def("isUpgraded", &CardInstance::isUpgraded)
+        .def("canUpgrade", &CardInstance::canUpgrade)
+        .def("isEthereal", &CardInstance::isEthereal)
+        .def("isStrikeCard", &CardInstance::isStrikeCard)
+        .def("doesExhaust", &CardInstance::doesExhaust)
+        .def("requiresTarget", &CardInstance::requiresTarget)
+        .def("isXCost", &CardInstance::isXCost)
+        .def("isBloodCard", &CardInstance::isBloodCard)
+        .def("upgrade", &CardInstance::upgrade);
+
+    // CardManager bindings  
+    pybind11::class_<CardManager> cardManager(m, "CardManager");
+    cardManager.def_readwrite("cardsInHand", &CardManager::cardsInHand)
+        .def_property_readonly("hand", [](CardManager &cm) {
+            return std::vector<CardInstance>(cm.hand.begin(), cm.hand.begin() + cm.cardsInHand);
+        })
+        .def_property_readonly("drawPile", [](CardManager &cm) {
+            return std::vector<CardInstance>(cm.drawPile.begin(), cm.drawPile.end());
+        })
+        .def_property_readonly("discardPile", [](CardManager &cm) {
+            return std::vector<CardInstance>(cm.discardPile.begin(), cm.discardPile.end());
+        })
+        .def_property_readonly("exhaustPile", [](CardManager &cm) {
+            return std::vector<CardInstance>(cm.exhaustPile.begin(), cm.exhaustPile.end());
+        })
+        .def("moveToHand", &CardManager::moveToHand)
+        .def("moveToDiscardPile", &CardManager::moveToDiscardPile)
+        .def("moveToExhaustPile", &CardManager::moveToExhaustPile)
+        .def("moveToDrawPileTop", &CardManager::moveToDrawPileTop)
+        .def("removeFromHandAtIdx", &CardManager::removeFromHandAtIdx)
+        .def("draw", &CardManager::draw);
 
     auto &internals = pybind11::detail::get_internals();
     auto pybind11_metaclass = pybind11::reinterpret_borrow<pybind11::object>((PyObject*)internals.default_metaclass);
@@ -1205,6 +1377,140 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("STRENGTH_POTION", Potion::STRENGTH_POTION)
         .value("SWIFT_POTION", Potion::SWIFT_POTION)
         .value("WEAK_POTION", Potion::WEAK_POTION);
+
+    // PlayerStatus enum bindings
+    pybind11::enum_<PlayerStatus> playerStatus(m, "PlayerStatus", pybind11::metaclass(enum_metaclass));
+    playerStatus.value("INVALID", PlayerStatus::INVALID)
+        .value("DOUBLE_DAMAGE", PlayerStatus::DOUBLE_DAMAGE)
+        .value("DRAW_REDUCTION", PlayerStatus::DRAW_REDUCTION)
+        .value("FRAIL", PlayerStatus::FRAIL)
+        .value("INTANGIBLE", PlayerStatus::INTANGIBLE)
+        .value("VULNERABLE", PlayerStatus::VULNERABLE)
+        .value("WEAK", PlayerStatus::WEAK)
+        .value("BIAS", PlayerStatus::BIAS)
+        .value("CONFUSED", PlayerStatus::CONFUSED)
+        .value("CONSTRICTED", PlayerStatus::CONSTRICTED)
+        .value("ENTANGLED", PlayerStatus::ENTANGLED)
+        .value("FASTING", PlayerStatus::FASTING)
+        .value("HEX", PlayerStatus::HEX)
+        .value("LOSE_DEXTERITY", PlayerStatus::LOSE_DEXTERITY)
+        .value("LOSE_STRENGTH", PlayerStatus::LOSE_STRENGTH)
+        .value("NO_BLOCK", PlayerStatus::NO_BLOCK)
+        .value("NO_DRAW", PlayerStatus::NO_DRAW)
+        .value("WRAITH_FORM", PlayerStatus::WRAITH_FORM)
+        .value("BARRICADE", PlayerStatus::BARRICADE)
+        .value("BLASPHEMER", PlayerStatus::BLASPHEMER)
+        .value("CORRUPTION", PlayerStatus::CORRUPTION)
+        .value("ELECTRO", PlayerStatus::ELECTRO)
+        .value("SURROUNDED", PlayerStatus::SURROUNDED)
+        .value("MASTER_REALITY", PlayerStatus::MASTER_REALITY)
+        .value("PEN_NIB", PlayerStatus::PEN_NIB)
+        .value("WRATH_NEXT_TURN", PlayerStatus::WRATH_NEXT_TURN)
+        .value("AMPLIFY", PlayerStatus::AMPLIFY)
+        .value("BLUR", PlayerStatus::BLUR)
+        .value("BUFFER", PlayerStatus::BUFFER)
+        .value("COLLECT", PlayerStatus::COLLECT)
+        .value("DOUBLE_TAP", PlayerStatus::DOUBLE_TAP)
+        .value("DUPLICATION", PlayerStatus::DUPLICATION)
+        .value("ECHO_FORM", PlayerStatus::ECHO_FORM)
+        .value("FREE_ATTACK_POWER", PlayerStatus::FREE_ATTACK_POWER)
+        .value("REBOUND", PlayerStatus::REBOUND)
+        .value("MANTRA", PlayerStatus::MANTRA)
+        .value("ACCURACY", PlayerStatus::ACCURACY)
+        .value("AFTER_IMAGE", PlayerStatus::AFTER_IMAGE)
+        .value("BATTLE_HYMN", PlayerStatus::BATTLE_HYMN)
+        .value("BRUTALITY", PlayerStatus::BRUTALITY)
+        .value("BURST", PlayerStatus::BURST)
+        .value("COMBUST", PlayerStatus::COMBUST)
+        .value("CREATIVE_AI", PlayerStatus::CREATIVE_AI)
+        .value("DARK_EMBRACE", PlayerStatus::DARK_EMBRACE)
+        .value("DEMON_FORM", PlayerStatus::DEMON_FORM)
+        .value("DEVA", PlayerStatus::DEVA)
+        .value("DEVOTION", PlayerStatus::DEVOTION)
+        .value("DRAW_CARD_NEXT_TURN", PlayerStatus::DRAW_CARD_NEXT_TURN)
+        .value("ENERGIZED", PlayerStatus::ENERGIZED)
+        .value("ENVENOM", PlayerStatus::ENVENOM)
+        .value("ESTABLISHMENT", PlayerStatus::ESTABLISHMENT)
+        .value("EVOLVE", PlayerStatus::EVOLVE)
+        .value("FEEL_NO_PAIN", PlayerStatus::FEEL_NO_PAIN)
+        .value("FIRE_BREATHING", PlayerStatus::FIRE_BREATHING)
+        .value("FLAME_BARRIER", PlayerStatus::FLAME_BARRIER)
+        .value("FOCUS", PlayerStatus::FOCUS)
+        .value("FORESIGHT", PlayerStatus::FORESIGHT)
+        .value("HELLO_WORLD", PlayerStatus::HELLO_WORLD)
+        .value("INFINITE_BLADES", PlayerStatus::INFINITE_BLADES)
+        .value("JUGGERNAUT", PlayerStatus::JUGGERNAUT)
+        .value("LIKE_WATER", PlayerStatus::LIKE_WATER)
+        .value("LOOP", PlayerStatus::LOOP)
+        .value("MAGNETISM", PlayerStatus::MAGNETISM)
+        .value("MAYHEM", PlayerStatus::MAYHEM)
+        .value("METALLICIZE", PlayerStatus::METALLICIZE)
+        .value("NEXT_TURN_BLOCK", PlayerStatus::NEXT_TURN_BLOCK)
+        .value("NOXIOUS_FUMES", PlayerStatus::NOXIOUS_FUMES)
+        .value("OMEGA", PlayerStatus::OMEGA)
+        .value("PANACHE", PlayerStatus::PANACHE)
+        .value("PHANTASMAL", PlayerStatus::PHANTASMAL)
+        .value("PLATED_ARMOR", PlayerStatus::PLATED_ARMOR)
+        .value("RAGE", PlayerStatus::RAGE)
+        .value("REGEN", PlayerStatus::REGEN)
+        .value("RITUAL", PlayerStatus::RITUAL)
+        .value("RUPTURE", PlayerStatus::RUPTURE)
+        .value("SADISTIC", PlayerStatus::SADISTIC)
+        .value("STATIC_DISCHARGE", PlayerStatus::STATIC_DISCHARGE)
+        .value("THORNS", PlayerStatus::THORNS)
+        .value("THOUSAND_CUTS", PlayerStatus::THOUSAND_CUTS)
+        .value("TOOLS_OF_THE_TRADE", PlayerStatus::TOOLS_OF_THE_TRADE)
+        .value("VIGOR", PlayerStatus::VIGOR)
+        .value("WAVE_OF_THE_HAND", PlayerStatus::WAVE_OF_THE_HAND)
+        .value("EQUILIBRIUM", PlayerStatus::EQUILIBRIUM)
+        .value("ARTIFACT", PlayerStatus::ARTIFACT)
+        .value("DEXTERITY", PlayerStatus::DEXTERITY)
+        .value("STRENGTH", PlayerStatus::STRENGTH)
+        .value("THE_BOMB", PlayerStatus::THE_BOMB);
+
+    // MonsterStatus enum bindings
+    pybind11::enum_<MonsterStatus> monsterStatus(m, "MonsterStatus", pybind11::metaclass(enum_metaclass));
+    monsterStatus.value("ARTIFACT", MonsterStatus::ARTIFACT)
+        .value("BLOCK_RETURN", MonsterStatus::BLOCK_RETURN)
+        .value("CHOKED", MonsterStatus::CHOKED)
+        .value("CORPSE_EXPLOSION", MonsterStatus::CORPSE_EXPLOSION)
+        .value("LOCK_ON", MonsterStatus::LOCK_ON)
+        .value("MARK", MonsterStatus::MARK)
+        .value("METALLICIZE", MonsterStatus::METALLICIZE)
+        .value("PLATED_ARMOR", MonsterStatus::PLATED_ARMOR)
+        .value("POISON", MonsterStatus::POISON)
+        .value("REGEN", MonsterStatus::REGEN)
+        .value("SHACKLED", MonsterStatus::SHACKLED)
+        .value("STRENGTH", MonsterStatus::STRENGTH)
+        .value("VULNERABLE", MonsterStatus::VULNERABLE)
+        .value("WEAK", MonsterStatus::WEAK)
+        .value("ANGRY", MonsterStatus::ANGRY)
+        .value("BEAT_OF_DEATH", MonsterStatus::BEAT_OF_DEATH)
+        .value("CURIOSITY", MonsterStatus::CURIOSITY)
+        .value("CURL_UP", MonsterStatus::CURL_UP)
+        .value("ENRAGE", MonsterStatus::ENRAGE)
+        .value("FADING", MonsterStatus::FADING)
+        .value("FLIGHT", MonsterStatus::FLIGHT)
+        .value("GENERIC_STRENGTH_UP", MonsterStatus::GENERIC_STRENGTH_UP)
+        .value("INTANGIBLE", MonsterStatus::INTANGIBLE)
+        .value("MALLEABLE", MonsterStatus::MALLEABLE)
+        .value("MODE_SHIFT", MonsterStatus::MODE_SHIFT)
+        .value("RITUAL", MonsterStatus::RITUAL)
+        .value("SLOW", MonsterStatus::SLOW)
+        .value("SPORE_CLOUD", MonsterStatus::SPORE_CLOUD)
+        .value("THIEVERY", MonsterStatus::THIEVERY)
+        .value("THORNS", MonsterStatus::THORNS)
+        .value("TIME_WARP", MonsterStatus::TIME_WARP)
+        .value("INVINCIBLE", MonsterStatus::INVINCIBLE)
+        .value("REACTIVE", MonsterStatus::REACTIVE)
+        .value("SHARP_HIDE", MonsterStatus::SHARP_HIDE);
+
+    // Stance enum binding
+    pybind11::enum_<Stance> stance(m, "Stance", pybind11::metaclass(enum_metaclass));
+    stance.value("NEUTRAL", Stance::NEUTRAL)
+        .value("CALM", Stance::CALM)
+        .value("WRATH", Stance::WRATH)
+        .value("DIVINITY", Stance::DIVINITY);
 
     m.attr("MAX_POTION_CAPACITY") = MAX_POTION_CAPACITY;
 

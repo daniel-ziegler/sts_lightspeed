@@ -32,7 +32,7 @@ SelectScreenCard::SelectScreenCard(const Card &card) : card(card) {}
 
 SelectScreenCard::SelectScreenCard(const Card &card, int deckIdx) : card(card), deckIdx(deckIdx) {}
 
-GameContext::GameContext(CharacterClass cc, std::uint64_t seed, int ascension)
+GameContext::GameContext(CharacterClass cc, std::int64_t seed, int ascension)
     : seed(seed),
     neowRng(seed),
     treasureRng(seed),

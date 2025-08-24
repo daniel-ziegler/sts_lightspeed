@@ -14,7 +14,7 @@ cmake .
 make -j8
 
 # Python bindings (install development dependencies first)
-pyenv shell 3.10.14 && pip install pyarrow tqdm
+pip install pyarrow tqdm
 ```
 
 This creates four executables:
@@ -84,7 +84,6 @@ The codebase includes Python files for ML training and data generation:
 - **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
 - Various `.parquet` files contain training data rollouts from different experiments
 
-To use the right Python environment, prefix all python commands with `pyenv shell 3.10.14 &&`
 
 ### PPO Training Details
 
@@ -167,7 +166,7 @@ The system is designed to be extensible - most new action types can be added by 
 
 1. **Missing Bindings**: Add all needed fields to `bindings/slaythespire.cpp`
    - **Pattern**: `.def_readwrite("pythonName", &CppClass::cppFieldName)`
-   - **Required**: Rebuild with `make` after adding bindings
+   - **Required**: Rebuild with `make -j8` after adding bindings
    - **Check**: Use `dir(obj)` to verify fields are exposed
 
 2. **Naming Conventions**: C++ uses camelCase, Python expectations vary
@@ -221,7 +220,7 @@ The system is designed to be extensible - most new action types can be added by 
    - **Verify**: Action indices match the C++ implementation exactly
 
 3. **Build After Changes**: Always rebuild after C++ binding changes
-   - **Command**: `pyenv shell 3.10.14 && make`
+   - **Command**: `make -j8`
    - **Check**: Import and test immediately after build
 
 # Important instructions
