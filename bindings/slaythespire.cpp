@@ -523,6 +523,8 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("isXCost", &CardInstance::isXCost)
         .def("isBloodCard", &CardInstance::isBloodCard)
         .def("upgrade", &CardInstance::upgrade)
+        .def("canUse", &CardInstance::canUse)
+        .def("canUseOnAnyTarget", &CardInstance::canUseOnAnyTarget)
         .def("__repr__", [](const CardInstance &c) {
             std::string s = "<";
             s += c.getName();

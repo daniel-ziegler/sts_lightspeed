@@ -26,9 +26,9 @@ SimHelpers::SimHelpers() {
     }
 
     for (int i = static_cast<int>(PS::INVALID); i <= static_cast<int>(PS::THE_BOMB); ++i) {
-        const auto stringKey = playerStatusEnumStrings[i];
-        const auto id = static_cast<PlayerStatus>(i);
-        playerStatusStringMap.insert({stringKey, id});
+        const auto stringKey = playerStatusStrings[i];
+        const auto status = static_cast<PlayerStatus>(i);
+        playerStatusStringMap.insert({stringKey, status});
     }
 
     for (int i = static_cast<int>(CardId::INVALID); i <= static_cast<int>(CardId::ZAP); ++i) {

@@ -13,8 +13,9 @@ from typing import Optional, Union
 
 import slaythespire as sts
 from spirecomm.spire import game, card, character, relic, power, potion, screen
+from spirecomm.spire.screen import RewardType, ScreenType
 from spirecomm.communication.coordinator import Coordinator
-from spirecomm.communication.action import Action, ProceedAction, PlayCardAction, EndTurnAction, ChooseAction, RestAction, NoopAction, CancelAction
+from spirecomm.communication.action import Action, BossRewardAction, BuyCardAction, BuyRelicAction, CardSelectAction, ChooseShopkeeperAction, CombatRewardAction, OpenChestAction, ProceedAction, PlayCardAction, EndTurnAction, ChooseAction, RestAction, NoopAction, CancelAction
 from spirecomm.spire.character import PlayerClass
 
 
@@ -27,20 +28,20 @@ CHARACTER_CLASS_MAPPING = {
 
 SCREEN_STATE_MAPPING = {
     # Map spirecomm ScreenType to our ScreenState
-    screen.ScreenType.EVENT: sts.ScreenState.EVENT_SCREEN,
-    screen.ScreenType.CHEST: sts.ScreenState.TREASURE_ROOM,
-    screen.ScreenType.SHOP_ROOM: sts.ScreenState.SHOP_ROOM,
-    screen.ScreenType.SHOP_SCREEN: sts.ScreenState.SHOP_ROOM,
-    screen.ScreenType.REST: sts.ScreenState.REST_ROOM,
-    screen.ScreenType.CARD_REWARD: sts.ScreenState.REWARDS,
-    screen.ScreenType.COMBAT_REWARD: sts.ScreenState.REWARDS,
-    screen.ScreenType.MAP: sts.ScreenState.MAP_SCREEN,
-    screen.ScreenType.BOSS_REWARD: sts.ScreenState.BOSS_RELIC_REWARDS,
-    screen.ScreenType.GRID: sts.ScreenState.CARD_SELECT,
-    screen.ScreenType.HAND_SELECT: sts.ScreenState.CARD_SELECT,
-    screen.ScreenType.GAME_OVER: sts.ScreenState.INVALID,  # Game over, no meaningful screen
-    screen.ScreenType.COMPLETE: sts.ScreenState.INVALID,   # Game complete
-    screen.ScreenType.NONE: sts.ScreenState.MAP_SCREEN,    # Default fallback
+    ScreenType.EVENT: sts.ScreenState.EVENT_SCREEN,
+    ScreenType.CHEST: sts.ScreenState.TREASURE_ROOM,
+    ScreenType.SHOP_ROOM: sts.ScreenState.SHOP_ROOM,
+    ScreenType.SHOP_SCREEN: sts.ScreenState.SHOP_ROOM,
+    ScreenType.REST: sts.ScreenState.REST_ROOM,
+    ScreenType.CARD_REWARD: sts.ScreenState.REWARDS,
+    ScreenType.COMBAT_REWARD: sts.ScreenState.REWARDS,
+    ScreenType.MAP: sts.ScreenState.MAP_SCREEN,
+    ScreenType.BOSS_REWARD: sts.ScreenState.BOSS_RELIC_REWARDS,
+    ScreenType.GRID: sts.ScreenState.CARD_SELECT,
+    ScreenType.HAND_SELECT: sts.ScreenState.CARD_SELECT,
+    ScreenType.GAME_OVER: sts.ScreenState.INVALID,  # Game over, no meaningful screen
+    ScreenType.COMPLETE: sts.ScreenState.INVALID,   # Game complete
+    ScreenType.NONE: sts.ScreenState.MAP_SCREEN,    # Default fallback
 }
 
 # Create lookup dictionaries for efficient reverse mapping
@@ -87,22 +88,12 @@ def map_character_class(spire_class: character.PlayerClass) -> sts.CharacterClas
     return CHARACTER_CLASS_MAPPING.get(spire_class, sts.CharacterClass.INVALID)
 
 
-def map_power_id(spire_power_name: str) -> str:
-    """Map spirecomm power name to our PlayerStatus enum string."""
-    # Try direct lookup first (in case spirecomm uses enum-style names)
+def map_power_id(spire_power_name: str) -> sts.PlayerStatus:
+    """Map spirecomm power name to our PlayerStatus enum."""
     player_status = sts.getPlayerStatusForString(spire_power_name)
-    if player_status != sts.PlayerStatus.INVALID:
-        return spire_power_name
-    
-    # Try converting common variations (e.g., "Strength" -> "STRENGTH")
-    upper_name = spire_power_name.upper().replace(' ', '_')
-    player_status = sts.getPlayerStatusForString(upper_name)
-    if player_status != sts.PlayerStatus.INVALID:
-        return upper_name
-        
-    # If no direct match found, return the original name
-    # This allows the caller to handle the case as needed
-    return spire_power_name
+    if player_status == sts.PlayerStatus.INVALID:
+        raise ValueError(f"Unknown status name: {spire_power_name}")
+    return player_status
 
 
 def convert_card(spire_card: card.Card) -> sts.Card:
@@ -196,15 +187,11 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
             
         # Convert player powers/buffs/debuffs
         for power in player.powers:
-            power_status_name = map_power_id(power.power_name)
-            if power_status_name and power_status_name != "INVALID":
-                # Convert string to enum
-                power_status = getattr(sts.PlayerStatus, power_status_name)
-                # Use buff for positive effects, debuff for negative
-                if is_positive_player_power(power.power_name):
-                    bc.player.buff(power_status, power.amount)
-                else:
-                    bc.player.debuff(power_status, power.amount, False)
+            power_status = map_power_id(power.power_name)
+            if is_positive_player_power(power.power_name):
+                bc.player.buff(power_status, power.amount)
+            else:
+                bc.player.debuff(power_status, power.amount, False)
     
     # Card piles conversion - create CardInstance objects from spirecomm cards
     for spire_card in spire_game.hand:
@@ -686,6 +673,8 @@ class STSLightspeedAgent:
         self.game_state = None
         self.chosen_class = chosen_class
         self.errors = 0
+        self.visited_shop = False
+        self.skipped_cards = False
         
     def change_class(self, new_class: PlayerClass):
         """Change the character class for the next game."""
@@ -706,24 +695,22 @@ class STSLightspeedAgent:
         try:
             self.game_state = game_state
             
-            # Handle different game states
-            if game_state.play_available and game_state.in_combat:
-                return self.handle_combat(game_state)
-            elif game_state.choice_available:
+            if game_state.choice_available:
                 return self.handle_choice_screen(game_state)
-            elif game_state.proceed_available:
+            if game_state.proceed_available:
                 return ProceedAction()
-            elif game_state.end_available:
+            if game_state.play_available:
+                return self.handle_combat(game_state)
+            if game_state.end_available:
                 return EndTurnAction()
-            elif game_state.cancel_available:
+            if game_state.cancel_available:
                 return CancelAction()
-            else:
-                print(f"Game state: play={getattr(game_state, 'play_available', False)}, "
-                      f"choice={getattr(game_state, 'choice_available', False)}, "
-                      f"proceed={getattr(game_state, 'proceed_available', False)}, "
-                      f"in_combat={getattr(game_state, 'in_combat', False)}", file=sys.stderr)
-                
-                return NoopAction()
+            print(f"Game state: play={getattr(game_state, 'play_available', False)}, "
+                    f"choice={getattr(game_state, 'choice_available', False)}, "
+                    f"proceed={getattr(game_state, 'proceed_available', False)}, "
+                    f"in_combat={getattr(game_state, 'in_combat', False)}", file=sys.stderr)
+            
+            return NoopAction()
                 
         except Exception as e:
             print(f"Error in decision making: {e}", file=sys.stderr)
@@ -744,16 +731,15 @@ class STSLightspeedAgent:
                 hand = bc.cards.hand
                 print(f"hand={hand}", file=sys.stderr)
                 for i, card_instance in enumerate(hand):
-                    print(f"card[{i}]={card_instance.id}", file=sys.stderr)
                     # Check if we can afford the card
-                    if card_instance.cost <= bc.player.energy:
+                    if card_instance.canUseOnAnyTarget(bc) and card_instance.cost <= bc.player.energy:
                         print(f"Playing, requires target={card_instance.requiresTarget()}, targetableCount={bc.monsters.getTargetableCount()}", file=sys.stderr)
                         # Try to play this card
                         if card_instance.requiresTarget():
                             # Target first targetable monster
                             target = bc.monsters.getFirstTargetable()
                             print(f"target={target}", file=sys.stderr)
-                            if target >= 0:
+                            if target >= 0 and card_instance.canUse(bc, target, False):
                                 return PlayCardAction(card_index=i, target_index=target)
                         else:
                             return PlayCardAction(card_index=i)
@@ -770,24 +756,62 @@ class STSLightspeedAgent:
         """
         Handle non-combat choice screens with basic logic.
         """
-        # For now, make simple choices
-        # Card rewards - pick first card
-        if hasattr(game_state, 'screen_type'):
-            if game_state.screen_type == screen.ScreenType.CARD_REWARD:
+        if game_state.screen_type == ScreenType.EVENT:
+            if game_state.screen.event_id in ["Vampires", "Masked Bandits", "Knowing Skull", "Ghosts", "Liars Game", "Golden Idol", "Drug Dealer", "The Library"]:
+                return ChooseAction(len(game_state.screen.options) - 1)
+            else:
                 return ChooseAction(0)
-            elif game_state.screen_type == screen.ScreenType.COMBAT_REWARD:
-                return ChooseAction(0)
-            elif game_state.screen_type == screen.ScreenType.MAP:
-                # Choose first available path
-                return ChooseAction(0)
-            elif game_state.screen_type == screen.ScreenType.REST:
-                # Rest to heal
-                from spirecomm.spire.screen import RestOption
-                return RestAction(RestOption.REST)
-        
-        # Default choice
-        return ChooseAction(0)
-    
+        elif game_state.screen_type == ScreenType.CHEST:
+            return OpenChestAction()
+        elif game_state.screen_type == ScreenType.SHOP_ROOM:
+            if not self.visited_shop:
+                self.visited_shop = True
+                return ChooseShopkeeperAction()
+            else:
+                self.visited_shop = False
+                return ProceedAction()
+        elif game_state.screen_type == ScreenType.REST:
+            return ChooseAction(1)
+        elif game_state.screen_type == ScreenType.CARD_REWARD:
+            return ChooseAction(0)
+        elif game_state.screen_type == ScreenType.COMBAT_REWARD:
+            for reward_item in game_state.screen.rewards:
+                if reward_item.reward_type == RewardType.POTION and game_state.are_potions_full():
+                    continue
+                elif reward_item.reward_type == RewardType.CARD and self.skipped_cards:
+                    continue
+                else:
+                    return CombatRewardAction(reward_item)
+            self.skipped_cards = False
+            return ProceedAction()
+        elif game_state.screen_type == ScreenType.MAP:
+            return ChooseAction(0)
+        elif game_state.screen_type == ScreenType.BOSS_REWARD:
+            relics = game_state.screen.relics
+            return BossRewardAction(relics[0])
+        elif game_state.screen_type == ScreenType.SHOP_SCREEN:
+            if game_state.screen.purge_available and game_state.gold >= game_state.screen.purge_cost:
+                return ChooseAction(name="purge")
+            for card in game_state.screen.cards:
+                if game_state.gold >= card.price:
+                    return BuyCardAction(card)
+            for relic in game_state.screen.relics:
+                if game_state.gold >= relic.price:
+                    return BuyRelicAction(relic)
+            return CancelAction()
+        elif game_state.screen_type == ScreenType.GRID:
+            if not game_state.choice_available:
+                return ProceedAction()
+            num_cards = game_state.screen.num_cards
+            return CardSelectAction(game_state.screen.cards[:num_cards])
+        elif game_state.screen_type == ScreenType.HAND_SELECT:
+            if not game_state.choice_available:
+                return ProceedAction()
+            return CardSelectAction(game_state.screen.cards[:3])
+        else:
+            return ProceedAction()
+
+           
     def get_next_action_out_of_game(self) -> Action:
         """Handle out-of-game actions (main menu, etc.)."""
         from spirecomm.communication.action import StartGameAction
