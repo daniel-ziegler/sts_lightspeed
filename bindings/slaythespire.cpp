@@ -14,6 +14,9 @@
 #include "constants/MonsterEncounters.h"
 #include "constants/Potions.h"
 #include "constants/Events.h"
+#include "constants/Cards.h"
+#include "constants/Relics.h"
+#include "constants/MonsterIds.h"
 #include "constants/PlayerStatusEffects.h"
 #include "constants/MonsterStatusEffects.h"
 #include "combat/BattleContext.h"
@@ -161,9 +164,17 @@ PYBIND11_MODULE(slaythespire, m) {
             bc->init(gc);
             return bc;
         }, pybind11::return_value_policy::take_ownership, "create a new BattleContext initialized from this GameContext")
+        .def("empty_battle_context", [](GameContext &gc) -> BattleContext* {
+            BattleContext *bc = new BattleContext();
+            bc->init_empty(gc);
+            return bc;
+        }, pybind11::return_value_policy::take_ownership, "create an empty BattleContext initialized from this GameContext")
         .def("sync_from_battle_context", [](GameContext &gc, BattleContext &bc) {
             bc.exitBattle(gc);
-        }, "sync changes from BattleContext back to GameContext");
+        }, "sync changes from BattleContext back to GameContext")
+        .def("clear_deck", [](GameContext &gc) {
+            gc.deck.cards.clear();
+        }, "clear all cards from the deck");
 
     pybind11::class_<GameAction> gameAction(m, "GameAction");
     gameAction.def("getAllActionsInState", &GameAction::getAllActionsInState);
@@ -468,10 +479,25 @@ PYBIND11_MODULE(slaythespire, m) {
             return mg.arr[idx];
         }, pybind11::return_value_policy::reference_internal)
         .def("__len__", [](const MonsterGroup &mg) { return mg.monsterCount; })
+        .def("createMonster", &MonsterGroup::createMonster)
         .def("getAliveCount", &MonsterGroup::getAliveCount)
         .def("getTargetableCount", &MonsterGroup::getTargetableCount)
         .def("getFirstTargetable", &MonsterGroup::getFirstTargetable)
-        .def("areMonstersBasicallyDead", &MonsterGroup::areMonstersBasicallyDead);
+        .def("areMonstersBasicallyDead", &MonsterGroup::areMonstersBasicallyDead)
+        .def("__repr__", [](const MonsterGroup &mg) {
+            std::string s = "<MonsterGroup[" + std::to_string(mg.monsterCount) + "]: ";
+            for (int i = 0; i < mg.monsterCount; ++i) {
+                if (i > 0) s += ", ";
+                s += mg.arr[i].getName();
+                s += "(";
+                s += std::to_string(mg.arr[i].curHp);
+                s += "/";
+                s += std::to_string(mg.arr[i].maxHp);
+                s += ")";
+                if (mg.arr[i].halfDead) s += " [DEAD]";
+            }
+            return s + ">";
+        });
 
     // CardInstance bindings
     pybind11::class_<CardInstance> cardInstance(m, "CardInstance");
@@ -496,7 +522,22 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("requiresTarget", &CardInstance::requiresTarget)
         .def("isXCost", &CardInstance::isXCost)
         .def("isBloodCard", &CardInstance::isBloodCard)
-        .def("upgrade", &CardInstance::upgrade);
+        .def("upgrade", &CardInstance::upgrade)
+        .def("__repr__", [](const CardInstance &c) {
+            std::string s = "<";
+            s += c.getName();
+            if (c.upgraded) {
+                s += '+';
+                if (c.id == sts::CardId::SEARING_BLOW && c.specialData > 1) {
+                    s += std::to_string(c.specialData);
+                }
+            }
+            s += " [" + std::to_string(c.cost) + "]";
+            if (c.uniqueId != -1) {
+                s += " #" + std::to_string(c.uniqueId);
+            }
+            return s + ">";
+        });
 
     // CardManager bindings  
     pybind11::class_<CardManager> cardManager(m, "CardManager");
@@ -518,7 +559,8 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("moveToExhaustPile", &CardManager::moveToExhaustPile)
         .def("moveToDrawPileTop", &CardManager::moveToDrawPileTop)
         .def("removeFromHandAtIdx", &CardManager::removeFromHandAtIdx)
-        .def("draw", &CardManager::draw);
+        .def("draw", &CardManager::draw)
+        .def("clear", &CardManager::clear);
 
     auto &internals = pybind11::detail::get_internals();
     auto pybind11_metaclass = pybind11::reinterpret_borrow<pybind11::object>((PyObject*)internals.default_metaclass);
@@ -1149,6 +1191,75 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("MUSHROOMS_EVENT", ME::MUSHROOMS_EVENT)
         .value("MYSTERIOUS_SPHERE_EVENT", ME::MYSTERIOUS_SPHERE_EVENT);
 
+    // MonsterId enum binding
+    pybind11::enum_<MonsterId> monsterIdEnum(m, "MonsterId", pybind11::metaclass(enum_metaclass));
+    monsterIdEnum.value("INVALID", MonsterId::INVALID)
+        .value("ACID_SLIME_L", MonsterId::ACID_SLIME_L)
+        .value("ACID_SLIME_M", MonsterId::ACID_SLIME_M)
+        .value("ACID_SLIME_S", MonsterId::ACID_SLIME_S)
+        .value("AWAKENED_ONE", MonsterId::AWAKENED_ONE)
+        .value("BEAR", MonsterId::BEAR)
+        .value("BLUE_SLAVER", MonsterId::BLUE_SLAVER)
+        .value("BOOK_OF_STABBING", MonsterId::BOOK_OF_STABBING)
+        .value("BRONZE_AUTOMATON", MonsterId::BRONZE_AUTOMATON)
+        .value("BRONZE_ORB", MonsterId::BRONZE_ORB)
+        .value("BYRD", MonsterId::BYRD)
+        .value("CENTURION", MonsterId::CENTURION)
+        .value("CHOSEN", MonsterId::CHOSEN)
+        .value("CORRUPT_HEART", MonsterId::CORRUPT_HEART)
+        .value("CULTIST", MonsterId::CULTIST)
+        .value("DAGGER", MonsterId::DAGGER)
+        .value("DARKLING", MonsterId::DARKLING)
+        .value("DECA", MonsterId::DECA)
+        .value("DONU", MonsterId::DONU)
+        .value("EXPLODER", MonsterId::EXPLODER)
+        .value("FAT_GREMLIN", MonsterId::FAT_GREMLIN)
+        .value("FUNGI_BEAST", MonsterId::FUNGI_BEAST)
+        .value("GIANT_HEAD", MonsterId::GIANT_HEAD)
+        .value("GREEN_LOUSE", MonsterId::GREEN_LOUSE)
+        .value("GREMLIN_LEADER", MonsterId::GREMLIN_LEADER)
+        .value("GREMLIN_NOB", MonsterId::GREMLIN_NOB)
+        .value("GREMLIN_WIZARD", MonsterId::GREMLIN_WIZARD)
+        .value("HEXAGHOST", MonsterId::HEXAGHOST)
+        .value("JAW_WORM", MonsterId::JAW_WORM)
+        .value("LAGAVULIN", MonsterId::LAGAVULIN)
+        .value("LOOTER", MonsterId::LOOTER)
+        .value("MAD_GREMLIN", MonsterId::MAD_GREMLIN)
+        .value("MUGGER", MonsterId::MUGGER)
+        .value("MYSTIC", MonsterId::MYSTIC)
+        .value("NEMESIS", MonsterId::NEMESIS)
+        .value("ORB_WALKER", MonsterId::ORB_WALKER)
+        .value("POINTY", MonsterId::POINTY)
+        .value("RED_LOUSE", MonsterId::RED_LOUSE)
+        .value("RED_SLAVER", MonsterId::RED_SLAVER)
+        .value("REPTOMANCER", MonsterId::REPTOMANCER)
+        .value("REPULSOR", MonsterId::REPULSOR)
+        .value("ROMEO", MonsterId::ROMEO)
+        .value("SENTRY", MonsterId::SENTRY)
+        .value("SHELLED_PARASITE", MonsterId::SHELLED_PARASITE)
+        .value("SHIELD_GREMLIN", MonsterId::SHIELD_GREMLIN)
+        .value("SLIME_BOSS", MonsterId::SLIME_BOSS)
+        .value("SNAKE_PLANT", MonsterId::SNAKE_PLANT)
+        .value("SNEAKY_GREMLIN", MonsterId::SNEAKY_GREMLIN)
+        .value("SNECKO", MonsterId::SNECKO)
+        .value("SPHERIC_GUARDIAN", MonsterId::SPHERIC_GUARDIAN)
+        .value("SPIKER", MonsterId::SPIKER)
+        .value("SPIKE_SLIME_L", MonsterId::SPIKE_SLIME_L)
+        .value("SPIKE_SLIME_M", MonsterId::SPIKE_SLIME_M)
+        .value("SPIKE_SLIME_S", MonsterId::SPIKE_SLIME_S)
+        .value("SPIRE_GROWTH", MonsterId::SPIRE_GROWTH)
+        .value("SPIRE_SHIELD", MonsterId::SPIRE_SHIELD)
+        .value("SPIRE_SPEAR", MonsterId::SPIRE_SPEAR)
+        .value("TASKMASTER", MonsterId::TASKMASTER)
+        .value("THE_CHAMP", MonsterId::THE_CHAMP)
+        .value("THE_COLLECTOR", MonsterId::THE_COLLECTOR)
+        .value("THE_GUARDIAN", MonsterId::THE_GUARDIAN)
+        .value("THE_MAW", MonsterId::THE_MAW)
+        .value("TIME_EATER", MonsterId::TIME_EATER)
+        .value("TORCH_HEAD", MonsterId::TORCH_HEAD)
+        .value("TRANSIENT", MonsterId::TRANSIENT)
+        .value("WRITHING_MASS", MonsterId::WRITHING_MASS);
+
     pybind11::enum_<RelicId> relicEnum(m, "RelicId", pybind11::metaclass(enum_metaclass));
     relicEnum.value("AKABEKO", RelicId::AKABEKO)
         .value("ART_OF_WAR", RelicId::ART_OF_WAR)
@@ -1511,6 +1622,43 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("CALM", Stance::CALM)
         .value("WRATH", Stance::WRATH)
         .value("DIVINITY", Stance::DIVINITY);
+
+    // Lookup functions for dynamic enum conversion
+    m.def("getCardName", &sts::getCardName, "Get card name by CardId");
+    m.def("getCardStringId", &sts::getCardStringId, "Get card string ID by CardId");
+    m.def("getRelicName", &sts::getRelicName, "Get relic name by RelicId");
+    m.def("getRelicId", &sts::getRelicId, "Get relic string ID by RelicId");
+    m.def("getMonsterName", &sts::getMonsterName, "Get monster name by MonsterId");
+    m.def("getMonsterIdString", &sts::getMonsterIdString, "Get monster string ID by MonsterId");
+    m.def("getPlayerStatusForString", &SimHelpers::getPlayerStatusForString, "Get PlayerStatus enum from string name");
+    
+    // Array access functions for efficient reverse lookup
+    m.def("getAllCardStringIds", []() {
+        std::vector<std::pair<int, std::string>> result;
+        constexpr int card_count = sizeof(sts::cardStringIds) / sizeof(sts::cardStringIds[0]);
+        for (int i = 0; i < card_count; i++) {
+            result.emplace_back(i, sts::getCardStringId(static_cast<sts::CardId>(i)));
+        }
+        return result;
+    }, "Get all card string IDs with their enum indices");
+    
+    m.def("getAllRelicNames", []() {
+        std::vector<std::pair<int, std::string>> result;
+        constexpr int relic_count = sizeof(sts::relicNames) / sizeof(sts::relicNames[0]);
+        for (int i = 0; i < relic_count; i++) {
+            result.emplace_back(i, sts::getRelicName(static_cast<sts::RelicId>(i)));
+        }
+        return result;
+    }, "Get all relic names with their enum indices");
+    
+    m.def("getAllMonsterStringIds", []() {
+        std::vector<std::pair<int, std::string>> result;
+        constexpr int monster_count = sizeof(sts::monsterIdStrings) / sizeof(sts::monsterIdStrings[0]);
+        for (int i = 0; i < monster_count; i++) {
+            result.emplace_back(i, sts::getMonsterIdString(static_cast<sts::MonsterId>(i)));
+        }
+        return result;
+    }, "Get all monster string IDs with their enum indices");
 
     m.attr("MAX_POTION_CAPACITY") = MAX_POTION_CAPACITY;
 

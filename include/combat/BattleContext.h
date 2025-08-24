@@ -102,6 +102,7 @@ namespace sts {
 
 // ****************************************
 
+        void init_empty(const GameContext &gc);
         void init(const GameContext &gc);
         void init(const GameContext &gc, MonsterEncounter encounterToInit);
 

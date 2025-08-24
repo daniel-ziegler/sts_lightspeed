@@ -14,232 +14,10 @@ from typing import Optional, Union
 import slaythespire as sts
 from spirecomm.spire import game, card, character, relic, power, potion, screen
 from spirecomm.communication.coordinator import Coordinator
-from spirecomm.communication.action import Action, ProceedAction, PlayCardAction, EndTurnAction, ChooseAction, RestAction
+from spirecomm.communication.action import Action, ProceedAction, PlayCardAction, EndTurnAction, ChooseAction, RestAction, NoopAction, CancelAction
 from spirecomm.spire.character import PlayerClass
 
 
-# Mapping dictionaries for spirecomm string IDs to our enum values
-CARD_ID_MAPPING = {
-    # Basic cards - Ironclad
-    "Strike_R": sts.CardId.STRIKE_RED,
-    "Defend_R": sts.CardId.DEFEND_RED,
-    "Bash": sts.CardId.BASH,
-    
-    # Common Ironclad cards
-    "Anger": sts.CardId.ANGER,
-    "Armaments": sts.CardId.ARMAMENTS,
-    "Body Slam": sts.CardId.BODY_SLAM,
-    "Clash": sts.CardId.CLASH,
-    "Cleave": sts.CardId.CLEAVE,
-    "Clothesline": sts.CardId.CLOTHESLINE,
-    "Flex": sts.CardId.FLEX,
-    "Havoc": sts.CardId.HAVOC,
-    "Headbutt": sts.CardId.HEADBUTT,
-    "Heavy Blade": sts.CardId.HEAVY_BLADE,
-    "Iron Wave": sts.CardId.IRON_WAVE,
-    "Perfected Strike": sts.CardId.PERFECTED_STRIKE,
-    "Pommel Strike": sts.CardId.POMMEL_STRIKE,
-    "Shrug It Off": sts.CardId.SHRUG_IT_OFF,
-    "Sword Boomerang": sts.CardId.SWORD_BOOMERANG,
-    "Thunderclap": sts.CardId.THUNDERCLAP,
-    "True Grit": sts.CardId.TRUE_GRIT,
-    "Twin Strike": sts.CardId.TWIN_STRIKE,
-    "Warcry": sts.CardId.WARCRY,
-    "Wild Strike": sts.CardId.WILD_STRIKE,
-    
-    # Uncommon Ironclad cards
-    "Battle Trance": sts.CardId.BATTLE_TRANCE,
-    "Bloodletting": sts.CardId.BLOODLETTING,
-    "Blood for Blood": sts.CardId.BLOOD_FOR_BLOOD,
-    "Burning Pact": sts.CardId.BURNING_PACT,
-    "Carnage": sts.CardId.CARNAGE,
-    "Combust": sts.CardId.COMBUST,
-    "Dark Embrace": sts.CardId.DARK_EMBRACE,
-    "Disarm": sts.CardId.DISARM,
-    "Dropkick": sts.CardId.DROPKICK,
-    "Dual Wield": sts.CardId.DUAL_WIELD,
-    "Entrench": sts.CardId.ENTRENCH,
-    "Evolve": sts.CardId.EVOLVE,
-    "Feel No Pain": sts.CardId.FEEL_NO_PAIN,
-    "Fire Breathing": sts.CardId.FIRE_BREATHING,
-    "Flame Barrier": sts.CardId.FLAME_BARRIER,
-    "Ghostly Armor": sts.CardId.GHOSTLY_ARMOR,
-    "Hemokinesis": sts.CardId.HEMOKINESIS,
-    "Inflame": sts.CardId.INFLAME,
-    "Intimidate": sts.CardId.INTIMIDATE,
-    "Metallicize": sts.CardId.METALLICIZE,
-    "Power Through": sts.CardId.POWER_THROUGH,
-    "Pummel": sts.CardId.PUMMEL,
-    "Rage": sts.CardId.RAGE,
-    "Rampage": sts.CardId.RAMPAGE,
-    "Reckless Charge": sts.CardId.RECKLESS_CHARGE,
-    "Rupture": sts.CardId.RUPTURE,
-    "Searing Blow": sts.CardId.SEARING_BLOW,
-    "Second Wind": sts.CardId.SECOND_WIND,
-    "Seeing Red": sts.CardId.SEEING_RED,
-    "Sentinel": sts.CardId.SENTINEL,
-    "Shockwave": sts.CardId.SHOCKWAVE,
-    "Spot Weakness": sts.CardId.SPOT_WEAKNESS,
-    "Uppercut": sts.CardId.UPPERCUT,
-    "Whirlwind": sts.CardId.WHIRLWIND,
-    
-    # Rare Ironclad cards
-    "Barricade": sts.CardId.BARRICADE,
-    "Berserk": sts.CardId.BERSERK,
-    "Bludgeon": sts.CardId.BLUDGEON,
-    "Brutality": sts.CardId.BRUTALITY,
-    "Corruption": sts.CardId.CORRUPTION,
-    "Demon Form": sts.CardId.DEMON_FORM,
-    "Double Tap": sts.CardId.DOUBLE_TAP,
-    "Exhume": sts.CardId.EXHUME,
-    "Feed": sts.CardId.FEED,
-    "Fiend Fire": sts.CardId.FIEND_FIRE,
-    "Immolate": sts.CardId.IMMOLATE,
-    "Impervious": sts.CardId.IMPERVIOUS,
-    "Juggernaut": sts.CardId.JUGGERNAUT,
-    "Limit Break": sts.CardId.LIMIT_BREAK,
-    "Offering": sts.CardId.OFFERING,
-    "Reaper": sts.CardId.REAPER,
-    
-    # Basic Silent cards  
-    "Strike_G": sts.CardId.STRIKE_GREEN,
-    "Defend_G": sts.CardId.DEFEND_GREEN,
-    "Neutralize": sts.CardId.NEUTRALIZE,
-    "Survivor": sts.CardId.SURVIVOR,
-    
-    # Basic Defect cards
-    "Strike_B": sts.CardId.STRIKE_BLUE,
-    "Defend_B": sts.CardId.DEFEND_BLUE,
-    "Zap": sts.CardId.ZAP,
-    "Dualcast": sts.CardId.DUALCAST,
-    
-    # Basic Watcher cards  
-    "Strike_P": sts.CardId.STRIKE_PURPLE,
-    "Defend_P": sts.CardId.DEFEND_PURPLE,
-    "Eruption": sts.CardId.ERUPTION,
-    "Vigilance": sts.CardId.VIGILANCE,
-    
-    # Status/Curse cards
-    "Burn": sts.CardId.BURN,
-    "Wound": sts.CardId.WOUND,
-    "Dazed": sts.CardId.DAZED,
-    "Slimed": sts.CardId.SLIMED,
-    "Void": sts.CardId.VOID,
-    "Ascender's Bane": sts.CardId.ASCENDERS_BANE,
-    "Clumsy": sts.CardId.CLUMSY,
-    "Curse of the Bell": sts.CardId.CURSE_OF_THE_BELL,
-    "Decay": sts.CardId.DECAY,
-    "Doubt": sts.CardId.DOUBT,
-    "Injury": sts.CardId.INJURY,
-    "Necronomicurse": sts.CardId.NECRONOMICURSE,
-    "Normality": sts.CardId.NORMALITY,
-    "Pain": sts.CardId.PAIN,
-    "Parasite": sts.CardId.PARASITE,
-    "Pride": sts.CardId.PRIDE,
-    "Regret": sts.CardId.REGRET,
-    "Shame": sts.CardId.SHAME,
-    "Writhe": sts.CardId.WRITHE,
-}
-
-RELIC_ID_MAPPING = {
-    # Starter relics
-    "Burning Blood": sts.RelicId.BURNING_BLOOD,
-    "Ring of the Snake": sts.RelicId.RING_OF_THE_SNAKE,
-    "Cracked Core": sts.RelicId.CRACKED_CORE,
-    "Pure Water": sts.RelicId.PURE_WATER,
-    
-    # Special relics
-    "Neow's Lament": sts.RelicId.NEOWS_LAMENT,
-    
-    # Common relics
-    "Akabeko": sts.RelicId.AKABEKO,
-    "Anchor": sts.RelicId.ANCHOR,
-    "Art of War": sts.RelicId.ART_OF_WAR,
-    "Bag of Marbles": sts.RelicId.BAG_OF_MARBLES,
-    "Bag of Preparation": sts.RelicId.BAG_OF_PREPARATION,
-    "Blood Vial": sts.RelicId.BLOOD_VIAL,
-    "Bronze Scales": sts.RelicId.BRONZE_SCALES,
-    "Centennial Puzzle": sts.RelicId.CENTENNIAL_PUZZLE,
-    "Ceramic Fish": sts.RelicId.CERAMIC_FISH,
-    "Dream Catcher": sts.RelicId.DREAM_CATCHER,
-    "Happy Flower": sts.RelicId.HAPPY_FLOWER,
-    "Juzu Bracelet": sts.RelicId.JUZU_BRACELET,
-    "Lantern": sts.RelicId.LANTERN,
-    "Meal Ticket": sts.RelicId.MEAL_TICKET,
-    "Nunchaku": sts.RelicId.NUNCHAKU,
-    "Oddly Smooth Stone": sts.RelicId.ODDLY_SMOOTH_STONE,
-    "Omamori": sts.RelicId.OMAMORI,
-    "Orichalcum": sts.RelicId.ORICHALCUM,
-    "Pen Nib": sts.RelicId.PEN_NIB,
-    "Preserved Insect": sts.RelicId.PRESERVED_INSECT,
-    "Red Skull": sts.RelicId.RED_SKULL,
-    "Regal Pillow": sts.RelicId.REGAL_PILLOW,
-    "Smiling Mask": sts.RelicId.SMILING_MASK,
-    "Strawberry": sts.RelicId.STRAWBERRY,
-    "The Boot": sts.RelicId.THE_BOOT,
-    "Tiny Chest": sts.RelicId.TINY_CHEST,
-    "Toy Ornithopter": sts.RelicId.TOY_ORNITHOPTER,
-    "Vajra": sts.RelicId.VAJRA,
-    "War Paint": sts.RelicId.WAR_PAINT,
-    "Whetstone": sts.RelicId.WHETSTONE,
-    
-    # Uncommon relics
-    "Blue Candle": sts.RelicId.BLUE_CANDLE,
-    "Bottled Flame": sts.RelicId.BOTTLED_FLAME,
-    "Bottled Lightning": sts.RelicId.BOTTLED_LIGHTNING,
-    "Bottled Tornado": sts.RelicId.BOTTLED_TORNADO,
-    "Darkstone Periapt": sts.RelicId.DARKSTONE_PERIAPT,
-    "Eternal Feather": sts.RelicId.ETERNAL_FEATHER,
-    "Frozen Egg": sts.RelicId.FROZEN_EGG,
-    "Ginger": sts.RelicId.GINGER,
-    "Gremlin Horn": sts.RelicId.GREMLIN_HORN,
-    "Horn Cleat": sts.RelicId.HORN_CLEAT,
-    "InkBottle": sts.RelicId.INK_BOTTLE,
-    "Kunai": sts.RelicId.KUNAI,
-    "Letter Opener": sts.RelicId.LETTER_OPENER,
-    "Matryoshka": sts.RelicId.MATRYOSHKA,
-    "Meat on the Bone": sts.RelicId.MEAT_ON_THE_BONE,
-    "Mercury Hourglass": sts.RelicId.MERCURY_HOURGLASS,
-    "Molten Egg": sts.RelicId.MOLTEN_EGG,
-    "Mummified Hand": sts.RelicId.MUMMIFIED_HAND,
-    "Ornamental Fan": sts.RelicId.ORNAMENTAL_FAN,
-    "Pantograph": sts.RelicId.PANTOGRAPH,
-    "Paper Krane": sts.RelicId.PAPER_KRANE,
-    "Prayer Wheel": sts.RelicId.PRAYER_WHEEL,
-    "Question Card": sts.RelicId.QUESTION_CARD,
-    "Shuriken": sts.RelicId.SHURIKEN,
-    "Singing Bowl": sts.RelicId.SINGING_BOWL,
-    "Strike Dummy": sts.RelicId.STRIKE_DUMMY,
-    "Sundial": sts.RelicId.SUNDIAL,
-    "Teardrop Locket": sts.RelicId.TEARDROP_LOCKET,
-    "The Courier": sts.RelicId.THE_COURIER,
-    "Thread and Needle": sts.RelicId.THREAD_AND_NEEDLE,
-    "Tingsha": sts.RelicId.TINGSHA,
-    "Toolbox": sts.RelicId.TOOLBOX,
-    "Toxic Egg": sts.RelicId.TOXIC_EGG,
-    "Turnip": sts.RelicId.TURNIP,
-    "Unceasing Top": sts.RelicId.UNCEASING_TOP,
-    "White Beast Statue": sts.RelicId.WHITE_BEAST_STATUE,
-    
-    # Boss relics
-    "Astrolabe": sts.RelicId.ASTROLABE,
-    "Black Star": sts.RelicId.BLACK_STAR,
-    "Busted Crown": sts.RelicId.BUSTED_CROWN,
-    "Calling Bell": sts.RelicId.CALLING_BELL,
-    "Coffee Dripper": sts.RelicId.COFFEE_DRIPPER,
-    "Cursed Key": sts.RelicId.CURSED_KEY,
-    "Ectoplasm": sts.RelicId.ECTOPLASM,
-    "Empty Cage": sts.RelicId.EMPTY_CAGE,
-    "Fusion Hammer": sts.RelicId.FUSION_HAMMER,
-    "Pandora's Box": sts.RelicId.PANDORAS_BOX,
-    "Philosopher's Stone": sts.RelicId.PHILOSOPHERS_STONE,
-    "Runic Dome": sts.RelicId.RUNIC_DOME,
-    "Runic Pyramid": sts.RelicId.RUNIC_PYRAMID,
-    "Slavers Collar": sts.RelicId.SLAVERS_COLLAR,
-    "Snecko Eye": sts.RelicId.SNECKO_EYE,
-    "Sozu": sts.RelicId.SOZU,
-    "Velvet Choker": sts.RelicId.VELVET_CHOKER,
-}
 
 CHARACTER_CLASS_MAPPING = {
     character.PlayerClass.IRONCLAD: sts.CharacterClass.IRONCLAD,
@@ -265,90 +43,44 @@ SCREEN_STATE_MAPPING = {
     screen.ScreenType.NONE: sts.ScreenState.MAP_SCREEN,    # Default fallback
 }
 
-# Power ID mapping - spirecomm power names to our PlayerStatus enum
-POWER_ID_MAPPING = {
-    # Status effects / debuffs
-    "Frail": "FRAIL",
-    "Vulnerable": "VULNERABLE", 
-    "Weakened": "WEAK",
-    "Intangible": "INTANGIBLE",
-    "Constricted": "CONSTRICTED",
-    "Entangled": "ENTANGLED",
-    
-    # Powers - bool types
-    "Barricade": "BARRICADE",
-    "Corruption": "CORRUPTION",
-    "Wraith Form": "WRAITH_FORM",
-    
-    # Powers - counter types
-    "Amplify": "AMPLIFY",
-    "Blur": "BLUR", 
-    "Buffer": "BUFFER",
-    "Double Tap": "DOUBLE_TAP",
-    "Echo Form": "ECHO_FORM",
-    "Mantra": "MANTRA",
-    
-    # Powers - intensity types
-    "Accuracy": "ACCURACY",
-    "After Image": "AFTER_IMAGE",
-    "Battle Hymn": "BATTLE_HYMN",
-    "Brutality": "BRUTALITY",
-    "Burst": "BURST",
-    "Combust": "COMBUST",
-    "Creative AI": "CREATIVE_AI",
-    "Dark Embrace": "DARK_EMBRACE",
-    "Demon Form": "DEMON_FORM",
-    "Deva Form": "DEVA",
-    "Devotion": "DEVOTION",
-    "Energized": "ENERGIZED",
-    "Envenom": "ENVENOM",
-    "Establishment": "ESTABLISHMENT",
-    "Evolve": "EVOLVE",
-    "Feel No Pain": "FEEL_NO_PAIN",
-    "Fire Breathing": "FIRE_BREATHING",
-    "Flame Barrier": "FLAME_BARRIER",
-    "Focus": "FOCUS",
-    "Hello World": "HELLO_WORLD",
-    "Infinite Blades": "INFINITE_BLADES",
-    "Juggernaut": "JUGGERNAUT",
-    "Like Water": "LIKE_WATER",
-    "Loop": "LOOP",
-    "Magnetism": "MAGNETISM",
-    "Mayhem": "MAYHEM", 
-    "Metallicize": "METALLICIZE",
-    "Noxious Fumes": "NOXIOUS_FUMES",
-    "Omega": "OMEGA",
-    "Panache": "PANACHE",
-    "Plated Armor": "PLATED_ARMOR",
-    "Rage": "RAGE",
-    "Regeneration": "REGEN",
-    "Ritual": "RITUAL",
-    "Rupture": "RUPTURE",
-    "Static Discharge": "STATIC_DISCHARGE",
-    "Thorns": "THORNS",
-    "A Thousand Cuts": "THOUSAND_CUTS",
-    "Tools of the Trade": "TOOLS_OF_THE_TRADE",
-    "Vigor": "VIGOR",
-    
-    # Duration types
-    "Artifact": "ARTIFACT",
-    "Dexterity": "DEXTERITY",
-    "Strength": "STRENGTH",
-    
-    # Special
-    "Bomb": "THE_BOMB",
-}
+# Create lookup dictionaries for efficient reverse mapping
+_card_string_to_id = None
+_relic_name_to_id = None
 
+def _get_card_string_to_id_map():
+    """Create card string ID to CardId mapping dictionary."""
+    global _card_string_to_id
+    if _card_string_to_id is None:
+        _card_string_to_id = {}
+        for enum_idx, string_id in sts.getAllCardStringIds():
+            _card_string_to_id[string_id] = enum_idx
+    return _card_string_to_id
+
+def _get_relic_name_to_id_map():
+    """Create relic name to RelicId mapping dictionary."""
+    global _relic_name_to_id
+    if _relic_name_to_id is None:
+        _relic_name_to_id = {}
+        for enum_idx, name in sts.getAllRelicNames():
+            _relic_name_to_id[name] = enum_idx
+    return _relic_name_to_id
 
 def map_card_id(spire_card_id: str) -> sts.CardId:
-    """Map spirecomm card ID to our CardId enum."""
-    return CARD_ID_MAPPING.get(spire_card_id, sts.CardId.INVALID)
+    """Map spirecomm card ID to our CardId enum using dynamic lookup."""
+    card_map = _get_card_string_to_id_map()
+    enum_idx = card_map.get(spire_card_id)
+    if enum_idx is not None:
+        return sts.CardId(enum_idx)
+    return sts.CardId.INVALID
 
 
 def map_relic_id(spire_relic_id: str) -> sts.RelicId:
-    """Map spirecomm relic ID to our RelicId enum."""  
-    return RELIC_ID_MAPPING.get(spire_relic_id, sts.RelicId.INVALID)
-
+    """Map spirecomm relic ID to our RelicId enum using dynamic lookup."""
+    relic_map = _get_relic_name_to_id_map()
+    enum_idx = relic_map.get(spire_relic_id)
+    if enum_idx is not None:
+        return sts.RelicId(enum_idx)
+    return sts.RelicId.INVALID
 
 def map_character_class(spire_class: character.PlayerClass) -> sts.CharacterClass:
     """Map spirecomm PlayerClass to our CharacterClass."""
@@ -357,7 +89,20 @@ def map_character_class(spire_class: character.PlayerClass) -> sts.CharacterClas
 
 def map_power_id(spire_power_name: str) -> str:
     """Map spirecomm power name to our PlayerStatus enum string."""
-    return POWER_ID_MAPPING.get(spire_power_name, "INVALID")
+    # Try direct lookup first (in case spirecomm uses enum-style names)
+    player_status = sts.getPlayerStatusForString(spire_power_name)
+    if player_status != sts.PlayerStatus.INVALID:
+        return spire_power_name
+    
+    # Try converting common variations (e.g., "Strength" -> "STRENGTH")
+    upper_name = spire_power_name.upper().replace(' ', '_')
+    player_status = sts.getPlayerStatusForString(upper_name)
+    if player_status != sts.PlayerStatus.INVALID:
+        return upper_name
+        
+    # If no direct match found, return the original name
+    # This allows the caller to handle the case as needed
+    return spire_power_name
 
 
 def convert_card(spire_card: card.Card) -> sts.Card:
@@ -420,34 +165,6 @@ def convert_relics(spire_relics: list[relic.Relic]) -> list[sts.Relic]:
     return converted_relics
 
 
-def detect_encounter_from_monsters(monsters) -> sts.MonsterEncounter:
-    """
-    Detect the most appropriate MonsterEncounter based on spirecomm monster data.
-    
-    Since we can't know the exact encounter from just monster states, we'll use
-    a reasonable default based on monster count and types.
-    """
-    if not monsters or len(monsters) == 0:
-        return sts.MonsterEncounter.INVALID
-    
-    # For simplicity, we'll use basic encounters based on monster count
-    # In a more sophisticated implementation, we could analyze monster names/IDs
-    monster_count = len([m for m in monsters if hasattr(m, 'current_hp') and m.current_hp > 0])
-    
-    if monster_count == 1:
-        # Single monster - use a common single monster encounter
-        return sts.MonsterEncounter.CULTIST
-    elif monster_count == 2:
-        # Two monsters - use a common two monster encounter
-        return sts.MonsterEncounter.TWO_LOUSE
-    elif monster_count == 3:
-        # Three monsters - use a common three monster encounter  
-        return sts.MonsterEncounter.THREE_LOUSE
-    else:
-        # More than 3 or unknown - use a default
-        return sts.MonsterEncounter.GREMLIN_GANG
-
-
 def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.BattleContext:
     """
     Convert spirecomm combat state to BattleContext.
@@ -464,110 +181,95 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
     if not spire_game.in_combat:
         raise ValueError("Cannot convert combat state when not in combat")
     
-    # Set up a valid encounter before creating BattleContext
-    # Map spirecomm monsters to a reasonable encounter
-    encounter = detect_encounter_from_monsters(spire_game.monsters)
-    gc.screen_state_info.encounter = encounter
-    
     # Create battle context from GameContext
-    bc = gc.create_battle_context()
+    bc = gc.empty_battle_context()
+    
+    # Clear the initialized cards to avoid mixing with spirecomm state
+    bc.cards.clear()
     
     # Player state conversion
     player = spire_game.player
     if player:
         # Set basic player stats
-        if hasattr(player, 'energy'):
-            bc.player.energy = player.energy
-        if hasattr(player, 'block'):
-            bc.player.block = player.block
+        bc.player.energy = player.energy
+        bc.player.block = player.block
             
         # Convert player powers/buffs/debuffs
-        if hasattr(player, 'powers') and player.powers:
-            for power in player.powers:
-                power_status_name = map_power_id(power.power_name)
-                if power_status_name and power_status_name != "INVALID":
-                    # Convert string to enum
-                    power_status = getattr(sts.PlayerStatus, power_status_name)
-                    # Use buff for positive effects, debuff for negative
-                    if is_positive_player_power(power.power_name):
-                        bc.player.buff(power_status, power.amount)
-                    else:
-                        bc.player.debuff(power_status, power.amount, False)
+        for power in player.powers:
+            power_status_name = map_power_id(power.power_name)
+            if power_status_name and power_status_name != "INVALID":
+                # Convert string to enum
+                power_status = getattr(sts.PlayerStatus, power_status_name)
+                # Use buff for positive effects, debuff for negative
+                if is_positive_player_power(power.power_name):
+                    bc.player.buff(power_status, power.amount)
+                else:
+                    bc.player.debuff(power_status, power.amount, False)
     
     # Card piles conversion - create CardInstance objects from spirecomm cards
-    if spire_game.hand:
-        # Clear current hand and populate with spirecomm cards
-        for spire_card in spire_game.hand:
-            try:
-                card_instance = convert_spire_card_to_instance(spire_card)
-                bc.cards.moveToHand(card_instance)
-            except (ValueError, KeyError):
-                # Skip unknown cards
-                continue
+    for spire_card in spire_game.hand:
+        card_instance = convert_spire_card_to_instance(spire_card)
+        print(f"card[{bc.cards.cardsInHand}]={card_instance.id}", file=sys.stderr)
+        bc.cards.moveToHand(card_instance)
     
     if spire_game.draw_pile:
         for spire_card in spire_game.draw_pile:
-            try:
-                card_instance = convert_spire_card_to_instance(spire_card)
-                bc.cards.moveToDrawPileTop(card_instance)
-            except (ValueError, KeyError):
-                continue
+            card_instance = convert_spire_card_to_instance(spire_card)
+            bc.cards.moveToDrawPileTop(card_instance)
         
     if spire_game.discard_pile:
         for spire_card in spire_game.discard_pile:
-            try:
-                card_instance = convert_spire_card_to_instance(spire_card)
-                bc.cards.moveToDiscardPile(card_instance)
-            except (ValueError, KeyError):
-                continue
+            card_instance = convert_spire_card_to_instance(spire_card)
+            bc.cards.moveToDiscardPile(card_instance)
         
     if spire_game.exhaust_pile:
         for spire_card in spire_game.exhaust_pile:
-            try:
-                card_instance = convert_spire_card_to_instance(spire_card)
-                bc.cards.moveToExhaustPile(card_instance)
-            except (ValueError, KeyError):
-                continue
+            card_instance = convert_spire_card_to_instance(spire_card)
+            bc.cards.moveToExhaustPile(card_instance)
     
-    # Monster states conversion
+    # Monster states conversion - create monsters from game state
     if spire_game.monsters and len(spire_game.monsters) > 0:
         for i, monster in enumerate(spire_game.monsters):
-            if i >= len(bc.monsters):
-                break  # Can't add more monsters than the MonsterGroup supports
-                
+            if i >= 5:  # MonsterGroup supports max 5 monsters
+                break
+            
+            # Try to map spirecomm monster name to MonsterId, fallback to generic
+            monster_id = map_monster_string_to_id(monster.monster_id)
+            bc.monsters.createMonster(bc, monster_id)
+            
+            # Now set the monster properties from spirecomm data
             sts_monster = bc.monsters[i]
             
             # Basic monster stats
             sts_monster.curHp = monster.current_hp
             sts_monster.maxHp = monster.max_hp
-            if hasattr(monster, 'block'):
+            if hasattr(monster, 'block') and monster.block:
                 sts_monster.block = monster.block
             if hasattr(monster, 'half_dead'):
                 sts_monster.halfDead = monster.half_dead
             
+            # Set position/index
+            sts_monster.idx = i
+            
             # Convert monster powers
             if hasattr(monster, 'powers') and monster.powers:
                 for power in monster.powers:
-                    try:
-                        monster_status = map_monster_power_id(power.power_name)
-                        if monster_status:
-                            if is_positive_monster_power(power.power_name):
-                                sts_monster.buff(monster_status, power.amount)
-                            else:
-                                sts_monster.addDebuff(monster_status, power.amount, False)
-                    except (ValueError, KeyError):
-                        # Skip unknown monster powers
-                        continue
+                    monster_status = map_monster_power_id(power.power_name)
+                    if monster_status:
+                        if is_positive_monster_power(power.power_name):
+                            sts_monster.buff(monster_status, power.amount)
+                        else:
+                            sts_monster.addDebuff(monster_status, power.amount, False)
     
     return bc
 
 
 def convert_spire_card_to_instance(spire_card: card.Card) -> sts.CardInstance:
     """Convert a spirecomm Card to a CardInstance."""
-    # Map the card ID
-    card_id = CARD_ID_MAPPING.get(spire_card.name)
-    if not card_id:
-        raise ValueError(f"Unknown card: {spire_card.name}")
+    # Map the card ID using card_id field, not name
+    card_id = map_card_id(spire_card.card_id)
+    if card_id == sts.CardId.INVALID:
+        raise ValueError(f"Unknown card: {spire_card.card_id}")
     
     # Create CardInstance
     instance = sts.CardInstance(card_id, spire_card.upgrades > 0)
@@ -584,6 +286,32 @@ def convert_spire_card_to_instance(spire_card: card.Card) -> sts.CardInstance:
             instance.upgrade()
     
     return instance
+
+
+def map_monster_string_to_id(monster_id: str = '') -> sts.MonsterId:
+    """Map spirecomm monster id to MonsterId enum using dynamic lookup."""
+    # Create lookup dictionary similar to cards and relics
+    monster_map = _get_monster_string_to_id_map()
+    enum_idx = monster_map.get(monster_id)
+    if enum_idx is not None:
+        return sts.MonsterId(enum_idx)
+    
+    # Fallback to a generic monster if no match found
+    print(f"Warning: Unknown monster id '{monster_id}', using INVALID as fallback", file=sys.stderr)
+    return sts.MonsterId.INVALID
+
+
+# Create lookup dictionary for monster names
+_monster_string_to_id = None
+
+def _get_monster_string_to_id_map():
+    """Create monster name to MonsterId mapping dictionary."""
+    global _monster_string_to_id
+    if _monster_string_to_id is None:
+        _monster_string_to_id = {}
+        for enum_idx, string_id in sts.getAllMonsterStringIds():
+            _monster_string_to_id[string_id] = enum_idx
+    return _monster_string_to_id
 
 
 def map_monster_power_id(power_name: str) -> sts.MonsterStatus:
@@ -658,13 +386,8 @@ def map_screen_state(spire_game: game.Game) -> sts.ScreenState:
     if spire_game.in_combat:
         return sts.ScreenState.BATTLE
     
-    # Check screen_type if available
-    if hasattr(spire_game, 'screen_type') and spire_game.screen_type:
-        screen_type = spire_game.screen_type
-        return SCREEN_STATE_MAPPING.get(screen_type, sts.ScreenState.MAP_SCREEN)
-    
-    # Default fallback
-    return sts.ScreenState.MAP_SCREEN
+    screen_type = spire_game.screen_type
+    return SCREEN_STATE_MAPPING.get(screen_type, sts.ScreenState.MAP_SCREEN)
 
 
 def validate_spire_game(spire_game: game.Game) -> None:
@@ -709,22 +432,14 @@ def validate_spire_game(spire_game: game.Game) -> None:
         raise ValueError(f"Invalid floor: {spire_game.floor}")
     
     # Validate deck if present
-    if hasattr(spire_game, 'deck') and spire_game.deck:
-        if not isinstance(spire_game.deck, list):
-            raise TypeError(f"Deck must be a list, got {type(spire_game.deck)}")
-        
-        for i, card_obj in enumerate(spire_game.deck):
-            if not isinstance(card_obj, card.Card):
-                raise TypeError(f"Deck card {i} is not a Card object: {type(card_obj)}")
+    for i, card_obj in enumerate(spire_game.deck):
+        if not isinstance(card_obj, card.Card):
+            raise TypeError(f"Deck card {i} is not a Card object: {type(card_obj)}")
     
     # Validate relics if present
-    if hasattr(spire_game, 'relics') and spire_game.relics:
-        if not isinstance(spire_game.relics, list):
-            raise TypeError(f"Relics must be a list, got {type(spire_game.relics)}")
-        
-        for i, relic_obj in enumerate(spire_game.relics):
-            if not isinstance(relic_obj, relic.Relic):
-                raise TypeError(f"Relic {i} is not a Relic object: {type(relic_obj)}")
+    for i, relic_obj in enumerate(spire_game.relics):
+        if not isinstance(relic_obj, relic.Relic):
+            raise TypeError(f"Relic {i} is not a Relic object: {type(relic_obj)}")
 
 
 def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
@@ -757,8 +472,10 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     
     # Convert and set deck
     if spire_game.deck:
+        # Clear the starting deck first
+        gc.clear_deck()
         sts_deck = convert_deck(spire_game.deck)
-        # Clear the starting deck and add converted cards
+        # Add converted cards
         for card in sts_deck:
             gc.obtain_card(card)
     
@@ -891,6 +608,7 @@ def gamecontext_to_spirecomm_action(gc: sts.GameContext, game_action: sts.GameAc
         return "choose open"
         
     else:
+        print(f"Unknown screen state: {gc.screen_state}", file=sys.stderr)
         # Fallback for unknown screen states
         return f"choose {game_action.idx1}"
 
@@ -995,32 +713,21 @@ class STSLightspeedAgent:
                 return self.handle_choice_screen(game_state)
             elif game_state.proceed_available:
                 return ProceedAction()
+            elif game_state.end_available:
+                return EndTurnAction()
+            elif game_state.cancel_available:
+                return CancelAction()
             else:
-                # Check what's actually available
                 print(f"Game state: play={getattr(game_state, 'play_available', False)}, "
                       f"choice={getattr(game_state, 'choice_available', False)}, "
                       f"proceed={getattr(game_state, 'proceed_available', False)}, "
                       f"in_combat={getattr(game_state, 'in_combat', False)}", file=sys.stderr)
                 
-                # Try to return a reasonable default action
-                if hasattr(game_state, 'choice_available') and game_state.choice_available:
-                    return self.handle_choice_screen(game_state)
-                elif hasattr(game_state, 'proceed_available') and game_state.proceed_available:
-                    return ProceedAction()
-                else:
-                    # Last resort - try a basic choose action
-                    return ChooseAction(0)
+                return NoopAction()
                 
         except Exception as e:
             print(f"Error in decision making: {e}", file=sys.stderr)
-            # Fallback to safe action
-            if hasattr(game_state, 'choice_available') and game_state.choice_available:
-                return ChooseAction(0)
-            elif hasattr(game_state, 'proceed_available') and game_state.proceed_available:
-                return ProceedAction()
-            else:
-                # Return something that won't crash
-                return ChooseAction(0)
+            return NoopAction()
     
     def handle_combat(self, game_state: game.Game) -> Action:
         """
@@ -1030,18 +737,22 @@ class STSLightspeedAgent:
             # Convert to our battle context
             gc, bc = spirecomm_to_battlecontext(game_state)
 
-            print(f"Combat state: {bc}", file=sys.stderr)
+            print(f"Monsters: {bc.monsters}", file=sys.stderr)
             
             # Simple combat logic for now - play first playable card or end turn
             if bc.cards.cardsInHand > 0:
                 hand = bc.cards.hand
+                print(f"hand={hand}", file=sys.stderr)
                 for i, card_instance in enumerate(hand):
+                    print(f"card[{i}]={card_instance.id}", file=sys.stderr)
                     # Check if we can afford the card
                     if card_instance.cost <= bc.player.energy:
+                        print(f"Playing, requires target={card_instance.requiresTarget()}, targetableCount={bc.monsters.getTargetableCount()}", file=sys.stderr)
                         # Try to play this card
                         if card_instance.requiresTarget():
                             # Target first targetable monster
                             target = bc.monsters.getFirstTargetable()
+                            print(f"target={target}", file=sys.stderr)
                             if target >= 0:
                                 return PlayCardAction(card_index=i, target_index=target)
                         else:
