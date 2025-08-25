@@ -5,6 +5,7 @@ This module provides functions to convert spirecomm game state representations
 into our internal C++ GameContext format for AI control of the real game.
 """
 
+import random
 import sys
 import json
 import argparse
@@ -12,18 +13,20 @@ import itertools
 from typing import Optional, Union
 
 import slaythespire as sts
-from spirecomm.spire import game, card, character, relic, power, potion, screen
-from spirecomm.spire.screen import RewardType, ScreenType
+from spirecomm.spire.game import Game
+from spirecomm.spire.character import Intent, PlayerClass
+from spirecomm.spire import card, relic, game, screen
+from spirecomm.spire.screen import RestOption, ScreenType
+from spirecomm.communication.action import *
+from spirecomm.ai.priorities import *
 from spirecomm.communication.coordinator import Coordinator
-from spirecomm.communication.action import Action, BossRewardAction, BuyCardAction, BuyRelicAction, CardSelectAction, ChooseShopkeeperAction, CombatRewardAction, OpenChestAction, ProceedAction, PlayCardAction, EndTurnAction, ChooseAction, RestAction, NoopAction, CancelAction
-from spirecomm.spire.character import PlayerClass
 
 
 
 CHARACTER_CLASS_MAPPING = {
-    character.PlayerClass.IRONCLAD: sts.CharacterClass.IRONCLAD,
-    character.PlayerClass.THE_SILENT: sts.CharacterClass.SILENT,
-    character.PlayerClass.DEFECT: sts.CharacterClass.DEFECT,
+    PlayerClass.IRONCLAD: sts.CharacterClass.IRONCLAD,
+    PlayerClass.THE_SILENT: sts.CharacterClass.SILENT,
+    PlayerClass.DEFECT: sts.CharacterClass.DEFECT,
 }
 
 SCREEN_STATE_MAPPING = {
@@ -83,7 +86,7 @@ def map_relic_id(spire_relic_id: str) -> sts.RelicId:
         return sts.RelicId(enum_idx)
     return sts.RelicId.INVALID
 
-def map_character_class(spire_class: character.PlayerClass) -> sts.CharacterClass:
+def map_character_class(spire_class: PlayerClass) -> sts.CharacterClass:
     """Map spirecomm PlayerClass to our CharacterClass."""
     return CHARACTER_CLASS_MAPPING.get(spire_class, sts.CharacterClass.INVALID)
 
@@ -803,208 +806,237 @@ def test_basic_conversion():
         return False
 
 
+
 class STSLightspeedAgent:
-    """
-    AI Agent that uses our high-performance C++ STS implementation
-    to make decisions for the real game via spirecomm.
-    """
-    
-    def __init__(self, chosen_class: PlayerClass = PlayerClass.IRONCLAD):
-        self.sts_agent = sts.Agent()
-        self.game_state = None
-        self.gc = None
-        self.chosen_class = chosen_class
+
+    def __init__(self, chosen_class=PlayerClass.THE_SILENT):
+        self.game = Game()
         self.errors = 0
-        self.visited_shop = False
+        self.choose_good_card = False
         self.skipped_cards = False
-        
-    def change_class(self, new_class: PlayerClass):
-        """Change the character class for the next game."""
+        self.visited_shop = False
+        self.map_route = []
+        self.chosen_class = chosen_class
+        self.priorities = Priority()
+        self.change_class(chosen_class)
+
+    def change_class(self, new_class):
         self.chosen_class = new_class
-    
-    def handle_error(self, error: str):
-        """Handle errors from CommunicationMod."""
-        self.errors += 1
-        print(f"Error {self.errors}: {error}", file=sys.stderr)
-        if self.errors > 10:
-            raise Exception(f"Too many errors: {error}")
-    
-    def get_next_action_in_game(self, game_state: game.Game) -> Action:
-        """
-        Main decision function - convert game state to our format,
-        run AI decision making, and return spirecomm action.
-        """
-        try:
-            self.game_state = game_state
-
-            gc = spirecomm_to_gamecontext(game_state)
-            
-            if game_state.choice_available:
-                print(f"Choices available: {game_state.choice_list}", file=sys.stderr)
-                return self.handle_choice_screen(gc)
-            if game_state.proceed_available:
-                return ProceedAction()
-            if game_state.play_available:
-                bc = convert_combat_state(game_state, gc)
-                return self.handle_combat(bc)
-            if game_state.end_available:
-                return EndTurnAction()
-            if game_state.cancel_available:
-                return CancelAction()
-            print(f"Game state: play={getattr(game_state, 'play_available', False)}, "
-                    f"choice={getattr(game_state, 'choice_available', False)}, "
-                    f"proceed={getattr(game_state, 'proceed_available', False)}, "
-                    f"in_combat={getattr(game_state, 'in_combat', False)}", file=sys.stderr)
-            
-            return NoopAction()
-                
-        except Exception as e:
-            print(f"Error in decision making: {e}", file=sys.stderr)
-            return NoopAction()
-    
-    def handle_combat(self, bc: sts.BattleContext) -> Action:
-        """
-        Handle combat decisions using our C++ BattleContext.
-        """
-        try:
-            print(f"Monsters: {bc.monsters}", file=sys.stderr)
-            
-            # Simple combat logic for now - play first playable card or end turn
-            if bc.cards.cardsInHand > 0:
-                hand = bc.cards.hand
-                print(f"hand={hand}", file=sys.stderr)
-                for i, card_instance in enumerate(hand):
-                    # Check if we can afford the card
-                    if card_instance.canUseOnAnyTarget(bc) and card_instance.cost <= bc.player.energy:
-                        print(f"Playing, requires target={card_instance.requiresTarget()}, targetableCount={bc.monsters.getTargetableCount()}", file=sys.stderr)
-                        # Try to play this card
-                        if card_instance.requiresTarget():
-                            # Target first targetable monster
-                            target = bc.monsters.getFirstTargetable()
-                            print(f"target={target}", file=sys.stderr)
-                            if target >= 0 and card_instance.canUse(bc, target, False):
-                                return PlayCardAction(card_index=i, target_index=target)
-                        else:
-                            return PlayCardAction(card_index=i)
-            
-            # If we can't play any cards, end turn
-            return EndTurnAction()
-            
-        except Exception as e:
-            print(f"Combat error: {e}", file=sys.stderr)
-            # Fallback to end turn
-            return EndTurnAction()
-    
-    def handle_choice_screen(self, gc: sts.GameContext) -> Action:
-        sts_action = self.sts_agent.pick_gameaction(gc)
-
-        # Translate sts.GameAction to spirecomm Action
-        return self.translate_gameaction_to_action(gc, sts_action)
-
-    def translate_gameaction_to_action(self, gc: sts.GameContext, sts_action: sts.GameAction) -> Action:
-        """
-        Translate a sts.GameAction to the appropriate spirecomm Action.
-        
-        Args:
-            gc: Current GameContext state
-            sts_action: Action chosen by our AI
-            
-        Returns:
-            Appropriate spirecomm Action object
-        """
-        # Get action description to understand what type of action this is
-        action_desc = sts_action.getDesc(gc)
-        
-        # Handle different screen states
-        if gc.screen_state == sts.ScreenState.REWARDS:
-            # Reward selection
-            if sts_action.rewards_action_type == sts.RewardsActionType.CARD:
-                # Card reward selection
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.GOLD:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.RELIC:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.POTION:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.SKIP:
-                return ChooseAction(name="skip")
-            elif sts_action.rewards_action_type == sts.RewardsActionType.KEY:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
-                return ChooseAction(choice_index=sts_action.idx1)
-            return ChooseAction(choice_index=sts_action.idx1)
-            
-        elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
-            # Boss relic selection
-            if sts_action.rewards_action_type == sts.RewardsActionType.RELIC:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.SKIP:
-                return ChooseAction(name="skip")
-            return ChooseAction(choice_index=sts_action.idx1)
-            
-        elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
-            # Map navigation
-            return ChooseAction(choice_index=sts_action.idx1)
-            
-        elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
-            # Shop actions - buying cards, relics, potions, or removal
-            if sts_action.rewards_action_type == sts.RewardsActionType.CARD:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.RELIC:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.POTION:
-                return ChooseAction(choice_index=sts_action.idx1)
-            elif sts_action.rewards_action_type == sts.RewardsActionType.SKIP:
-                return ChooseAction(name="skip")
-            elif sts_action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
-                return ChooseAction(name="purge")
-            return ChooseAction(choice_index=sts_action.idx1)
-            
-        elif gc.screen_state == sts.ScreenState.REST_ROOM:
-            # Rest site actions - rest, smith, dig, lift, etc.
-            if "Rest" in action_desc:
-                return ChooseAction(name="rest")
-            elif "Smith" in action_desc or "Upgrade" in action_desc:
-                return ChooseAction(name="smith")
-            elif "Dig" in action_desc:
-                return ChooseAction(name="dig")
-            elif "Lift" in action_desc:
-                return ChooseAction(name="lift")
-            elif "Recall" in action_desc or "Ruby" in action_desc:
-                return ChooseAction(name="recall")
-            elif "Toke" in action_desc or "Remove" in action_desc:
-                return ChooseAction(name="toke")
-            elif "Skip" in action_desc:
-                return ChooseAction(name="skip")
-            else:
-                return ChooseAction(choice_index=sts_action.idx1)
-                
-        elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
-            # Event choices
-            return ChooseAction(choice_index=sts_action.idx1)
-            
-        elif gc.screen_state == sts.ScreenState.CARD_SELECT:
-            # Card selection screens (transform, upgrade, remove, etc.)
-            return ChooseAction(choice_index=sts_action.idx1)
-            
-        elif gc.screen_state == sts.ScreenState.TREASURE_ROOM:
-            # Treasure chest
-            if sts_action.idx1 == 0:
-                return OpenChestAction()
-            else:
-                return ProceedAction()
-                
+        if self.chosen_class == PlayerClass.THE_SILENT:
+            self.priorities = SilentPriority()
+        elif self.chosen_class == PlayerClass.IRONCLAD:
+            self.priorities = IroncladPriority()
+        elif self.chosen_class == PlayerClass.DEFECT:
+            self.priorities = DefectPowerPriority()
         else:
-            print(f"Unknown screen state: {gc.screen_state}", file=sys.stderr)
-            # Fallback for unknown screen states
-            return ChooseAction(choice_index=sts_action.idx1)
+            self.priorities = random.choice(list(PlayerClass))
 
-           
-    def get_next_action_out_of_game(self) -> Action:
-        """Handle out-of-game actions (main menu, etc.)."""
-        from spirecomm.communication.action import StartGameAction
+    def handle_error(self, error):
+        raise Exception(error)
+
+    def get_next_action_in_game(self, game_state):
+        self.game = game_state
+        #time.sleep(0.07)
+        if self.game.choice_available:
+            return self.handle_screen()
+        if self.game.proceed_available:
+            return ProceedAction()
+        if self.game.play_available:
+            return self.handle_combat()
+        if self.game.end_available:
+            return EndTurnAction()
+        if self.game.cancel_available:
+            return CancelAction()
+
+    def get_next_action_out_of_game(self):
         return StartGameAction(self.chosen_class)
+
+    def is_monster_attacking(self):
+        for monster in self.game.monsters:
+            if monster.intent.is_attack() or monster.intent == Intent.NONE:
+                return True
+        return False
+
+    def get_incoming_damage(self):
+        incoming_damage = 0
+        for monster in self.game.monsters:
+            if not monster.is_gone and not monster.half_dead:
+                if monster.move_adjusted_damage is not None:
+                    incoming_damage += monster.move_adjusted_damage * monster.move_hits
+                elif monster.intent == Intent.NONE:
+                    incoming_damage += 5 * self.game.act
+        return incoming_damage
+
+    def get_low_hp_target(self):
+        available_monsters = [monster for monster in self.game.monsters if monster.current_hp > 0 and not monster.half_dead and not monster.is_gone]
+        best_monster = min(available_monsters, key=lambda x: x.current_hp)
+        return best_monster
+
+    def get_high_hp_target(self):
+        available_monsters = [monster for monster in self.game.monsters if monster.current_hp > 0 and not monster.half_dead and not monster.is_gone]
+        best_monster = max(available_monsters, key=lambda x: x.current_hp)
+        return best_monster
+
+    def many_monsters_alive(self):
+        available_monsters = [monster for monster in self.game.monsters if monster.current_hp > 0 and not monster.half_dead and not monster.is_gone]
+        return len(available_monsters) > 1
+
+    def handle_combat(self):
+        gc = spirecomm_to_gamecontext(self.game)
+        bc = convert_combat_state(self.game, gc)
+        agent = sts.Agent()
+        
+        # TODO
+
+
+    def use_next_potion(self):
+        for potion in self.game.get_real_potions():
+            if potion.can_use:
+                if potion.requires_target:
+                    return PotionAction(True, potion=potion, target_monster=self.get_low_hp_target())
+                else:
+                    return PotionAction(True, potion=potion)
+
+    def handle_screen(self):
+        if self.game.screen_type == ScreenType.EVENT:
+            if self.game.screen.event_id in ["Vampires", "Masked Bandits", "Knowing Skull", "Ghosts", "Liars Game", "Golden Idol", "Drug Dealer", "The Library"]:
+                return ChooseAction(len(self.game.screen.options) - 1)
+            else:
+                return ChooseAction(0)
+        elif self.game.screen_type == ScreenType.CHEST:
+            return OpenChestAction()
+        elif self.game.screen_type == ScreenType.SHOP_ROOM:
+            if not self.visited_shop:
+                self.visited_shop = True
+                return ChooseShopkeeperAction()
+            else:
+                self.visited_shop = False
+                return ProceedAction()
+        elif self.game.screen_type == ScreenType.REST:
+            return self.choose_rest_option()
+        elif self.game.screen_type == ScreenType.CARD_REWARD:
+            return self.choose_card_reward()
+        elif self.game.screen_type == ScreenType.COMBAT_REWARD:
+            for reward_item in self.game.screen.rewards:
+                if reward_item.reward_type == RewardType.POTION and self.game.are_potions_full():
+                    continue
+                elif reward_item.reward_type == RewardType.CARD and self.skipped_cards:
+                    continue
+                else:
+                    return CombatRewardAction(reward_item)
+            self.skipped_cards = False
+            return ProceedAction()
+        elif self.game.screen_type == ScreenType.MAP:
+            return self.make_map_choice()
+        elif self.game.screen_type == ScreenType.BOSS_REWARD:
+            relics = self.game.screen.relics
+            best_boss_relic = self.priorities.get_best_boss_relic(relics)
+            return BossRewardAction(best_boss_relic)
+        elif self.game.screen_type == ScreenType.SHOP_SCREEN:
+            if self.game.screen.purge_available and self.game.gold >= self.game.screen.purge_cost:
+                return ChooseAction(name="purge")
+            for card in self.game.screen.cards:
+                if self.game.gold >= card.price and not self.priorities.should_skip(card):
+                    return BuyCardAction(card)
+            for relic in self.game.screen.relics:
+                if self.game.gold >= relic.price:
+                    return BuyRelicAction(relic)
+            return CancelAction()
+        elif self.game.screen_type == ScreenType.GRID:
+            if not self.game.choice_available:
+                return ProceedAction()
+            if self.game.screen.for_upgrade or self.choose_good_card:
+                available_cards = self.priorities.get_sorted_cards(self.game.screen.cards)
+            else:
+                available_cards = self.priorities.get_sorted_cards(self.game.screen.cards, reverse=True)
+            num_cards = self.game.screen.num_cards
+            return CardSelectAction(available_cards[:num_cards])
+        elif self.game.screen_type == ScreenType.HAND_SELECT:
+            if not self.game.choice_available:
+                return ProceedAction()
+            # Usually, we don't want to choose the whole hand for a hand select. 3 seems like a good compromise.
+            num_cards = min(self.game.screen.num_cards, 3)
+            return CardSelectAction(self.priorities.get_cards_for_action(self.game.current_action, self.game.screen.cards, num_cards))
+        else:
+            return ProceedAction()
+
+    def choose_rest_option(self):
+        rest_options = self.game.screen.rest_options
+        if len(rest_options) > 0 and not self.game.screen.has_rested:
+            if RestOption.REST in rest_options and self.game.current_hp < self.game.max_hp / 2:
+                return RestAction(RestOption.REST)
+            elif RestOption.REST in rest_options and self.game.act != 1 and self.game.floor % 17 == 15 and self.game.current_hp < self.game.max_hp * 0.9:
+                return RestAction(RestOption.REST)
+            elif RestOption.SMITH in rest_options:
+                return RestAction(RestOption.SMITH)
+            elif RestOption.LIFT in rest_options:
+                return RestAction(RestOption.LIFT)
+            elif RestOption.DIG in rest_options:
+                return RestAction(RestOption.DIG)
+            elif RestOption.REST in rest_options and self.game.current_hp < self.game.max_hp:
+                return RestAction(RestOption.REST)
+            else:
+                return ChooseAction(0)
+        else:
+            return ProceedAction()
+
+    def count_copies_in_deck(self, card):
+        count = 0
+        for deck_card in self.game.deck:
+            if deck_card.card_id == card.card_id:
+                count += 1
+        return count
+
+    def choose_card_reward(self):
+        reward_cards = self.game.screen.cards
+        if self.game.screen.can_skip and not self.game.in_combat:
+            pickable_cards = [card for card in reward_cards if self.priorities.needs_more_copies(card, self.count_copies_in_deck(card))]
+        else:
+            pickable_cards = reward_cards
+        if len(pickable_cards) > 0:
+            potential_pick = self.priorities.get_best_card(pickable_cards)
+            return CardRewardAction(potential_pick)
+        elif self.game.screen.can_bowl:
+            return CardRewardAction(bowl=True)
+        else:
+            self.skipped_cards = True
+            return CancelAction()
+
+    def generate_map_route(self):
+        node_rewards = self.priorities.MAP_NODE_PRIORITIES.get(self.game.act)
+        best_rewards = {0: {node.x: node_rewards[node.symbol] for node in self.game.map.nodes[0].values()}}
+        best_parents = {0: {node.x: 0 for node in self.game.map.nodes[0].values()}}
+        min_reward = min(node_rewards.values())
+        map_height = max(self.game.map.nodes.keys())
+        for y in range(0, map_height):
+            best_rewards[y+1] = {node.x: min_reward * 20 for node in self.game.map.nodes[y+1].values()}
+            best_parents[y+1] = {node.x: -1 for node in self.game.map.nodes[y+1].values()}
+            for x in best_rewards[y]:
+                node = self.game.map.get_node(x, y)
+                best_node_reward = best_rewards[y][x]
+                for child in node.children:
+                    test_child_reward = best_node_reward + node_rewards[child.symbol]
+                    if test_child_reward > best_rewards[y+1][child.x]:
+                        best_rewards[y+1][child.x] = test_child_reward
+                        best_parents[y+1][child.x] = node.x
+        best_path = [0] * (map_height + 1)
+        best_path[map_height] = max(best_rewards[map_height].keys(), key=lambda x: best_rewards[map_height][x])
+        for y in range(map_height, 0, -1):
+            best_path[y - 1] = best_parents[y][best_path[y]]
+        self.map_route = best_path
+
+    def make_map_choice(self):
+        if len(self.game.screen.next_nodes) > 0 and self.game.screen.next_nodes[0].y == 0:
+            self.generate_map_route()
+            self.game.screen.current_node.y = -1
+        if self.game.screen.boss_available:
+            return ChooseMapBossAction()
+        chosen_x = self.map_route[self.game.screen.current_node.y + 1]
+        for choice in self.game.screen.next_nodes:
+            if choice.x == chosen_x:
+                return ChooseMapNodeAction(choice)
+        # This should never happen
+        return ChooseAction(0)
 
 
 def run_agent_cli():
