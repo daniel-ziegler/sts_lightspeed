@@ -108,9 +108,7 @@ def convert_card(spire_card: card.Card) -> sts.Card:
     for _ in range(spire_card.upgrades):
         sts_card.upgrade()
     
-    # Set misc field if available
-    if hasattr(spire_card, 'misc') and spire_card.misc != 0:
-        sts_card.misc = spire_card.misc
+    sts_card.misc = spire_card.misc
     
     return sts_card
 
@@ -230,10 +228,8 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
             # Basic monster stats
             sts_monster.curHp = monster.current_hp
             sts_monster.maxHp = monster.max_hp
-            if hasattr(monster, 'block') and monster.block:
-                sts_monster.block = monster.block
-            if hasattr(monster, 'half_dead'):
-                sts_monster.halfDead = monster.half_dead
+            sts_monster.block = monster.block
+            sts_monster.halfDead = monster.half_dead
             
             # Set position/index
             sts_monster.idx = i
@@ -429,6 +425,173 @@ def validate_spire_game(spire_game: game.Game) -> None:
             raise TypeError(f"Relic {i} is not a Relic object: {type(relic_obj)}")
 
 
+def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
+    """
+    Set ScreenStateInfo fields based on spirecomm game state.
+    
+    Comprehensively maps all available spirecomm data to ScreenStateInfo fields.
+    """
+    info = gc.screen_state_info
+    
+    # Set basic game state fields
+    info.gold = spire_game.gold
+    
+    # Set potion information
+    if spire_game.potions:
+        info.potionIdx = len(spire_game.potions)
+    
+    # Set deck card indices based on deck composition  
+    from spirecomm.spire.card import CardType
+    attack_cards = [i for i, spire_card in enumerate(spire_game.deck) 
+                   if spire_card.type == CardType.ATTACK]
+    skill_cards = [i for i, spire_card in enumerate(spire_game.deck)
+                  if spire_card.type == CardType.SKILL]  
+    power_cards = [i for i, spire_card in enumerate(spire_game.deck)
+                  if spire_card.type == CardType.POWER]
+    
+    if attack_cards:
+        info.attackCardDeckIdx = attack_cards[0]
+    if skill_cards:
+        info.skillCardDeckIdx = skill_cards[0]
+    if power_cards:
+        info.powerCardDeckIdx = power_cards[0]
+    
+    # Screen-specific mappings
+    if spire_game.screen_type == screen.ScreenType.BOSS_REWARD:
+        # Boss reward screen - map boss relics
+        boss_relics = spire_game.screen.relics
+        for i, spire_relic in enumerate(boss_relics[:3]):
+            relic_id = map_relic_id(spire_relic.name)
+            if relic_id != sts.RelicId.INVALID:
+                info.boss_relics[i] = relic_id
+                
+    elif spire_game.screen_type == screen.ScreenType.COMBAT_REWARD:
+        # Combat reward screen - populate rewards container
+        rewards = spire_game.screen.rewards
+        info.rewards_container.cards.clear()
+        info.rewards_container.relics.clear()
+        info.rewards_container.gold.clear()
+        info.rewards_container.potions.clear()
+        
+        for reward_item in rewards:
+            if reward_item.reward_type == screen.RewardType.CARD:
+                card_id = map_card_id(reward_item.card.card_id)
+                if card_id != sts.CardId.INVALID:
+                    info.rewards_container.cards.append(card_id)
+                        
+            elif reward_item.reward_type == screen.RewardType.GOLD:
+                info.rewards_container.gold.append(reward_item.gold)
+                    
+            elif reward_item.reward_type == screen.RewardType.RELIC:
+                relic_id = map_relic_id(reward_item.relic.name)
+                if relic_id != sts.RelicId.INVALID:
+                    info.rewards_container.relics.append(relic_id)
+                        
+            elif reward_item.reward_type == screen.RewardType.POTION:
+                # TODO Map potion if we have potion mapping
+                pass
+                    
+            elif reward_item.reward_type == screen.RewardType.EMERALD_KEY:
+                info.rewards_container.emerald_key = True
+                
+            elif reward_item.reward_type == screen.RewardType.SAPPHIRE_KEY:
+                info.rewards_container.sapphire_key = True
+                
+    elif spire_game.screen_type == screen.ScreenType.SHOP_SCREEN:
+        # Shop screen - populate shop information
+        shop_screen = spire_game.screen
+        shop = info.shop
+        
+        # Clear existing shop data
+        shop.cards.clear()
+        shop.relics.clear()
+        shop.potions.clear()
+        
+        # Map shop cards
+        for shop_card in shop_screen.cards:
+            card_id = map_card_id(shop_card.card_id)
+            if card_id != sts.CardId.INVALID:
+                shop.cards.append(card_id)
+                
+        # Map shop relics
+        for shop_relic in shop_screen.relics:
+            relic_id = map_relic_id(shop_relic.name)
+            if relic_id != sts.RelicId.INVALID:
+                shop.relics.append(relic_id)
+                
+        # Set purge cost
+        info.goldLoss = shop_screen.purge_cost
+            
+    elif spire_game.screen_type == screen.ScreenType.EVENT:
+        # Event screen - set event data
+        event_id = spire_game.screen.event_id  
+        print(f"Event: {spire_game.screen}", file=sys.stderr)
+        # TODO map this once we know what the data looks like
+
+    elif spire_game.screen_type == screen.ScreenType.GRID:
+        # Grid select screen (transform, upgrade, remove, etc.)
+        grid_screen = spire_game.screen
+        
+        # Set select screen type based on screen purpose
+        if grid_screen.for_transform:
+            info.select_screen_type = sts.CardSelectScreenType.TRANSFORM
+        elif grid_screen.for_upgrade:
+            info.select_screen_type = sts.CardSelectScreenType.UPGRADE
+        elif grid_screen.for_purge:
+            info.select_screen_type = sts.CardSelectScreenType.REMOVE
+        else:
+            info.select_screen_type = sts.CardSelectScreenType.OBTAIN
+            
+        # Set cards to select from
+        info.to_select_cards.clear()
+        for card in grid_screen.cards:
+            card_id = map_card_id(card.card_id)
+            if card_id != sts.CardId.INVALID:
+                info.to_select_cards.append(card_id)
+                    
+        # Set already selected cards  
+        info.have_selected_cards.clear()
+        for card in grid_screen.selected_cards:
+            card_id = map_card_id(card.card_id)
+            if card_id != sts.CardId.INVALID:
+                info.have_selected_cards.append(card_id)
+                    
+    elif spire_game.screen_type == screen.ScreenType.HAND_SELECT:
+        # Hand select screen
+        hand_screen = spire_game.screen
+        
+        info.select_screen_type = sts.CardSelectScreenType.DUPLICATE
+        
+        info.to_select_cards.clear() 
+        for card in hand_screen.cards:
+            card_id = map_card_id(card.card_id)
+            if card_id != sts.CardId.INVALID:
+                info.to_select_cards.append(card_id)
+                    
+    elif spire_game.screen_type == screen.ScreenType.CARD_REWARD:
+        # Card reward screen
+        card_screen = spire_game.screen
+        
+        info.to_select_cards.clear()
+        for card in card_screen.cards:
+            card_id = map_card_id(card.card_id)
+            if card_id != sts.CardId.INVALID:
+                info.to_select_cards.append(card_id)
+                    
+    elif spire_game.screen_type == screen.ScreenType.REST:
+        # The C++ code knows what rest options are available
+        pass
+                    
+    # Set relic indices if we have relics
+    if len(spire_game.relics) > 0:
+        relic_id = map_relic_id(spire_game.relics[0].name)
+        info.relicIdx0 = int(relic_id)
+        
+    if len(spire_game.relics) > 1:
+        relic_id = map_relic_id(spire_game.relics[1].name)  
+        info.relicIdx1 = int(relic_id)
+
+
 def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     """
     Convert spirecomm Game state to our GameContext.
@@ -476,32 +639,10 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     # Set screen state
     gc.screen_state = map_screen_state(spire_game)
     
+    # Set screen state info based on current screen
+    set_screen_state_info(gc, spire_game)
+    
     return gc
-
-
-def spirecomm_to_battlecontext(spire_game: game.Game) -> tuple[sts.GameContext, sts.BattleContext]:
-    """
-    Convert spirecomm Game state to GameContext and BattleContext for combat.
-    
-    Args:
-        spire_game: Game state from spirecomm (must be in combat)
-        
-    Returns:
-        Tuple of (GameContext, BattleContext) ready for battle simulation
-        
-    Raises:
-        ValueError: If not in combat or invalid state
-    """
-    if not spire_game.in_combat:
-        raise ValueError("Game must be in combat to create BattleContext")
-    
-    # Create base GameContext
-    gc = spirecomm_to_gamecontext(spire_game)
-    
-    # Convert combat state to BattleContext
-    bc = convert_combat_state(spire_game, gc)
-    
-    return gc, bc
 
 
 def gamecontext_to_spirecomm_action(gc: sts.GameContext, game_action: sts.GameAction) -> str:
@@ -545,16 +686,15 @@ def gamecontext_to_spirecomm_action(gc: sts.GameContext, game_action: sts.GameAc
     # Non-battle screen actions
     elif gc.screen_state == sts.ScreenState.REWARDS:
         # Reward selection
-        if hasattr(game_action, 'rewards_action_type'):
-            if game_action.rewards_action_type == sts.RewardsActionType.CARD:
-                # Card reward selection by name would require card mapping
-                return f"choose {game_action.idx1}"
-            elif game_action.rewards_action_type == sts.RewardsActionType.GOLD:
-                return f"choose {game_action.idx1}"
-            elif game_action.rewards_action_type == sts.RewardsActionType.RELIC:
-                return f"choose {game_action.idx1}"
-            elif game_action.rewards_action_type == sts.RewardsActionType.SKIP:
-                return "choose skip"
+        if game_action.rewards_action_type == sts.RewardsActionType.CARD:
+            # Card reward selection by name would require card mapping
+            return f"choose {game_action.idx1}"
+        elif game_action.rewards_action_type == sts.RewardsActionType.GOLD:
+            return f"choose {game_action.idx1}"
+        elif game_action.rewards_action_type == sts.RewardsActionType.RELIC:
+            return f"choose {game_action.idx1}"
+        elif game_action.rewards_action_type == sts.RewardsActionType.SKIP:
+            return "choose skip"
         return f"choose {game_action.idx1}"
         
     elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
@@ -670,7 +810,9 @@ class STSLightspeedAgent:
     """
     
     def __init__(self, chosen_class: PlayerClass = PlayerClass.IRONCLAD):
+        self.sts_agent = sts.Agent()
         self.game_state = None
+        self.gc = None
         self.chosen_class = chosen_class
         self.errors = 0
         self.visited_shop = False
@@ -694,13 +836,17 @@ class STSLightspeedAgent:
         """
         try:
             self.game_state = game_state
+
+            gc = spirecomm_to_gamecontext(game_state)
             
             if game_state.choice_available:
-                return self.handle_choice_screen(game_state)
+                print(f"Choices available: {game_state.choice_list}", file=sys.stderr)
+                return self.handle_choice_screen(gc)
             if game_state.proceed_available:
                 return ProceedAction()
             if game_state.play_available:
-                return self.handle_combat(game_state)
+                bc = convert_combat_state(game_state, gc)
+                return self.handle_combat(bc)
             if game_state.end_available:
                 return EndTurnAction()
             if game_state.cancel_available:
@@ -716,14 +862,11 @@ class STSLightspeedAgent:
             print(f"Error in decision making: {e}", file=sys.stderr)
             return NoopAction()
     
-    def handle_combat(self, game_state: game.Game) -> Action:
+    def handle_combat(self, bc: sts.BattleContext) -> Action:
         """
         Handle combat decisions using our C++ BattleContext.
         """
         try:
-            # Convert to our battle context
-            gc, bc = spirecomm_to_battlecontext(game_state)
-
             print(f"Monsters: {bc.monsters}", file=sys.stderr)
             
             # Simple combat logic for now - play first playable card or end turn
@@ -752,64 +895,110 @@ class STSLightspeedAgent:
             # Fallback to end turn
             return EndTurnAction()
     
-    def handle_choice_screen(self, game_state: game.Game) -> Action:
+    def handle_choice_screen(self, gc: sts.GameContext) -> Action:
+        sts_action = self.sts_agent.pick_gameaction(gc)
+
+        # Translate sts.GameAction to spirecomm Action
+        return self.translate_gameaction_to_action(gc, sts_action)
+
+    def translate_gameaction_to_action(self, gc: sts.GameContext, sts_action: sts.GameAction) -> Action:
         """
-        Handle non-combat choice screens with basic logic.
+        Translate a sts.GameAction to the appropriate spirecomm Action.
+        
+        Args:
+            gc: Current GameContext state
+            sts_action: Action chosen by our AI
+            
+        Returns:
+            Appropriate spirecomm Action object
         """
-        if game_state.screen_type == ScreenType.EVENT:
-            if game_state.screen.event_id in ["Vampires", "Masked Bandits", "Knowing Skull", "Ghosts", "Liars Game", "Golden Idol", "Drug Dealer", "The Library"]:
-                return ChooseAction(len(game_state.screen.options) - 1)
-            else:
-                return ChooseAction(0)
-        elif game_state.screen_type == ScreenType.CHEST:
-            return OpenChestAction()
-        elif game_state.screen_type == ScreenType.SHOP_ROOM:
-            if not self.visited_shop:
-                self.visited_shop = True
-                return ChooseShopkeeperAction()
-            else:
-                self.visited_shop = False
-                return ProceedAction()
-        elif game_state.screen_type == ScreenType.REST:
-            return ChooseAction(1)
-        elif game_state.screen_type == ScreenType.CARD_REWARD:
-            return ChooseAction(0)
-        elif game_state.screen_type == ScreenType.COMBAT_REWARD:
-            for reward_item in game_state.screen.rewards:
-                if reward_item.reward_type == RewardType.POTION and game_state.are_potions_full():
-                    continue
-                elif reward_item.reward_type == RewardType.CARD and self.skipped_cards:
-                    continue
-                else:
-                    return CombatRewardAction(reward_item)
-            self.skipped_cards = False
-            return ProceedAction()
-        elif game_state.screen_type == ScreenType.MAP:
-            return ChooseAction(0)
-        elif game_state.screen_type == ScreenType.BOSS_REWARD:
-            relics = game_state.screen.relics
-            return BossRewardAction(relics[0])
-        elif game_state.screen_type == ScreenType.SHOP_SCREEN:
-            if game_state.screen.purge_available and game_state.gold >= game_state.screen.purge_cost:
+        # Get action description to understand what type of action this is
+        action_desc = sts_action.getDesc(gc)
+        
+        # Handle different screen states
+        if gc.screen_state == sts.ScreenState.REWARDS:
+            # Reward selection
+            if sts_action.rewards_action_type == sts.RewardsActionType.CARD:
+                # Card reward selection
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.GOLD:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.RELIC:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.POTION:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.SKIP:
+                return ChooseAction(name="skip")
+            elif sts_action.rewards_action_type == sts.RewardsActionType.KEY:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
+                return ChooseAction(choice_index=sts_action.idx1)
+            return ChooseAction(choice_index=sts_action.idx1)
+            
+        elif gc.screen_state == sts.ScreenState.BOSS_RELIC_REWARDS:
+            # Boss relic selection
+            if sts_action.rewards_action_type == sts.RewardsActionType.RELIC:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.SKIP:
+                return ChooseAction(name="skip")
+            return ChooseAction(choice_index=sts_action.idx1)
+            
+        elif gc.screen_state == sts.ScreenState.MAP_SCREEN:
+            # Map navigation
+            return ChooseAction(choice_index=sts_action.idx1)
+            
+        elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
+            # Shop actions - buying cards, relics, potions, or removal
+            if sts_action.rewards_action_type == sts.RewardsActionType.CARD:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.RELIC:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.POTION:
+                return ChooseAction(choice_index=sts_action.idx1)
+            elif sts_action.rewards_action_type == sts.RewardsActionType.SKIP:
+                return ChooseAction(name="skip")
+            elif sts_action.rewards_action_type == sts.RewardsActionType.CARD_REMOVE:
                 return ChooseAction(name="purge")
-            for card in game_state.screen.cards:
-                if game_state.gold >= card.price:
-                    return BuyCardAction(card)
-            for relic in game_state.screen.relics:
-                if game_state.gold >= relic.price:
-                    return BuyRelicAction(relic)
-            return CancelAction()
-        elif game_state.screen_type == ScreenType.GRID:
-            if not game_state.choice_available:
+            return ChooseAction(choice_index=sts_action.idx1)
+            
+        elif gc.screen_state == sts.ScreenState.REST_ROOM:
+            # Rest site actions - rest, smith, dig, lift, etc.
+            if "Rest" in action_desc:
+                return ChooseAction(name="rest")
+            elif "Smith" in action_desc or "Upgrade" in action_desc:
+                return ChooseAction(name="smith")
+            elif "Dig" in action_desc:
+                return ChooseAction(name="dig")
+            elif "Lift" in action_desc:
+                return ChooseAction(name="lift")
+            elif "Recall" in action_desc or "Ruby" in action_desc:
+                return ChooseAction(name="recall")
+            elif "Toke" in action_desc or "Remove" in action_desc:
+                return ChooseAction(name="toke")
+            elif "Skip" in action_desc:
+                return ChooseAction(name="skip")
+            else:
+                return ChooseAction(choice_index=sts_action.idx1)
+                
+        elif gc.screen_state == sts.ScreenState.EVENT_SCREEN:
+            # Event choices
+            return ChooseAction(choice_index=sts_action.idx1)
+            
+        elif gc.screen_state == sts.ScreenState.CARD_SELECT:
+            # Card selection screens (transform, upgrade, remove, etc.)
+            return ChooseAction(choice_index=sts_action.idx1)
+            
+        elif gc.screen_state == sts.ScreenState.TREASURE_ROOM:
+            # Treasure chest
+            if sts_action.idx1 == 0:
+                return OpenChestAction()
+            else:
                 return ProceedAction()
-            num_cards = game_state.screen.num_cards
-            return CardSelectAction(game_state.screen.cards[:num_cards])
-        elif game_state.screen_type == ScreenType.HAND_SELECT:
-            if not game_state.choice_available:
-                return ProceedAction()
-            return CardSelectAction(game_state.screen.cards[:3])
+                
         else:
-            return ProceedAction()
+            print(f"Unknown screen state: {gc.screen_state}", file=sys.stderr)
+            # Fallback for unknown screen states
+            return ChooseAction(choice_index=sts_action.idx1)
 
            
     def get_next_action_out_of_game(self) -> Action:

@@ -160,7 +160,6 @@ The system is designed to be extensible - most new action types can be added by 
    - **Wrong**: `card.getId()`, `relic.getId()` (methods don't exist)
    - **Right**: `card.id`, `relic.id` (direct attribute access)
    - **Important**: `gc.relics[idx]` returns a `Relic` object, use `gc.relics[idx].id` for the ID
-   - **Check**: Test with `hasattr(obj, 'method_name')` first
 
 ### C++ Bindings
 
