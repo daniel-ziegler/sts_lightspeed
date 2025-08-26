@@ -311,7 +311,7 @@ namespace sts {
         "GiantHead",
         "FuzzyLouseNormal",
         "GremlinLeader",
-        "GremlinWarrior",
+        "GremlinNob",
         "GremlinWizard",
         "Hexaghost",
         "JawWorm",

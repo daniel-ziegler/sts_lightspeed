@@ -5,6 +5,7 @@ This module provides functions to convert spirecomm game state representations
 into our internal C++ GameContext format for AI control of the real game.
 """
 
+import time
 import random
 import sys
 import json
@@ -15,6 +16,7 @@ from typing import Optional, Union
 import slaythespire as sts
 from spirecomm.spire.game import Game
 from spirecomm.spire.character import Intent, PlayerClass
+from spirecomm.spire import character
 from spirecomm.spire import card, relic, game, screen
 from spirecomm.spire.screen import RestOption, ScreenType
 from spirecomm.communication.action import *
@@ -179,6 +181,10 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
     # Clear the initialized cards to avoid mixing with spirecomm state
     bc.cards.clear()
     
+    # Set the input state to PLAYER_NORMAL so the searcher can find actions
+    # InputState enum: EXECUTING_ACTIONS=0, PLAYER_NORMAL=1, CARD_SELECT=2, etc.
+    bc.input_state = sts.InputState.PLAYER_NORMAL
+    
     # Player state conversion
     player = spire_game.player
     if player:
@@ -197,7 +203,6 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
     # Card piles conversion - create CardInstance objects from spirecomm cards
     for spire_card in spire_game.hand:
         card_instance = convert_spire_card_to_instance(spire_card)
-        print(f"card[{bc.cards.cardsInHand}]={card_instance.id}", file=sys.stderr)
         bc.cards.moveToHand(card_instance)
     
     if spire_game.draw_pile:
@@ -237,15 +242,24 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
             # Set position/index
             sts_monster.idx = i
             
+            # Set monster move history for AI decision making
+            move_history = [0, 0]  # Default values
+            if monster.move_id is not None:
+                mapped_move = map_move_id(monster.monster_id, monster.move_id)
+                move_history[0] = int(mapped_move)
+            if monster.last_move_id is not None:
+                mapped_last_move = map_move_id(monster.monster_id, monster.last_move_id)
+                move_history[1] = int(mapped_last_move)
+            sts_monster.moveHistory = move_history
+            
             # Convert monster powers
-            if hasattr(monster, 'powers') and monster.powers:
-                for power in monster.powers:
-                    monster_status = map_monster_power_id(power.power_name)
-                    if monster_status:
-                        if is_positive_monster_power(power.power_name):
-                            sts_monster.buff(monster_status, power.amount)
-                        else:
-                            sts_monster.addDebuff(monster_status, power.amount, False)
+            for power in monster.powers:
+                monster_status = map_monster_power_id(power.power_name)
+                if monster_status:
+                    if is_positive_monster_power(power.power_name):
+                        sts_monster.buff(monster_status, power.amount)
+                    else:
+                        sts_monster.addDebuff(monster_status, power.amount, False)
     
     return bc
 
@@ -261,9 +275,8 @@ def convert_spire_card_to_instance(spire_card: card.Card) -> sts.CardInstance:
     instance = sts.CardInstance(card_id, spire_card.upgrades > 0)
     
     # Set additional properties
-    if hasattr(spire_card, 'cost'):
-        instance.cost = spire_card.cost
-        instance.costForTurn = spire_card.cost
+    instance.cost = spire_card.cost
+    instance.costForTurn = spire_card.cost
     
     # Handle upgrade count for Searing Blow
     if spire_card.upgrades > 1:
@@ -298,6 +311,372 @@ def _get_monster_string_to_id_map():
         for enum_idx, string_id in sts.getAllMonsterStringIds():
             _monster_string_to_id[string_id] = enum_idx
     return _monster_string_to_id
+
+
+def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
+    """
+    Map spirecomm monster string and move_id to MonsterMoveId enum.
+    
+    Args:
+        monster_string: Monster identifier string (e.g., "Cultist", "JawWorm")
+        move_id: Java monster move ID (the byte constants from Java files)
+        
+    Returns:
+        Corresponding MonsterMoveId enum value
+    """
+    # Create a tuple key for efficient lookup
+    key = (monster_string, move_id)
+    
+    # Comprehensive mapping based on Java source analysis
+    move_mapping = {
+        # Cultist
+        ("Cultist", 1): sts.MonsterMoveId.CULTIST_DARK_STRIKE,
+        ("Cultist", 3): sts.MonsterMoveId.CULTIST_INCANTATION,
+        
+        # JawWorm  
+        ("JawWorm", 1): sts.MonsterMoveId.JAW_WORM_CHOMP,
+        ("JawWorm", 2): sts.MonsterMoveId.JAW_WORM_BELLOW, 
+        ("JawWorm", 3): sts.MonsterMoveId.JAW_WORM_THRASH,
+        
+        # Red Louse (FuzzyLouseNormal)
+        ("FuzzyLouseNormal", 3): sts.MonsterMoveId.RED_LOUSE_BITE,
+        ("FuzzyLouseNormal", 4): sts.MonsterMoveId.RED_LOUSE_GROW,
+        
+        # Green Louse (FuzzyLouseDefensive) 
+        ("FuzzyLouseDefensive", 1): sts.MonsterMoveId.GREEN_LOUSE_BITE,
+        ("FuzzyLouseDefensive", 2): sts.MonsterMoveId.GREEN_LOUSE_SPIT_WEB,
+        
+        # Gremlin Nob
+        ("GremlinNob", 1): sts.MonsterMoveId.GREMLIN_NOB_BELLOW,
+        ("GremlinNob", 2): sts.MonsterMoveId.GREMLIN_NOB_RUSH,
+        ("GremlinNob", 3): sts.MonsterMoveId.GREMLIN_NOB_SKULL_BASH,
+        
+        # Fat Gremlin
+        ("FatGremlin", 1): sts.MonsterMoveId.FAT_GREMLIN_SMASH,
+        
+        # Mad Gremlin 
+        ("MadGremlin", 1): sts.MonsterMoveId.MAD_GREMLIN_SCRATCH,
+        
+        # Shield Gremlin
+        ("ShieldGremlin", 1): sts.MonsterMoveId.SHIELD_GREMLIN_PROTECT,
+        ("ShieldGremlin", 2): sts.MonsterMoveId.SHIELD_GREMLIN_SHIELD_BASH,
+        
+        # Sneaky Gremlin  
+        ("SneakyGremlin", 1): sts.MonsterMoveId.SNEAKY_GREMLIN_PUNCTURE,
+        
+        # Gremlin Wizard
+        ("GremlinWizard", 1): sts.MonsterMoveId.GREMLIN_WIZARD_ULTIMATE_BLAST,  # DOPE_MAGIC = 1
+        ("GremlinWizard", 2): sts.MonsterMoveId.GREMLIN_WIZARD_CHARGING,        # CHARGE = 2
+        ("GremlinWizard", 99): sts.MonsterMoveId.GENERIC_ESCAPE_MOVE,           # Escape
+        
+        # Slaver (Blue)
+        ("SlaverBlue", 1): sts.MonsterMoveId.BLUE_SLAVER_STAB,
+        ("SlaverBlue", 4): sts.MonsterMoveId.BLUE_SLAVER_RAKE,  # Gap at 2, 3
+        
+        # Slaver (Red)
+        ("SlaverRed", 1): sts.MonsterMoveId.RED_SLAVER_STAB,
+        ("SlaverRed", 2): sts.MonsterMoveId.RED_SLAVER_SCRAPE,
+        ("SlaverRed", 3): sts.MonsterMoveId.RED_SLAVER_ENTANGLE,
+        
+        # Lagavulin
+        ("Lagavulin", 1): sts.MonsterMoveId.LAGAVULIN_SIPHON_SOUL,  # DEBUFF
+        ("Lagavulin", 3): sts.MonsterMoveId.LAGAVULIN_ATTACK,       # STRONG_ATK
+        ("Lagavulin", 4): sts.MonsterMoveId.LAGAVULIN_ATTACK,       # OPEN (stun/wake up)
+        ("Lagavulin", 5): sts.MonsterMoveId.LAGAVULIN_SLEEP,        # IDLE (sleep)
+        ("Lagavulin", 6): sts.MonsterMoveId.LAGAVULIN_ATTACK,       # OPEN_NATURAL
+        
+        # Sentry
+        ("Sentry", 3): sts.MonsterMoveId.SENTRY_BOLT,  # BOLT - adds Dazed cards
+        ("Sentry", 4): sts.MonsterMoveId.SENTRY_BEAM,  # BEAM - attack move
+        
+        # Looter  
+        ("Looter", 1): sts.MonsterMoveId.LOOTER_MUG,
+        ("Looter", 2): sts.MonsterMoveId.LOOTER_LUNGE,
+        ("Looter", 3): sts.MonsterMoveId.LOOTER_SMOKE_BOMB,
+        ("Looter", 4): sts.MonsterMoveId.LOOTER_ESCAPE,
+        
+        # Fungi Beast
+        ("FungiBeast", 1): sts.MonsterMoveId.FUNGI_BEAST_BITE,
+        ("FungiBeast", 2): sts.MonsterMoveId.FUNGI_BEAST_GROW,
+        
+        # Hexaghost (boss) - corrected based on Java constants
+        ("Hexaghost", 1): sts.MonsterMoveId.HEXAGHOST_DIVIDER,   # DIVIDER
+        ("Hexaghost", 2): sts.MonsterMoveId.HEXAGHOST_TACKLE,    # TACKLE  
+        ("Hexaghost", 3): sts.MonsterMoveId.HEXAGHOST_INFLAME,   # INFLAME
+        ("Hexaghost", 4): sts.MonsterMoveId.HEXAGHOST_SEAR,      # SEAR
+        ("Hexaghost", 5): sts.MonsterMoveId.HEXAGHOST_ACTIVATE,  # ACTIVATE
+        ("Hexaghost", 6): sts.MonsterMoveId.HEXAGHOST_INFERNO,   # INFERNO
+        
+        # SlimeBoss - corrected based on Java constants
+        ("SlimeBoss", 1): sts.MonsterMoveId.SLIME_BOSS_SLAM,       # SLAM
+        ("SlimeBoss", 2): sts.MonsterMoveId.SLIME_BOSS_PREPARING,  # PREP_SLAM
+        ("SlimeBoss", 3): sts.MonsterMoveId.SLIME_BOSS_SPLIT,      # SPLIT
+        ("SlimeBoss", 4): sts.MonsterMoveId.SLIME_BOSS_GOOP_SPRAY, # STICKY
+        
+        # The Guardian (boss) - corrected based on Java constants  
+        ("TheGuardian", 1): sts.MonsterMoveId.THE_GUARDIAN_DEFENSIVE_MODE,  # CLOSE_UP
+        ("TheGuardian", 2): sts.MonsterMoveId.THE_GUARDIAN_FIERCE_BASH,     # FIERCE_BASH
+        ("TheGuardian", 3): sts.MonsterMoveId.THE_GUARDIAN_ROLL_ATTACK,     # ROLL_ATTACK
+        ("TheGuardian", 4): sts.MonsterMoveId.THE_GUARDIAN_TWIN_SLAM,       # TWIN_SLAM
+        ("TheGuardian", 5): sts.MonsterMoveId.THE_GUARDIAN_WHIRLWIND,       # WHIRLWIND
+        ("TheGuardian", 6): sts.MonsterMoveId.THE_GUARDIAN_CHARGING_UP,     # CHARGE_UP
+        ("TheGuardian", 7): sts.MonsterMoveId.THE_GUARDIAN_VENT_STEAM,      # VENT_STEAM
+        
+        # Acid Slimes  
+        ("AcidSlime_L", 1): sts.MonsterMoveId.ACID_SLIME_L_CORROSIVE_SPIT,  # SLIME_TACKLE
+        ("AcidSlime_L", 2): sts.MonsterMoveId.ACID_SLIME_L_TACKLE,          # NORMAL_TACKLE 
+        ("AcidSlime_L", 3): sts.MonsterMoveId.ACID_SLIME_L_SPLIT,           # SPLIT
+        ("AcidSlime_L", 4): sts.MonsterMoveId.ACID_SLIME_L_LICK,            # WEAK_LICK
+        
+        ("AcidSlime_M", 1): sts.MonsterMoveId.ACID_SLIME_M_CORROSIVE_SPIT,  # WOUND_TACKLE
+        ("AcidSlime_M", 2): sts.MonsterMoveId.ACID_SLIME_M_TACKLE,          # NORMAL_TACKLE
+        ("AcidSlime_M", 4): sts.MonsterMoveId.ACID_SLIME_M_LICK,            # WEAK_LICK
+        
+        ("AcidSlime_S", 1): sts.MonsterMoveId.ACID_SLIME_S_TACKLE,  # TACKLE
+        ("AcidSlime_S", 2): sts.MonsterMoveId.ACID_SLIME_S_LICK,    # DEBUFF (Weak)
+        
+        # Spike Slimes
+        ("SpikeSlime_L", 1): sts.MonsterMoveId.SPIKE_SLIME_L_FLAME_TACKLE,  # FLAME_TACKLE
+        ("SpikeSlime_L", 3): sts.MonsterMoveId.SPIKE_SLIME_L_SPLIT,         # SPLIT  
+        ("SpikeSlime_L", 4): sts.MonsterMoveId.SPIKE_SLIME_L_LICK,          # FRAIL_LICK
+        
+        ("SpikeSlime_M", 1): sts.MonsterMoveId.SPIKE_SLIME_M_FLAME_TACKLE,  # FLAME_TACKLE
+        ("SpikeSlime_M", 4): sts.MonsterMoveId.SPIKE_SLIME_M_LICK,          # FRAIL_LICK
+        
+        ("SpikeSlime_S", 1): sts.MonsterMoveId.SPIKE_SLIME_S_TACKLE,        # TACKLE
+        
+        # Gremlins (additional ones)
+        ("GremlinFat", 2): sts.MonsterMoveId.FAT_GREMLIN_SMASH,         # BLUNT
+        ("GremlinFat", 99): sts.MonsterMoveId.GENERIC_ESCAPE_MOVE,      # Escape
+        
+        ("GremlinThief", 1): sts.MonsterMoveId.SNEAKY_GREMLIN_PUNCTURE,  # PUNCTURE
+        ("GremlinThief", 99): sts.MonsterMoveId.GENERIC_ESCAPE_MOVE,     # Escape
+        
+        ("GremlinTsundere", 1): sts.MonsterMoveId.SHIELD_GREMLIN_PROTECT,     # PROTECT 
+        ("GremlinTsundere", 2): sts.MonsterMoveId.SHIELD_GREMLIN_SHIELD_BASH, # BASH
+        ("GremlinTsundere", 99): sts.MonsterMoveId.GENERIC_ESCAPE_MOVE,        # Escape
+        
+        ("GremlinWarrior", 1): sts.MonsterMoveId.MAD_GREMLIN_SCRATCH,    # SCRATCH
+        ("GremlinWarrior", 99): sts.MonsterMoveId.GENERIC_ESCAPE_MOVE,   # Escape
+        
+        # Green Louse (FuzzyLouseDefensive) 
+        ("FuzzyLouseDefensive", 3): sts.MonsterMoveId.GREEN_LOUSE_BITE,     # BITE
+        ("FuzzyLouseDefensive", 4): sts.MonsterMoveId.GREEN_LOUSE_SPIT_WEB, # WEAKEN
+        
+        # City Monsters
+        # Chosen (already seen above)
+        ("Chosen", 1): sts.MonsterMoveId.CHOSEN_ZAP,
+        ("Chosen", 2): sts.MonsterMoveId.CHOSEN_DRAIN,
+        ("Chosen", 3): sts.MonsterMoveId.CHOSEN_DEBILITATE,
+        ("Chosen", 4): sts.MonsterMoveId.CHOSEN_HEX,
+        ("Chosen", 5): sts.MonsterMoveId.CHOSEN_POKE,
+        
+        # Byrd 
+        ("Byrd", 1): sts.MonsterMoveId.BYRD_PECK,
+        ("Byrd", 2): sts.MonsterMoveId.BYRD_FLY,
+        ("Byrd", 3): sts.MonsterMoveId.BYRD_SWOOP,
+        ("Byrd", 4): sts.MonsterMoveId.BYRD_STUNNED,
+        ("Byrd", 5): sts.MonsterMoveId.BYRD_HEADBUTT,
+        ("Byrd", 6): sts.MonsterMoveId.BYRD_CAW,
+        
+        # Bronze Automaton (boss)
+        ("BronzeAutomaton", 1): sts.MonsterMoveId.BRONZE_AUTOMATON_FLAIL,
+        ("BronzeAutomaton", 2): sts.MonsterMoveId.BRONZE_AUTOMATON_HYPER_BEAM,
+        ("BronzeAutomaton", 3): sts.MonsterMoveId.BRONZE_AUTOMATON_STUNNED,
+        ("BronzeAutomaton", 4): sts.MonsterMoveId.BRONZE_AUTOMATON_SPAWN_ORBS,
+        ("BronzeAutomaton", 5): sts.MonsterMoveId.BRONZE_AUTOMATON_BOOST,
+        
+        # Bronze Orb
+        ("BronzeOrb", 1): sts.MonsterMoveId.BRONZE_ORB_BEAM,
+        ("BronzeOrb", 2): sts.MonsterMoveId.BRONZE_ORB_SUPPORT_BEAM,
+        ("BronzeOrb", 3): sts.MonsterMoveId.BRONZE_ORB_STASIS,
+        
+        # Centurion
+        ("Centurion", 1): sts.MonsterMoveId.CENTURION_SLASH,
+        ("Centurion", 2): sts.MonsterMoveId.CENTURION_DEFEND,
+        ("Centurion", 3): sts.MonsterMoveId.CENTURION_FURY,
+        
+        # The Champ (boss)
+        ("Champ", 1): sts.MonsterMoveId.THE_CHAMP_HEAVY_SLASH,
+        ("Champ", 2): sts.MonsterMoveId.THE_CHAMP_DEFENSIVE_STANCE,
+        ("Champ", 3): sts.MonsterMoveId.THE_CHAMP_EXECUTE,
+        ("Champ", 4): sts.MonsterMoveId.THE_CHAMP_FACE_SLAP,
+        ("Champ", 5): sts.MonsterMoveId.THE_CHAMP_GLOAT,
+        ("Champ", 6): sts.MonsterMoveId.THE_CHAMP_TAUNT,
+        ("Champ", 7): sts.MonsterMoveId.THE_CHAMP_ANGER,
+        
+        # Snecko
+        ("Snecko", 1): sts.MonsterMoveId.SNECKO_PERPLEXING_GLARE,
+        ("Snecko", 2): sts.MonsterMoveId.SNECKO_BITE,
+        ("Snecko", 3): sts.MonsterMoveId.SNECKO_TAIL_WHIP,
+        
+        # The Collector (boss)
+        ("TheCollector", 1): sts.MonsterMoveId.THE_COLLECTOR_SPAWN,
+        ("TheCollector", 2): sts.MonsterMoveId.THE_COLLECTOR_FIREBALL,
+        ("TheCollector", 3): sts.MonsterMoveId.THE_COLLECTOR_BUFF,
+        ("TheCollector", 4): sts.MonsterMoveId.THE_COLLECTOR_MEGA_DEBUFF,
+        
+        # Shelled Parasite
+        ("ShelledParasite", 1): sts.MonsterMoveId.SHELLED_PARASITE_FELL,
+        ("ShelledParasite", 2): sts.MonsterMoveId.SHELLED_PARASITE_DOUBLE_STRIKE,
+        ("ShelledParasite", 3): sts.MonsterMoveId.SHELLED_PARASITE_SUCK,
+        ("ShelledParasite", 4): sts.MonsterMoveId.SHELLED_PARASITE_STUNNED,
+        
+        # Book Of Stabbing
+        ("BookOfStabbing", 1): sts.MonsterMoveId.BOOK_OF_STABBING_SINGLE_STAB,
+        ("BookOfStabbing", 2): sts.MonsterMoveId.BOOK_OF_STABBING_MULTI_STAB,
+        
+        # Healer (Mystic)
+        ("Healer", 1): sts.MonsterMoveId.MYSTIC_ATTACK_DEBUFF,
+        ("Healer", 2): sts.MonsterMoveId.MYSTIC_HEAL,
+        ("Healer", 3): sts.MonsterMoveId.MYSTIC_BUFF,
+        
+        # Spheric Guardian
+        ("SphericGuardian", 1): sts.MonsterMoveId.SPHERIC_GUARDIAN_SLAM,
+        ("SphericGuardian", 2): sts.MonsterMoveId.SPHERIC_GUARDIAN_ACTIVATE,
+        ("SphericGuardian", 3): sts.MonsterMoveId.SPHERIC_GUARDIAN_HARDEN,
+        ("SphericGuardian", 4): sts.MonsterMoveId.SPHERIC_GUARDIAN_ATTACK_DEBUFF,
+        
+        # Taskmaster
+        ("Taskmaster", 2): sts.MonsterMoveId.TASKMASTER_SCOURING_WHIP,  # Gap at 1
+        
+        # Torch Head
+        ("TorchHead", 1): sts.MonsterMoveId.TORCH_HEAD_TACKLE,
+        
+        # Snake Plant
+        ("SnakePlant", 1): sts.MonsterMoveId.SNAKE_PLANT_CHOMP,
+        ("SnakePlant", 2): sts.MonsterMoveId.SNAKE_PLANT_ENFEEBLING_SPORES,
+        
+        # Mugger
+        ("Mugger", 1): sts.MonsterMoveId.MUGGER_MUG,
+        ("Mugger", 2): sts.MonsterMoveId.MUGGER_LUNGE,
+        ("Mugger", 3): sts.MonsterMoveId.MUGGER_SMOKE_BOMB,
+        ("Mugger", 4): sts.MonsterMoveId.MUGGER_ESCAPE,
+        
+        # Bandit Bear
+        ("BanditBear", 1): sts.MonsterMoveId.BEAR_BEAR_HUG,
+        ("BanditBear", 2): sts.MonsterMoveId.BEAR_LUNGE,
+        ("BanditBear", 3): sts.MonsterMoveId.BEAR_MAUL,
+        
+        # Bandit Pointy
+        ("BanditPointy", 1): sts.MonsterMoveId.POINTY_ATTACK,
+        
+        # Gremlin Leader
+        ("GremlinLeader", 2): sts.MonsterMoveId.GREMLIN_LEADER_STAB,       # Gap at 1
+        ("GremlinLeader", 3): sts.MonsterMoveId.GREMLIN_LEADER_RALLY,
+        ("GremlinLeader", 4): sts.MonsterMoveId.GREMLIN_LEADER_ENCOURAGE,
+        
+        # Beyond Monsters
+        # Awakened One (boss)
+        ("AwakenedOne", 1): sts.MonsterMoveId.AWAKENED_ONE_SLASH,
+        ("AwakenedOne", 2): sts.MonsterMoveId.AWAKENED_ONE_SOUL_STRIKE,
+        ("AwakenedOne", 3): sts.MonsterMoveId.AWAKENED_ONE_REBIRTH,
+        ("AwakenedOne", 5): sts.MonsterMoveId.AWAKENED_ONE_DARK_ECHO,
+        ("AwakenedOne", 6): sts.MonsterMoveId.AWAKENED_ONE_SLUDGE,
+        ("AwakenedOne", 8): sts.MonsterMoveId.AWAKENED_ONE_TACKLE,
+        
+        # Time Eater (boss)
+        ("TimeEater", 2): sts.MonsterMoveId.TIME_EATER_REVERBERATE,
+        ("TimeEater", 3): sts.MonsterMoveId.TIME_EATER_RIPPLE,
+        ("TimeEater", 4): sts.MonsterMoveId.TIME_EATER_HEAD_SLAM,
+        ("TimeEater", 5): sts.MonsterMoveId.TIME_EATER_HASTE,
+        
+        # Donu 
+        ("Donu", 0): sts.MonsterMoveId.DONU_BEAM,
+        ("Donu", 2): sts.MonsterMoveId.DONU_CIRCLE_OF_POWER,
+        
+        # Deca
+        ("Deca", 0): sts.MonsterMoveId.DECA_BEAM,
+        ("Deca", 2): sts.MonsterMoveId.DECA_SQUARE_OF_PROTECTION,
+        
+        # Darkling  
+        ("Darkling", 1): sts.MonsterMoveId.DARKLING_CHOMP,
+        ("Darkling", 2): sts.MonsterMoveId.DARKLING_HARDEN,
+        ("Darkling", 3): sts.MonsterMoveId.DARKLING_NIP,
+        ("Darkling", 4): sts.MonsterMoveId.DARKLING_REGROW,      # COUNT = 4
+        ("Darkling", 5): sts.MonsterMoveId.DARKLING_REINCARNATE,
+        
+        # Repulsor
+        ("Repulsor", 1): sts.MonsterMoveId.REPULSOR_REPULSE,
+        ("Repulsor", 2): sts.MonsterMoveId.REPULSOR_BASH,
+        
+        # Exploder
+        ("Exploder", 1): sts.MonsterMoveId.EXPLODER_SLAM,
+        ("Exploder", 2): sts.MonsterMoveId.EXPLODER_EXPLODE,
+        
+        # Writhing Mass
+        ("WrithingMass", 0): sts.MonsterMoveId.WRITHING_MASS_STRONG_STRIKE,
+        ("WrithingMass", 1): sts.MonsterMoveId.WRITHING_MASS_MULTI_STRIKE,
+        ("WrithingMass", 2): sts.MonsterMoveId.WRITHING_MASS_WITHER,
+        ("WrithingMass", 3): sts.MonsterMoveId.WRITHING_MASS_FLAIL,
+        ("WrithingMass", 4): sts.MonsterMoveId.WRITHING_MASS_IMPLANT,
+        
+        # Nemesis
+        ("Nemesis", 2): sts.MonsterMoveId.NEMESIS_ATTACK,
+        ("Nemesis", 3): sts.MonsterMoveId.NEMESIS_SCYTHE,
+        ("Nemesis", 4): sts.MonsterMoveId.NEMESIS_DEBUFF,
+        
+        # Reptomancer
+        ("Reptomancer", 1): sts.MonsterMoveId.REPTOMANCER_SNAKE_STRIKE,
+        ("Reptomancer", 2): sts.MonsterMoveId.REPTOMANCER_SUMMON,
+        ("Reptomancer", 3): sts.MonsterMoveId.REPTOMANCER_BIG_BITE,
+        
+        # Snake Dagger
+        ("SnakeDagger", 1): sts.MonsterMoveId.DAGGER_STAB,
+        ("SnakeDagger", 2): sts.MonsterMoveId.DAGGER_EXPLODE,
+        
+        # Spiker
+        ("Spiker", 1): sts.MonsterMoveId.SPIKER_CUT,
+        ("Spiker", 2): sts.MonsterMoveId.SPIKER_SPIKE,
+        
+        # Transient
+        ("Transient", 1): sts.MonsterMoveId.TRANSIENT_ATTACK,
+        
+        # Orb Walker
+        ("OrbWalker", 1): sts.MonsterMoveId.ORB_WALKER_LASER,
+        ("OrbWalker", 2): sts.MonsterMoveId.ORB_WALKER_CLAW,
+        
+        # Giant Head
+        ("GiantHead", 1): sts.MonsterMoveId.GIANT_HEAD_GLARE,        # GLARE = 1
+        ("GiantHead", 2): sts.MonsterMoveId.GIANT_HEAD_IT_IS_TIME,   # IT_IS_TIME = 2
+        ("GiantHead", 3): sts.MonsterMoveId.GIANT_HEAD_COUNT,        # COUNT = 3
+        
+        # Maw
+        ("Maw", 2): sts.MonsterMoveId.THE_MAW_ROAR,     # ROAR = 2 (gap at 0, 1)
+        ("Maw", 3): sts.MonsterMoveId.THE_MAW_SLAM,     # SLAM = 3
+        ("Maw", 4): sts.MonsterMoveId.THE_MAW_DROOL,    # DROOL = 4
+        ("Maw", 5): sts.MonsterMoveId.THE_MAW_NOM,      # NOMNOMNOM = 5
+        
+        # Spire Growth
+        ("SpireGrowth", 1): sts.MonsterMoveId.SPIRE_GROWTH_QUICK_TACKLE,
+        ("SpireGrowth", 2): sts.MonsterMoveId.SPIRE_GROWTH_SMASH,
+        ("SpireGrowth", 3): sts.MonsterMoveId.SPIRE_GROWTH_CONSTRICT,
+        
+        # Ending Monsters
+        # Corrupt Heart (final boss)
+        ("CorruptHeart", 1): sts.MonsterMoveId.CORRUPT_HEART_BLOOD_SHOTS,
+        ("CorruptHeart", 2): sts.MonsterMoveId.CORRUPT_HEART_ECHO,
+        ("CorruptHeart", 3): sts.MonsterMoveId.CORRUPT_HEART_DEBILITATE,
+        ("CorruptHeart", 4): sts.MonsterMoveId.CORRUPT_HEART_BUFF,
+        
+        # Spire Shield
+        ("SpireShield", 1): sts.MonsterMoveId.SPIRE_SHIELD_BASH,
+        ("SpireShield", 2): sts.MonsterMoveId.SPIRE_SHIELD_FORTIFY,
+        ("SpireShield", 3): sts.MonsterMoveId.SPIRE_SHIELD_SMASH,
+        
+        # Spire Spear
+        ("SpireSpear", 1): sts.MonsterMoveId.SPIRE_SPEAR_BURN_STRIKE,
+        ("SpireSpear", 2): sts.MonsterMoveId.SPIRE_SPEAR_PIERCER,
+        ("SpireSpear", 3): sts.MonsterMoveId.SPIRE_SPEAR_SKEWER,
+    }
+    
+    # Look up the move
+    move_id_enum = move_mapping.get(key)
+    if move_id_enum is not None:
+        return move_id_enum
+    
+    print(f"Warning: Unknown monster move mapping for '{monster_string}' move_id={move_id}, using INVALID", file=sys.stderr)
+    return sts.MonsterMoveId.INVALID
 
 
 def map_monster_power_id(power_name: str) -> sts.MonsterStatus:
@@ -648,6 +1027,71 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     return gc
 
 
+def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext", game: game.Game) -> "Action":
+    """
+    Map a sim/search/Action to a spirecomm Action.
+    
+    Args:
+        action: The search Action from BattleScumSearcher2
+        bc: The BattleContext for reference
+        game: The spirecomm Game state for monster/card references
+        
+    Returns:
+        Corresponding spirecomm Action object
+    """
+    action_type = action.get_action_type()
+    
+    if action_type == sts.ActionType.CARD:
+        # Playing a card - need card index and optional target
+        card_index = action.get_source_idx()
+        target_idx = action.get_target_idx()
+        
+        # Convert card index to hand position (should already be correct)
+        target_monster = None
+        if target_idx >= 0 and target_idx < len(game.monsters):
+            target_monster = game.monsters[target_idx]
+            
+        return PlayCardAction(card_index=card_index, target_monster=target_monster)
+        
+    elif action_type == sts.ActionType.POTION:
+        # Using a potion - need potion index and optional target
+        potion_idx = action.get_source_idx()
+        target_idx = action.get_target_idx()
+        
+        # Get the potion from the game state
+        potions = game.get_real_potions()
+        if 0 <= potion_idx < len(potions):
+            potion = potions[potion_idx]
+            
+            target_monster = None
+            if target_idx >= 0 and target_idx < len(game.monsters):
+                target_monster = game.monsters[target_idx]
+                
+            return PotionAction(True, potion=potion, target_monster=target_monster)
+        else:
+            raise ValueError(f"Invalid potion index: {potion_idx}")
+            
+    elif action_type == sts.ActionType.END_TURN:
+        return EndTurnAction()
+        
+    elif action_type == sts.ActionType.SINGLE_CARD_SELECT:
+        # Card selection action (for cases like Warcry, etc.)
+        select_idx = action.get_select_idx()
+        # This would need more context to handle properly
+        # For now, return a generic choice action
+        return ChooseAction(select_idx)
+        
+    elif action_type == sts.ActionType.MULTI_CARD_SELECT:
+        # Multiple card selection (like for Dual Wield, etc.)
+        selected_idxs = action.get_selected_idxs()
+        # Convert to list and return as card select action
+        # This would need proper implementation based on the specific scenario
+        return ChooseAction(0)  # Placeholder
+        
+    else:
+        raise ValueError(f"Unknown action type: {action_type}")
+
+
 def gamecontext_to_spirecomm_action(gc: sts.GameContext, game_action: sts.GameAction) -> str:
     """
     Convert a GameContext action to spirecomm command format.
@@ -836,8 +1280,8 @@ class STSLightspeedAgent:
 
     def get_next_action_in_game(self, game_state):
         self.game = game_state
-        #time.sleep(0.07)
         if self.game.choice_available:
+            time.sleep(0.5)
             return self.handle_screen()
         if self.game.proceed_available:
             return ProceedAction()
@@ -882,11 +1326,45 @@ class STSLightspeedAgent:
         return len(available_monsters) > 1
 
     def handle_combat(self):
+        # Convert spirecomm game state to our internal format
         gc = spirecomm_to_gamecontext(self.game)
         bc = convert_combat_state(self.game, gc)
-        agent = sts.Agent()
         
-        # TODO
+        # Create and configure the battle searcher
+        searcher = sts.BattleScumSearcher2(bc)
+        
+        # Run search with a moderate number of simulations
+        # More simulations = better play but slower response
+        simulation_count = 3000
+        if len(self.game.monsters) > 1:
+            simulation_count = 5000  # More simulations for multi-enemy fights
+        
+        print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)
+        searcher.search(simulation_count)
+        
+        # Get the best action sequence
+        best_actions = searcher.best_action_sequence
+        
+        if not best_actions:
+            # Fallback to ending turn if no actions found
+            print("No actions found by searcher, ending turn", file=sys.stderr)
+            return EndTurnAction()
+
+        print(f"Best action sequence found with {len(best_actions)} actions:", file=sys.stderr)
+        for i, action in enumerate(best_actions):
+            action_desc = action.print_desc(bc)
+            print(f"{i+1}. {action_desc}", file=sys.stderr)
+
+
+        # Take the first (immediate) action from the best sequence
+        first_action = best_actions[0]
+        
+        # Map the search action to a spirecomm action
+        spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game)
+
+        print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
+        
+        return spirecomm_action
 
 
     def use_next_potion(self):
