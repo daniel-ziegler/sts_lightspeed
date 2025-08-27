@@ -225,6 +225,10 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> sts.Batt
         for i, monster in enumerate(spire_game.monsters):
             if i >= 5:  # MonsterGroup supports max 5 monsters
                 break
+
+            if monster.current_hp <= 0:
+                bc.monsters.skipMonsterSlot()
+                continue
             
             # Try to map spirecomm monster name to MonsterId, fallback to generic
             monster_id = map_monster_string_to_id(monster.monster_id)
@@ -538,7 +542,7 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("SphericGuardian", 4): sts.MonsterMoveId.SPHERIC_GUARDIAN_ATTACK_DEBUFF,
         
         # Taskmaster
-        ("Taskmaster", 2): sts.MonsterMoveId.TASKMASTER_SCOURING_WHIP,  # Gap at 1
+        ("SlaverBoss", 2): sts.MonsterMoveId.TASKMASTER_SCOURING_WHIP,  # Gap at 1
         
         # Torch Head
         ("TorchHead", 1): sts.MonsterMoveId.TORCH_HEAD_TACKLE,
@@ -1263,6 +1267,7 @@ class STSLightspeedAgent:
         self.chosen_class = chosen_class
         self.priorities = Priority()
         self.change_class(chosen_class)
+        self.choice_count = 0
 
     def change_class(self, new_class):
         self.chosen_class = new_class
@@ -1279,15 +1284,21 @@ class STSLightspeedAgent:
         raise Exception(error)
 
     def get_next_action_in_game(self, game_state):
+        self.choice_count += 1
         self.game = game_state
         if self.game.choice_available:
-            time.sleep(0.5)
+            # nchoice = min(4, len(self.game.choice_list))
+            # if self.choice_count < 6:
+            #     time.sleep(3 * nchoice)
+            # else:
+            #     time.sleep(0.5 * nchoice)
             return self.handle_screen()
         if self.game.proceed_available:
             return ProceedAction()
         if self.game.play_available:
             return self.handle_combat()
         if self.game.end_available:
+            # time.sleep(4)
             return EndTurnAction()
         if self.game.cancel_available:
             return CancelAction()
@@ -1329,6 +1340,7 @@ class STSLightspeedAgent:
         # Convert spirecomm game state to our internal format
         gc = spirecomm_to_gamecontext(self.game)
         bc = convert_combat_state(self.game, gc)
+        print(bc, file=sys.stderr)
         
         # Create and configure the battle searcher
         searcher = sts.BattleScumSearcher2(bc)
@@ -1339,6 +1351,7 @@ class STSLightspeedAgent:
         if len(self.game.monsters) > 1:
             simulation_count = 5000  # More simulations for multi-enemy fights
         
+        print("=" * 80, file=sys.stderr)
         print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)
         searcher.search(simulation_count)
         
@@ -1350,10 +1363,14 @@ class STSLightspeedAgent:
             print("No actions found by searcher, ending turn", file=sys.stderr)
             return EndTurnAction()
 
-        print(f"Best action sequence found with {len(best_actions)} actions:", file=sys.stderr)
+        print("-" * 80, file=sys.stderr)
+        print(f"Best action sequence found with {len(best_actions)} actions (outcome_hp={searcher.outcome_player_hp}):", file=sys.stderr)
         for i, action in enumerate(best_actions):
             action_desc = action.print_desc(bc)
             print(f"{i+1}. {action_desc}", file=sys.stderr)
+            action.execute(bc)
+            if i in (0, len(best_actions)-1):
+                print(bc, file=sys.stderr)
 
 
         # Take the first (immediate) action from the best sequence

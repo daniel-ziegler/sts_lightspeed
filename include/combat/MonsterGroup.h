@@ -34,6 +34,7 @@ namespace sts {
         void init(BattleContext &bc, MonsterEncounter encounter);
         void createMonsters(BattleContext &bc, MonsterEncounter encounter);
         void createMonster(BattleContext &bc, MonsterId id);
+        void skipMonsterSlot();
 
         void createStrongHumanoid(BattleContext &bc);
         void createStrongWildlife(BattleContext &bc);

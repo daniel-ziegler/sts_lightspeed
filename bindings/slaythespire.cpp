@@ -644,7 +644,12 @@ PYBIND11_MODULE(slaythespire, m) {
         }, pybind11::return_value_policy::reference_internal)
         .def_property_readonly("cards", [](BattleContext &bc) -> CardManager& { 
             return bc.cards; 
-        }, pybind11::return_value_policy::reference_internal);
+        }, pybind11::return_value_policy::reference_internal)
+        .def("__str__", [](const BattleContext &bc) {
+            std::ostringstream oss;
+            oss << bc;
+            return oss.str();
+        });
 
     // Player bindings
     pybind11::class_<Player> player(m, "Player");
@@ -740,6 +745,7 @@ PYBIND11_MODULE(slaythespire, m) {
         }, pybind11::return_value_policy::reference_internal)
         .def("__len__", [](const MonsterGroup &mg) { return mg.monsterCount; })
         .def("createMonster", &MonsterGroup::createMonster)
+        .def("skipMonsterSlot", &MonsterGroup::skipMonsterSlot)
         .def("getAliveCount", &MonsterGroup::getAliveCount)
         .def("getTargetableCount", &MonsterGroup::getTargetableCount)
         .def("getFirstTargetable", &MonsterGroup::getFirstTargetable)

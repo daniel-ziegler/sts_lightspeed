@@ -94,6 +94,11 @@ void MonsterGroup::createMonster(BattleContext &bc, MonsterId id) {
     ++monstersAlive;
 }
 
+void MonsterGroup::skipMonsterSlot() {
+    arr[monsterCount].id = MonsterId::INVALID;
+    ++monsterCount;
+}
+
 void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter) {
     switch (encounter) {
 
