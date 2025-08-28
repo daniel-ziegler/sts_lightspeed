@@ -5,6 +5,3 @@
 	path = pybind11
 	url = ../../pybind/pybind11
 	branch = stable
-[submodule "spirecomm"]
-	path = spirecomm
-	url = https://github.com/ForgottenArbiter/spirecomm.git
