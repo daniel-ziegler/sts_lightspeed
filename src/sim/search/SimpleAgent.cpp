@@ -6,6 +6,7 @@
 #include <game/Game.h>
 #include "sim/PrintHelpers.h"
 
+#include <algorithm>
 #include <map>
 #include <array>
 #include <bitset>
@@ -569,7 +570,7 @@ void search::SimpleAgent::stepOutOfCombat(GameContext &gc) {
                     bestIdx = i;
                 }
             }
-            takeAction(gc, {bestIdx});
+            takeAction(gc, {GameAction::RewardsActionType::RELIC, bestIdx});
             break;
         }
 

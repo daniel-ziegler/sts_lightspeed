@@ -3,6 +3,9 @@
 //
 
 #include "combat/BattleContext.h"
+
+#include <algorithm>
+
 #include "constants/Cards.h"
 #include "game/GameContext.h"
 #include "game/Game.h"
@@ -14,12 +17,7 @@ namespace sts {
 }
 
 
-// assume all bc fields have just been initialized by in class member initializers
-void BattleContext::init(const GameContext &gc) {
-    init(gc, gc.info.encounter);
-}
-
-void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit) {
+void BattleContext::init_empty(const GameContext &gc) {
     gameContext = &gc;
 
     undefinedBehaviorEvoked = false;
@@ -27,7 +25,6 @@ void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit
     smokeBombUsed = false;
     seed = gc.seed;
     floorNum = gc.floorNum;
-    encounter = encounterToInit;
 
     auto startRandom = Random(gc.seed+gc.floorNum);
     aiRng = startRandom;
@@ -59,17 +56,28 @@ void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit
     player.maxHp = gc.maxHp;
     player.gold = gc.gold;
 
-    monsters.init(*this, encounterToInit);
-    if (gc.map->burningEliteX == gc.curMapNodeX && gc.map->burningEliteY == gc.curMapNodeY) {
-        monsters.applyEmeraldEliteBuff(*this, gc.map->burningEliteBuff, gc.act);
-    }
-
     player.cardDrawPerTurn = 5;
     if (gc.hasRelic(R::SNECKO_EYE)) {
         player.cardDrawPerTurn += 2;
     }
     if (gc.relics.has(R::RING_OF_THE_SERPENT)) {
         player.cardDrawPerTurn += 1;
+    }
+}
+
+// assume all bc fields have just been initialized by in class member initializers
+void BattleContext::init(const GameContext &gc) {
+    init(gc, gc.info.encounter);
+}
+
+void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit) {
+    init_empty(gc);
+
+    encounter = encounterToInit;
+
+    monsters.init(*this, encounterToInit);
+    if (gc.map->burningEliteX == gc.curMapNodeX && gc.map->burningEliteY == gc.curMapNodeY) {
+        monsters.applyEmeraldEliteBuff(*this, gc.map->burningEliteBuff, gc.act);
     }
     //addToBot(Actions::DrawCards(player.cardDrawPerTurn));
 
@@ -726,13 +734,14 @@ bool BattleContext::isCardPlayAllowed() const {
 void BattleContext::executeActions() {
     // todo find a place for checking where card queue is empty and player doesn't have control for calling onEndingTurn
     ++sum;
+    ++movesThisTurn;
     g_debug_bc = this;
 
     while (true)
     {
-        if (++loopCount > 1000000 || monsters.monstersAlive < 0 || turn > 500) {
-            // something went wrong
-            if (turn > 500) {
+        if (++loopCount > 100000 || monsters.monstersAlive < 0 || turn > 100 || movesThisTurn > 200) {
+            // hit unproductive infinite, most likely
+            if (turn > 100 || movesThisTurn > 200) {
                 outcome = Outcome::PLAYER_LOSS;
                 break;
             }
@@ -800,6 +809,7 @@ void BattleContext::executeActions() {
         if (turnHasEnded) {
             // after all monster turns
             afterMonsterTurns();
+            movesThisTurn = 0;
             continue;
 
         }

@@ -95,6 +95,7 @@ namespace sts {
         void onTookDamage(); // update blood for blood, masterful stab
         void findAndUpgradeSpecialData(std::int16_t uniqueId, int amount);
         void onBuffCorruption();
+        void clear(); // clear all card piles and reset counters
         
         bool operator==(const CardManager &rhs) const;
     };

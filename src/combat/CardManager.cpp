@@ -7,6 +7,7 @@
 #include "combat/CardManager.h"
 
 #include <set>
+#include <algorithm>
 
 #include "combat/BattleContext.h"
 
@@ -652,6 +653,31 @@ namespace sts {
         os << "\n}\n";
 
         return os;
+    }
+
+    void CardManager::clear() {
+        // Clear all card piles
+        cardsInHand = 0;
+        drawPile.clear();
+        discardPile.clear();
+        exhaustPile.clear();
+        
+        // Reset all counters
+        handNormalityCount = 0;
+        handPainCount = 0;
+        strikeCount = 0;
+        handBloodCardCount = 0;
+        drawPileBloodCardCount = 0;
+        discardPileBloodCardCount = 0;
+        
+        // Reset other fields
+        nextUniqueCardId = 0;
+        stasisCards[0] = CardInstance(CardId::INVALID);
+        stasisCards[1] = CardInstance(CardId::INVALID);
+        
+        // Clear hand and limbo arrays (not strictly necessary but good for consistency)
+        std::fill(hand.begin(), hand.end(), CardInstance(CardId::INVALID));
+        std::fill(limbo.begin(), limbo.end(), CardInstance(CardId::INVALID));
     }
 
 

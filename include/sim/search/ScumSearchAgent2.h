@@ -26,7 +26,7 @@ namespace sts::search {
         bool pauseOnCardReward = false;
 
         bool printActions = false;
-        bool printLogs = false;
+        int verbosityLevel = 1; // 0=quiet, 1=concise, 2=full
 
         int simulationCountBase = 50000;
         double bossSimulationMultiplier = 3;
@@ -34,7 +34,7 @@ namespace sts::search {
         int stepsWithSolution = 15;
 
         std::default_random_engine rng;
-        
+
         // public interface
         void playout(GameContext &gc);
 
@@ -46,13 +46,16 @@ namespace sts::search {
 
         void stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions, BattleScumSearcher2::Node *node);
         void stepThroughSearchTree(BattleContext &bc, const search::BattleScumSearcher2 &s);
+        
+        void printConciseAction(const BattleContext &bc, const Action &action);
 
         void stepOutOfCombatPolicy(GameContext &gc);
-        void cardSelectPolicy(GameContext &gc);
-        void stepEventPolicy(GameContext &gc);
-        void stepRandom(GameContext &gc);
-        void stepRewardsPolicy(GameContext &gc);
-        void weightedCardRewardPolicy(GameContext &gc);
+        GameAction pickOutOfCombatAction(const GameContext &gc);
+        GameAction pickCardSelectAction(const GameContext &gc);
+        GameAction pickEventAction(const GameContext &gc);
+        GameAction pickRandomAction(const GameContext &gc);
+        GameAction pickRewardsAction(const GameContext &gc);
+        GameAction pickWeightedCardRewardAction(const GameContext &gc);
     };
 
 }

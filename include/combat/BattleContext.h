@@ -54,6 +54,7 @@ namespace sts {
         int floorNum = 0;
         MonsterEncounter encounter = MonsterEncounter::INVALID;
         int loopCount = 0;
+        int movesThisTurn = 0;
         int energyWasted = 0;
         int cardsDrawn = 0;
         // end for debugging purposes
@@ -83,7 +84,7 @@ namespace sts {
 
         int potionCount = 0;
         int potionCapacity = 3;
-        std::array<Potion, 5> potions;
+        std::array<Potion, MAX_POTION_CAPACITY> potions;
 
         int turn = 0;
         Player player;
@@ -101,6 +102,7 @@ namespace sts {
 
 // ****************************************
 
+        void init_empty(const GameContext &gc);
         void init(const GameContext &gc);
         void init(const GameContext &gc, MonsterEncounter encounterToInit);
 

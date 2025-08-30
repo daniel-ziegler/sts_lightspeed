@@ -155,7 +155,7 @@ namespace sts {
         bool skipBattles = false;
 
         // ********* hidden from player *********
-        std::uint64_t seed;
+        std::int64_t seed;
 
         Random aiRng;
         Random cardRandomRng;
@@ -226,7 +226,7 @@ namespace sts {
 
         int potionCount = 0;
         int potionCapacity = 0;
-        std::array<Potion, 5> potions;
+        std::array<Potion, MAX_POTION_CAPACITY> potions;
 
         RelicContainer relics;
         Deck deck;
@@ -238,7 +238,7 @@ namespace sts {
         GameContextAction regainControlAction = nullptr;
 
         GameContext() = default;
-        GameContext(CharacterClass cc, std::uint64_t seed, int ascensionLevel);
+        GameContext(CharacterClass cc, std::int64_t seed, int ascensionLevel);
 
         void initFromSave(const SaveFile &s);
         void initRelicsFromSave(const SaveFile &s);

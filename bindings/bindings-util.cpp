@@ -4,37 +4,34 @@
 #include <sstream>
 #include <algorithm>
 
+#include "constants/Rooms.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/ScumSearchAgent2.h"
 #include "sim/SimHelpers.h"
 #include "sim/PrintHelpers.h"
 #include "game/Game.h"
 #include "game/Map.h"
+#include "game/Deck.h"
 
 #include "slaythespire.h"
 
-namespace sts {
+namespace sts::py {
 
-    NNInterface::NNInterface() :
-            cardEncodeMap(createOneHotCardEncodingMap()),
-            bossEncodeMap(createBossEncodingMap()) {}
-
-    int NNInterface::getCardIdx(Card c) const {
-        int idx = cardEncodeMap[static_cast<int>(c.id)] * 2;
-        if (idx == -1) {
-            std::cerr << "attemped to get encoding idx for invalid card" << std::endl;
-            assert(false);
-        }
-
-        if (c.isUpgraded()) {
-            idx += 1;
-        }
-
-        return idx;
+    constexpr int getMaxScreenState() {
+        return static_cast<int>(ScreenState::BATTLE);
     }
 
-    std::array<int,NNInterface::observation_space_size> NNInterface::getObservation(const GameContext &gc) const {
-        std::array<int,observation_space_size> ret {};
+    constexpr int getMaxCardSelectScreenType() {
+        return static_cast<int>(CardSelectScreenType::BONFIRE_SPIRITS);
+    }
+
+    constexpr int getMaxFloor() {
+        // Act 4 Heart fight is floor 56, which is the maximum possible floor
+        return 56;
+    }
+
+    pybind11::array_t<int> getFixedObservation(const GameContext &gc) {
+        std::vector<int> ret(fixed_observation_space_size);
 
         int offset = 0;
 
@@ -42,105 +39,97 @@ namespace sts {
         ret[offset++] = std::min(gc.maxHp, playerHpMax);
         ret[offset++] = std::min(gc.gold, playerGoldMax);
         ret[offset++] = gc.floorNum;
+        ret[offset++] = getBossEncoding(gc.boss);
+        ret[offset++] = gc.info.toSelectCount;
 
-        int bossEncodeIdx = offset + bossEncodeMap.at(gc.boss);
-        ret[bossEncodeIdx] = 1;
-        offset += 10;
-
-        for (auto c : gc.deck.cards) {
-            int encodeIdx = offset + getCardIdx(c);
-            ret[encodeIdx] = std::min(ret[encodeIdx]+1, cardCountMax);
-        }
-        offset += 220;
-
-        for (auto r : gc.relics.relics) {
-            int encodeIdx = offset + static_cast<int>(r.id);
-            ret[encodeIdx] = 1;
-        }
-        offset += 178;
-
-        return ret;
+        return to_numpy(ret);
     }
 
-    std::array<int,NNInterface::observation_space_size> NNInterface::getObservationMaximums() const {
-        std::array<int,observation_space_size> ret {};
-        int spaceOffset = 0;
+    pybind11::array_t<int> getFixedObservationMaximums() {
+        std::vector<int> ret(fixed_observation_space_size);
+        int offset = 0;
 
-        ret[0] = playerHpMax;
-        ret[1] = playerHpMax;
-        ret[2] = playerGoldMax;
-        ret[3] = 60;
-        spaceOffset += 3;
+        ret[offset++] = playerHpMax;
+        ret[offset++] = playerHpMax;
+        ret[offset++] = playerGoldMax;
+        ret[offset++] = getMaxFloor();
+        ret[offset++] = numBosses;
+        ret[offset++] = Deck::MAX_SIZE; // max cards to select
 
-        std::fill(ret.begin()+spaceOffset, ret.end(), 1);
-        spaceOffset += 10;
-
-        std::fill(ret.begin()+spaceOffset, ret.end(), cardCountMax);
-        spaceOffset += 220;
-
-        std::fill(ret.begin()+spaceOffset, ret.end(), 1);
-        spaceOffset += 178;
-
-        return ret;
+        return to_numpy(ret);
     }
 
-    std::vector<int> NNInterface::createOneHotCardEncodingMap() {
-        std::vector<CardId> redCards;
-        for (int i = static_cast<int>(CardId::INVALID); i <= static_cast<int>(CardId::ZAP); ++i) {
-            auto cid = static_cast<CardId>(i);
-            auto color = getCardColor(cid);
-            if (color == CardColor::RED) {
-                redCards.push_back(cid);
-            }
+    NNCardsRepresentation getCardRepresentation(const Deck &deck) {
+        std::vector<CardId> cards;
+        std::vector<int> upgrades;
+        for (int i = 0; i < deck.size(); ++i) {
+            cards.push_back(deck.cards[i].id);
+            upgrades.push_back(deck.cards[i].getUpgraded());
         }
-
-        std::vector<CardId> colorlessCards;
-        for (int i = 0; i < srcColorlessCardPoolSize; ++i) {
-            colorlessCards.push_back(srcColorlessCardPool[i]);
-        }
-        std::sort(colorlessCards.begin(), colorlessCards.end(), [](auto a, auto b) {
-            return std::string(getCardEnumName(a)) < std::string(getCardEnumName(b));
-        });
-
-        std::vector<int> encodingMap(372);
-        std::fill(encodingMap.begin(), encodingMap.end(), 0);
-
-        int hotEncodingIdx = 0;
-        for (auto x : redCards) {
-            encodingMap[static_cast<int>(x)] = hotEncodingIdx++;
-        }
-        for (auto x : colorlessCards) {
-            encodingMap[static_cast<int>(x)] = hotEncodingIdx++;
-        }
-
-        return encodingMap;
+        return NNCardsRepresentation {
+            .cards = to_numpy(cards),
+            .upgrades = to_numpy(upgrades)
+        };
     }
 
-    std::unordered_map<MonsterEncounter, int> NNInterface::createBossEncodingMap() {
-        std::unordered_map<MonsterEncounter, int> bossMap;
-        bossMap[ME::SLIME_BOSS] = 0;
-        bossMap[ME::HEXAGHOST] = 1;
-        bossMap[ME::THE_GUARDIAN] = 2;
-        bossMap[ME::CHAMP] = 3;
-        bossMap[ME::AUTOMATON] = 4;
-        bossMap[ME::COLLECTOR] = 5;
-        bossMap[ME::TIME_EATER] = 6;
-        bossMap[ME::DONU_AND_DECA] = 7;
-        bossMap[ME::AWAKENED_ONE] = 8;
-        bossMap[ME::THE_HEART] = 9;
-        return bossMap;
-    }
-
-    NNInterface* NNInterface::getInstance() {
-        if (theInstance == nullptr) {
-            theInstance = new NNInterface;
+    NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics) {
+        std::vector<RelicId> relicIds;
+        std::vector<int> relicCounters;
+        for (int i = 0; i < relics.size(); ++i) {
+            relicIds.push_back(relics.relics[i].id);
+            relicCounters.push_back(relics.relics[i].data);
         }
-        return theInstance;
+        return NNRelicsRepresentation {
+            .relics = to_numpy(relicIds),
+            .relicCounters = to_numpy(relicCounters)
+        };
     }
 
-}
+    NNRepresentation getNNRepresentation(const GameContext &gc) {
+        NNRepresentation rep;
+        rep.fixedObservation = getFixedObservation(gc);
+        rep.deck = getCardRepresentation(gc.deck);
+        rep.relics = getRelicRepresentation(gc.relics);
+        
+        // Get potion slots up to capacity (including empty ones) to preserve indices
+        std::vector<Potion> potions;
+        for (int i = 0; i < gc.potionCapacity; ++i) {
+            potions.push_back(gc.potions[i]);
+        }
+        rep.potions = to_numpy(potions);
+        
+        rep.map = getNNMapRepresentation(*gc.map);
+        rep.mapX = gc.curMapNodeX;
+        rep.mapY = gc.curMapNodeY;
+        return rep;
+    }
 
-namespace sts::py {
+    int getBossEncoding(MonsterEncounter boss) {
+        switch (boss) {
+            case ME::SLIME_BOSS:
+                return 0;
+            case ME::HEXAGHOST:
+                return 1;
+            case ME::THE_GUARDIAN:
+                return 2;
+            case ME::CHAMP:
+                return 3;
+            case ME::AUTOMATON:
+                return 4;
+            case ME::COLLECTOR:
+                return 5;
+            case ME::TIME_EATER:
+                return 6;
+            case ME::DONU_AND_DECA:
+                return 7;
+            case ME::AWAKENED_ONE:
+                return 8;
+            case ME::THE_HEART:
+                return 9;
+            default:
+                assert(false);
+        }
+    }
 
     void play() {
         sts::SimulatorContext ctx;
@@ -177,93 +166,101 @@ namespace sts::py {
         return std::vector<Card>(cardList.begin(), cardList.end());
     }
 
-    void pickRewardCard(GameContext &gc, Card card) {
-        const bool inValidState = gc.outcome == GameOutcome::UNDECIDED &&
-                                  gc.screenState == ScreenState::REWARDS &&
-                                  gc.info.rewardsContainer.cardRewardCount > 0;
-        if (!inValidState) {
-            std::cerr << "GameContext was not in a state with card rewards, check that the game has not completed first." << std::endl;
-            return;
-        }
-        auto &r = gc.info.rewardsContainer;
-        gc.deck.obtain(gc, card);
-        r.removeCardReward(r.cardRewardCount-1);
-    }
-
-    void skipRewardCards(GameContext &gc) {
-        const bool inValidState = gc.outcome == GameOutcome::UNDECIDED &&
-                                  gc.screenState == ScreenState::REWARDS &&
-                                  gc.info.rewardsContainer.cardRewardCount > 0;
-        if (!inValidState) {
-            std::cerr << "GameContext was not in a state with card rewards, check that the game has not completed first." << std::endl;
-            return;
-        }
-
-        if (gc.hasRelic(RelicId::SINGING_BOWL)) {
-            gc.playerIncreaseMaxHp(2);
-        }
-
-        auto &r = gc.info.rewardsContainer;
-        r.removeCardReward(r.cardRewardCount-1);
-    }
-
-
-
     // BEGIN MAP THINGS ****************************
 
-    std::vector<int> getNNMapRepresentation(const Map &map) {
-        std::vector<int> ret;
+    NNMapRepresentation getNNMapRepresentation(const Map &map) {
+        std::array<std::array<int, 7>, 16> ids;
+        int id = 0;
+        bool haveLastRow = false;
+        std::vector<int> xs, ys;
+        std::vector<Room> roomTypes;
+        std::vector<std::vector<int>> pathXs;
 
-        // 7 bits
-        // push edges to first row
-        for (int x = 0; x < 7; ++x) {
-            if (map.getNode(x,0).edgeCount > 0) {
-                ret.push_back(true);
-            } else {
-                ret.push_back(false);
-            }
-        }
-
-        // for each node in a row, push valid edges to next row, 3 bits per node, 21 bits per row
-        // skip 14th row because it is invariant
-        // 21 * 13 == 273 bits
-        for (int y = 0; y < 14; ++y) {
+        // First pass: collect data
+        for (int y = 0; y < 15; ++y) {
             for (int x = 0; x < 7; ++x) {
-
-                bool localEdgeValues[3] {false, false, false};
-                auto node = map.getNode(x,y);
-                for (int i = 0; i < node.edgeCount; ++i) {
-                    auto edge = node.edges[i];
-                    if (edge < x) {
-                        localEdgeValues[0] = true;
-                    } else if (edge == x) {
-                        localEdgeValues[1] = true;
-                    } else {
-                        localEdgeValues[2] = true;
+                const MapNode& node = map.getNode(x,y);
+                if (node.room != Room::NONE) {
+                    ids[y][x] = id++;
+                    roomTypes.push_back(node.room);
+                    xs.push_back(x);
+                    ys.push_back(y);
+                    if (y == 14) {
+                        haveLastRow = true;
                     }
                 }
-                ret.insert(ret.end(), localEdgeValues, localEdgeValues+3);
             }
         }
+        if (haveLastRow) {
+            ids[15][3] = id++; // boss
+            roomTypes.push_back(Room::BOSS);
+            xs.push_back(3);
+            ys.push_back(15);
+        }
 
-        // room types - for each node there are 6 possible rooms,
-        // the first row is always monster, the 8th row is always treasure, 14th is always rest
-        // this gives 14-3 valid rows == 11
-        // 11 * 6 * 7 = 462 bits
-        for (int y = 1; y < 14; ++y) {
-            if (y == 8) {
-                continue;
-            }
+        // Second pass: create path_xs for each room
+        for (int y = 0; y < 15; ++y) {
             for (int x = 0; x < 7; ++x) {
-                auto roomType = map.getNode(x,y).room;
-                for (int i = 0; i < 6; ++i) {
-                    ret.push_back(static_cast<int>(roomType) == i);
+                const MapNode& node = map.getNode(x,y);
+                if (node.room != Room::NONE) {
+                    std::vector<int> roomPaths(3, -1);  // Initialize with -1 (no edge)
+                    
+                    // For each room, check the three possible directions: left (x-1), straight (x), right (x+1)
+                    for (int k = 0; k < node.edgeCount; ++k) {
+                        int edgeX = node.edges[k];
+                        
+                        // For the last row (y=14), edges can go to the boss at x=3
+                        if (y == 14) {
+                            assert(edgeX == 3);  // Boss is always at x=3
+                            // Count the boss edge as "straight" with its actual x value
+                            roomPaths[1] = edgeX;
+                        } else {
+                            // Assert that edgeX is within expected range for normal rows
+                            assert(edgeX >= 0 && edgeX < 7);
+                            
+                            if (edgeX == x - 1) {
+                                roomPaths[0] = edgeX;  // left
+                            } else if (edgeX == x) {
+                                roomPaths[1] = edgeX;  // straight
+                            } else if (edgeX == x + 1) {
+                                roomPaths[2] = edgeX;  // right
+                            } else {
+                                // This should never happen with the current map generation
+                                assert(false && "Unexpected edge direction");
+                            }
+                        }
+                    }
+                    pathXs.push_back(roomPaths);
                 }
             }
         }
+        
+        // Handle boss room (always at x=3, y=15)
+        if (haveLastRow) {
+            // Boss has no outgoing edges - it's the destination
+            pathXs.push_back({-1, -1, -1});
+        }
 
-        return ret;
-    };
+        // Create 2D numpy array for pathXs
+        auto pathXsArray = pybind11::array_t<int>(
+            {static_cast<pybind11::ssize_t>(pathXs.size()), static_cast<pybind11::ssize_t>(3)}, 
+            {}
+        );
+        auto pathXsAccessor = pathXsArray.mutable_unchecked<2>();
+        for (pybind11::ssize_t i = 0; i < pathXs.size(); ++i) {
+            for (pybind11::ssize_t j = 0; j < 3; ++j) {
+                pathXsAccessor(i, j) = pathXs[i][j];
+            }
+        }
+
+        // Create numpy arrays from collected data
+        return NNMapRepresentation {
+            .xs = to_numpy(xs),
+            .ys = to_numpy(ys),
+            .roomTypes = to_numpy(roomTypes),
+            .pathXs = pathXsArray
+        };
+    }
 
     Room getRoomType(const Map &map, int x, int y) {
         if (x < 0 || x > 6 || y < 0 || y > 14) {

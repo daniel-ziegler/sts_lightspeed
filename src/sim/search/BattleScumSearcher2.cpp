@@ -5,6 +5,7 @@
 #include "sim/search/BattleScumSearcher2.h"
 #include "sim/search/ExpertKnowledge.h"
 
+#include <algorithm>
 #include <utility>
 #include <string>
 #include <memory>
@@ -227,7 +228,7 @@ void search::BattleScumSearcher2::rolloutToEnd(BattleContext &bc, std::vector<Ac
 
             default:
 #ifdef sts_asserts
-                std::cerr << "enumerateActionsForNode: invalid input state: " << static_cast<int>(bc.inputState) << std::endl;
+                std::cerr << "rolloutToEnd: invalid input state: " << static_cast<int>(bc.inputState) << std::endl;
                 assert(false);
 #endif
                 break;

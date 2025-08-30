@@ -8,34 +8,18 @@
 #include <vector>
 #include <unordered_map>
 #include <array>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 
+#include "constants/Cards.h"
+#include "constants/MonsterEncounters.h"
+#include "constants/Relics.h"
 #include "constants/Rooms.h"
+#include "game/Card.h"
+#include "game/Deck.h"
+#include "game/RelicContainer.h"
 
 namespace sts {
-
-    struct NNInterface {
-        static constexpr int observation_space_size = 412;
-        static constexpr int playerHpMax = 200;
-        static constexpr int playerGoldMax = 1800;
-        static constexpr int cardCountMax = 7;
-
-        const std::vector<int> cardEncodeMap;
-        const std::unordered_map<MonsterEncounter, int> bossEncodeMap;
-
-        static inline NNInterface *theInstance = nullptr;
-
-        NNInterface();
-
-        int getCardIdx(Card c) const;
-        std::array<int,observation_space_size> getObservationMaximums() const;
-        std::array<int,observation_space_size> getObservation(const GameContext &gc) const;
-
-
-        static std::vector<int> createOneHotCardEncodingMap();
-        static std::unordered_map<MonsterEncounter, int> createBossEncodingMap();
-        static NNInterface* getInstance();
-
-    };
 
     namespace search {
         class ScumSearchAgent2;
@@ -46,6 +30,57 @@ namespace sts {
     class Map;
 
     namespace py {
+        template<typename T> pybind11::array_t<T> to_numpy(const std::vector<T>& vec) {
+            auto result = pybind11::array_t<T>(vec.size());
+            auto r = result.template mutable_unchecked<1>();
+            for (pybind11::ssize_t i = 0; i < vec.size(); ++i) {
+                r(i) = vec[i];
+            }
+            return result;
+        }
+
+        static constexpr int fixed_observation_space_size = 6;
+        static constexpr int playerHpMax = 200;
+        static constexpr int playerGoldMax = 1800;
+        static constexpr int cardCountMax = 7;
+        static constexpr int numBosses = 10;
+
+        struct NNCardsRepresentation {
+            pybind11::array_t<CardId> cards;
+            pybind11::array_t<int> upgrades;
+
+            pybind11::dict as_dict() const;
+        };
+
+        struct NNRelicsRepresentation {
+            pybind11::array_t<RelicId> relics;
+            pybind11::array_t<int> relicCounters;
+
+            pybind11::dict as_dict() const;
+        };
+
+        struct NNMapRepresentation {
+            pybind11::array_t<int> xs;
+            pybind11::array_t<int> ys;
+            pybind11::array_t<Room> roomTypes;
+            pybind11::array_t<int> pathXs;  // 2D array: [num_rooms, 3] where each row is [left_x, straight_x, right_x] or -1 if no edge
+            // todo burning elite pos
+
+            pybind11::dict as_dict() const;
+        };
+
+
+        struct NNRepresentation {
+            pybind11::array_t<int> fixedObservation;
+            NNCardsRepresentation deck;
+            NNRelicsRepresentation relics;
+            pybind11::array_t<Potion> potions;
+            NNMapRepresentation map;
+            int mapX, mapY;
+            // todo history
+
+            pybind11::dict as_dict() const;
+        };
 
         void play();
 
@@ -58,10 +93,22 @@ namespace sts {
         void pickRewardCard(GameContext &gc, Card card);
         void skipRewardCards(GameContext &gc);
 
-        std::vector<int> getNNMapRepresentation(const Map &map);
+        NNMapRepresentation getNNMapRepresentation(const Map &map);
         Room getRoomType(const Map &map, int x, int y);
         bool hasEdge(const Map &map, int x, int y, int x2);
-    }
+
+        int getBossEncoding(MonsterEncounter boss);
+
+        pybind11::array_t<int> getFixedObservationMaximums();
+        pybind11::array_t<int> getFixedObservation(const GameContext &gc);
+        py::NNCardsRepresentation getCardRepresentation(const Deck &deck);
+        py::NNRelicsRepresentation getRelicRepresentation(const RelicContainer &relics);
+
+
+        py::NNRepresentation getNNRepresentation(const GameContext &gc);
+
+
+    };
 
 
 }

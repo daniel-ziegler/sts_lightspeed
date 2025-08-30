@@ -13,6 +13,7 @@
 #include "game/GameAction.h"
 
 #include "sim/BattleSimulator.h"
+#include "sim/search/ScumSearchAgent2.h"
 
 namespace sts {
 
@@ -32,6 +33,10 @@ namespace sts {
         bool printInput = true;
         bool printPrompts = true;
         bool quitOnTestFailed = true;
+        
+        // auto-battle settings
+        bool autoBattleMode = false;
+        int autoBattleVerbosity = 1; // 0=quiet, 1=concise, 2=full
     };
 
     struct ConsoleSimulator {
@@ -40,6 +45,7 @@ namespace sts {
         // state
         GameContext *gc = nullptr;
         BattleSimulator battleSim;
+        search::ScumSearchAgent2 autoBattleAgent;
 
         ConsoleSimulator() = default;
         void setupGame(std::uint64_t seed, CharacterClass c, int ascension);
@@ -50,9 +56,10 @@ namespace sts {
 
         void getInputLoop(std::istream &is, std::ostream &os, SimulatorContext &c);
         void handleInputLine(const std::string &line, std::ostream &os, SimulatorContext &c);
+        void handleAutoBattle(std::ostream &os, SimulatorContext &c);
 
         void doPrintCommand(std::ostream &os, const std::string &cmd);
-        void doSetCommand(const std::string &cmd);
+        void doSetCommand(const std::string &cmd, SimulatorContext &c);
 
         void printActions(std::ostream &os) const;
         GameAction parseAction(const std::string &action);

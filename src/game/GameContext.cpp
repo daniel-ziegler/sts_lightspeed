@@ -32,7 +32,7 @@ SelectScreenCard::SelectScreenCard(const Card &card) : card(card) {}
 
 SelectScreenCard::SelectScreenCard(const Card &card, int deckIdx) : card(card), deckIdx(deckIdx) {}
 
-GameContext::GameContext(CharacterClass cc, std::uint64_t seed, int ascension)
+GameContext::GameContext(CharacterClass cc, std::int64_t seed, int ascension)
     : seed(seed),
     neowRng(seed),
     treasureRng(seed),
@@ -2414,12 +2414,9 @@ void GameContext::chooseNeowOption(const Neow::Option &o) {
 }
 
 void GameContext::chooseBossRelic(int idx) {
-    if (idx >= 0 && idx < 3) {
-        bool screenUp = obtainRelic(info.bossRelics[idx]);
-        if (!screenUp) {
-            regainControl();
-        }
-    } else if (idx == 3) {
+    assert (idx >= 0 && idx < 3);
+    bool screenUp = obtainRelic(info.bossRelics[idx]);
+    if (!screenUp) {
         regainControl();
     }
 }

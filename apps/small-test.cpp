@@ -2,12 +2,12 @@
 // Created by keega on 9/9/2021.
 //
 
+#include "constants/MonsterEncounters.h"
 #include "game/SaveFile.h"
 #include "game/GameContext.h"
 #include "game/Game.h"
 #include "game/Map.h"
 #include "constants/Cards.h"
-#include "slaythespire.h"
 #include "sim/SimHelpers.h"
 #include "sim/search/SimpleAgent.h"
 
@@ -170,7 +170,7 @@ int main(int argc, const char *argv[]) {
 //    printAllRelicForBinding();
 
     Map map(sts::Map::fromSeed(1));
-    std::cout << map.toString() << std::endl;
+    std::cout << map.toString(MonsterEncounter::HEXAGHOST) << std::endl;
 
 
     int weights[] = {100,1000,100,10,1,0};
@@ -185,10 +185,10 @@ int main(int argc, const char *argv[]) {
 //    GameContext gc(sts::CharacterClass::IRONCLAD, 10000, 0);
 //
 //
-//    const auto maximums = NNInterface::getInstance()->getObservationMaximums();
+//    const auto maximums = NNInterface::getInstance()->getFixedObservationMaximums();
 //    printVec("maximums", std::cout, maximums.begin(), maximums.end());
 //
-//    const auto observation = NNInterface::getInstance()->getObservation(gc);
+//    const auto observation = NNInterface::getInstance()->getFixedObservation(gc);
 //    printVec("observation", std::cout, observation.begin(), observation.end());
 
 
