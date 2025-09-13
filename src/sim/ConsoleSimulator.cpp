@@ -484,10 +484,35 @@ void ConsoleSimulator::printMapScreenActions(std::ostream &os) const {
         os << "CurX: " << gc->curMapNodeX << " CurY: " << gc->curMapNodeY << '\n';
 
         auto node = gc->map->getNode(gc->curMapNodeX, gc->curMapNodeY);
+
+        // Show normally connected rooms
         for (int i = 0; i < node.edgeCount; ++i) {
             const auto nextNodeX = node.edges[i];
             const auto &nextNode = gc->map->getNode(nextNodeX, node.y + 1);
             os << nextNode.x << ": " << roomStrings[static_cast<int>(nextNode.room)] << '\n';
+        }
+
+        // Show WING_BOOTS bypass options if available
+        if (gc->relics.has(RelicId::WING_BOOTS) && gc->relics.getRelicValue(RelicId::WING_BOOTS) > 0) {
+            os << "(WING_BOOTS active - " << gc->relics.getRelicValue(RelicId::WING_BOOTS) << " uses remaining)\n";
+
+            // Add all valid rooms on the next floor that aren't already connected
+            for (int x = 0; x < 7; ++x) {
+                const auto &nextFloorNode = gc->map->getNode(x, gc->curMapNodeY + 1);
+                if (nextFloorNode.edgeCount > 0 || nextFloorNode.room != Room::NONE) {
+                    // Check if this room is already shown (connected by normal path)
+                    bool alreadyConnected = false;
+                    for (int i = 0; i < node.edgeCount; ++i) {
+                        if (node.edges[i] == x) {
+                            alreadyConnected = true;
+                            break;
+                        }
+                    }
+                    if (!alreadyConnected) {
+                        os << x << ": " << roomStrings[static_cast<int>(nextFloorNode.room)] << " (WING_BOOTS)\n";
+                    }
+                }
+            }
         }
     }
 }
