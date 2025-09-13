@@ -286,11 +286,21 @@ bool isValidMapAction(const GameContext &gc, const GameAction a) {
     }
 
     const auto &curNode = gc.map->getNode(gc.curMapNodeX, gc.curMapNodeY);
+
+    // Check if selected room is connected by normal path
     for (int i = 0; i < curNode.edgeCount; ++i) {
         if (curNode.edges[i] == select) {
             return true;
         }
     }
+
+    // Check if WING_BOOTS can be used to ignore paths
+    if (gc.relics.has(RelicId::WING_BOOTS) && gc.relics.getRelicValue(RelicId::WING_BOOTS) > 0) {
+        // Can choose any room on the next floor
+        const auto &nextFloorNode = gc.map->getNode(select, gc.curMapNodeY + 1);
+        return nextFloorNode.edgeCount > 0 || nextFloorNode.room != Room::NONE;
+    }
+
     return false;
 }
 
@@ -583,9 +593,33 @@ void GameAction::execute(GameContext &gc) const {
             gc.chooseSelectCardScreenOption(getIdx1());
             break;
 
-        case ScreenState::MAP_SCREEN:
-            gc.transitionToMapNode(getIdx1());
+        case ScreenState::MAP_SCREEN: {
+            const auto select = getIdx1();
+
+            // Check if WING_BOOTS is being used (i.e., selecting a non-connected room)
+            bool usedWingBoots = false;
+            if (gc.curMapNodeY != -1 && gc.curMapNodeY != 14) {
+                const auto &curNode = gc.map->getNode(gc.curMapNodeX, gc.curMapNodeY);
+                bool isConnected = false;
+                for (int i = 0; i < curNode.edgeCount; ++i) {
+                    if (curNode.edges[i] == select) {
+                        isConnected = true;
+                        break;
+                    }
+                }
+                if (!isConnected && gc.relics.has(RelicId::WING_BOOTS)) {
+                    usedWingBoots = true;
+                }
+            }
+
+            gc.transitionToMapNode(select);
+
+            // Consume WING_BOOTS use after successful transition
+            if (usedWingBoots) {
+                gc.relics.getRelicValueRef(RelicId::WING_BOOTS)--;
+            }
             break;
+        }
 
         case ScreenState::TREASURE_ROOM:
             if (getIdx1() == 0) {
@@ -752,6 +786,27 @@ std::vector<GameAction> getAllMapActions(const sts::GameContext &gc) {
         auto node = gc.map->getNode(gc.curMapNodeX, gc.curMapNodeY);
         for (int i = 0; i < node.edgeCount; ++i) {
             actions.emplace_back(node.edges[i]);
+        }
+
+        // Add WING_BOOTS bypass options
+        if (gc.relics.has(RelicId::WING_BOOTS) && gc.relics.getRelicValue(RelicId::WING_BOOTS) > 0) {
+            // Add all valid rooms on the next floor that aren't already connected
+            for (int x = 0; x < 7; ++x) {
+                const auto &nextFloorNode = gc.map->getNode(x, gc.curMapNodeY + 1);
+                if (nextFloorNode.edgeCount > 0 || nextFloorNode.room != Room::NONE) {
+                    // Check if this room is already in actions (connected by normal path)
+                    bool alreadyConnected = false;
+                    for (int i = 0; i < node.edgeCount; ++i) {
+                        if (node.edges[i] == x) {
+                            alreadyConnected = true;
+                            break;
+                        }
+                    }
+                    if (!alreadyConnected) {
+                        actions.emplace_back(x);
+                    }
+                }
+            }
         }
     }
 

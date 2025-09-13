@@ -1408,6 +1408,10 @@ bool GameContext::obtainRelic(RelicId r) {
             break;
         }
 
+        case RelicId::WING_BOOTS: {
+            relicData = 3;
+            break;
+        }
 
         case RelicId::PANDORAS_BOX: {
             int transformCount = 0;
