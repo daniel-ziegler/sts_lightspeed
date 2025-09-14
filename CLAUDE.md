@@ -222,6 +222,97 @@ The system is designed to be extensible - most new action types can be added by 
    - **Command**: `make -j8`
    - **Check**: Import and test immediately after build
 
+## Implementing New Relics
+
+When implementing new relics that affect game mechanics, follow these patterns established in the codebase:
+
+### Relic Data Storage and Initialization
+
+Relics can store persistent state using the `data` field in `RelicInstance`. Initialize this in `GameContext::obtainRelic()`:
+
+```cpp
+// In GameContext.cpp obtainRelic() switch statement
+case RelicId::YOUR_RELIC: {
+    relicData = 3;  // Set initial uses/counter
+    break;
+}
+```
+
+**Common patterns:**
+- **Limited uses**: `NEOWS_LAMENT` (3), `WING_BOOTS` (3), `OMAMORI` (2), `MATRYOSHKA` (2)
+- **Counters**: `MAW_BANK` (1 for tracking state)
+- **No data needed**: Most passive relics don't need data (leave `relicData = 0`)
+
+### Game Logic Integration
+
+Different relic types require different integration points:
+
+#### 1. **UI/Action Availability** (like WING_BOOTS)
+- **Validation**: Update `isValidXXXAction()` functions in `GameAction.cpp`
+- **Action Generation**: Update `getAllXXXActions()` functions to include new options
+- **Console Display**: Update `printXXXActions()` in `ConsoleSimulator.cpp` to show new options
+- **Usage Consumption**: Add logic in `GameAction::execute()` to consume relic uses
+
+```cpp
+// Example: In isValidMapAction()
+if (gc.relics.has(RelicId::YOUR_RELIC) && gc.relics.getRelicValue(RelicId::YOUR_RELIC) > 0) {
+    // Allow special action
+}
+
+// Example: In execute() for MAP_SCREEN
+if (usedSpecialRelic) {
+    gc.relics.getRelicValueRef(RelicId::YOUR_RELIC)--;
+}
+```
+
+#### 2. **Battle Effects**
+- Modify `BattleContext` methods for combat-related relics
+- Add checks in damage calculation, card play, turn start/end
+
+#### 3. **Event/Room Effects**
+- Add cases in `GameContext::chooseEventOption()` for event-specific relics
+- Modify room entry/exit logic in `transitionToMapNode()` and related methods
+
+### UI Integration Checklist
+
+When adding relics that provide new player choices:
+
+1. **Core Logic** (`GameAction.cpp`):
+   - [ ] Add validation in `isValidXXXAction()`
+   - [ ] Add action generation in `getAllXXXActions()`
+   - [ ] Add usage consumption in `execute()`
+
+2. **Console Interface** (`ConsoleSimulator.cpp`):
+   - [ ] Update `printXXXActions()` to show new options
+   - [ ] Add visual indicators (like "(WING_BOOTS)")
+   - [ ] Show remaining uses when relevant
+
+3. **Initialization** (`GameContext.cpp`):
+   - [ ] Add case in `obtainRelic()` switch statement
+   - [ ] Set appropriate `relicData` value
+
+4. **Testing**:
+   - [ ] Verify relic initializes with correct data
+   - [ ] Test that new actions appear in console
+   - [ ] Confirm usage consumption works correctly
+   - [ ] Build and test Python bindings
+
+### Common Gotchas
+
+- **ConsoleSimulator Sync**: UI display functions must match the logic in `getAllXXXActions()`, or players won't see new options
+- **Screen State Logic**: Different screen states have different validation/action patterns
+- **Relic Access**: Use `gc.relics.has()` and `gc.relics.getRelicValue()` for checks
+- **Python Bindings**: Relics appear as `gc.relics` list with `.id` and `.data` fields
+- **Save Compatibility**: RelicId enum values are mapped in `SaveFileMappings.h`
+
+### Examples in Codebase
+
+- **WING_BOOTS**: Map navigation bypass (this implementation)
+- **NEOWS_LAMENT**: 3-use enemy kill counter
+- **GIRYA**: Campfire action enabler with 3 upgrade limit
+- **MAW_BANK**: State tracking relic
+- **OMAMORI**: Curse negation with limited uses
+
 # Important instructions
 
 - Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.
