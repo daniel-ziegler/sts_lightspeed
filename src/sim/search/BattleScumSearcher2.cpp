@@ -409,7 +409,7 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
 }
 
 double search::BattleScumSearcher2::evaluateEndState(const BattleContext &bc) {
-    double potionScore = bc.potionCount * 4;
+    double potionScore = bc.potionCount * 12;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
         return 100 * (35 + bc.player.curHp + potionScore - (bc.turn * 0.01));
