@@ -476,7 +476,7 @@ void BattleContext::exitBattle(GameContext &g) const {
         if (player.hasRelic<R::OMAMORI>()) {
             --g.relics.getRelicValueRef(RelicId::OMAMORI);
         } else {
-            g.deck.obtain(g, CardId::PARASITE);
+            g.deck.obtainRaw(CardId::PARASITE);
 
         }
     }

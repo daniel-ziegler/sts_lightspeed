@@ -1522,7 +1522,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
 
         case MMID::WRITHING_MASS_IMPLANT: // 4
             miscInfo = true;
-            if (!bc.player.hasRelic<R::OMAMORI>()) {
+            if (!bc.player.hasRelic<R::OMAMORI>() || bc.gameContext->relics.getRelicValue(RelicId::OMAMORI) == 0) {
                 if (bc.player.hasRelic<R::DARKSTONE_PERIAPT>()) {
                     bc.player.increaseMaxHp(6);
                 }
