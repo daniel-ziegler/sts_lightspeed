@@ -113,13 +113,12 @@ bool search::BattleScumSearcher2::isTerminalState(const BattleContext &bc) const
 double search::BattleScumSearcher2::evaluateEdge(const search::BattleScumSearcher2::Node &parent, int edgeIdx) {
 
     const auto &edge = parent.edges[edgeIdx];
-
-    double qualityValue = 0;
-    if (!bestActionSequence.empty()) {
-        auto avgEvaluation = edge.node.evaluationSum / (edge.node.simulationCount+1);
-        double evalRange = bestActionValue - minActionValue;
-        qualityValue = avgEvaluation / evalRange;
+    
+    if (edge.node.simulationCount == 0) {
+        return std::numeric_limits<double>::infinity();
     }
+
+    double qualityValue = edge.node.evaluationSum / edge.node.simulationCount;
 
     double explorationValue = explorationParameter *
             std::sqrt(std::log(parent.simulationCount+1) / (edge.node.simulationCount+1));
@@ -135,13 +134,16 @@ int search::BattleScumSearcher2::selectBestEdgeToSearch(const search::BattleScum
     auto bestEdge = 0;
     auto bestEdgeValue = evaluateEdge(cur, bestEdge);
 
+    //std::cout << "  edges: " << bestEdgeValue;
     for (int i = 1; i < cur.edges.size(); ++i) {
         const auto value = evaluateEdge(cur, i);
+        //std::cout << ", " << value;
         if (value > bestEdgeValue) {
             bestEdge = i;
             bestEdgeValue = value;
         }
     }
+    //std::cout << "\n";
     return bestEdge;
 }
 
@@ -412,8 +414,9 @@ double search::BattleScumSearcher2::evaluateEndState(const BattleContext &bc) {
     double potionScore = bc.potionCount * 12;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
-        return 100 * (35 + bc.player.curHp + potionScore - (bc.turn * 0.01));
-
+        double score = 100 + bc.player.curHp + potionScore - (bc.turn * 0.01);
+        // std::cout << "Victory! Turn " << bc.turn << " " << bc.player.curHp << "/" << bc.player.maxHp << "hp " << bc.potionCount << "pots: " << score << "\n";
+        return score;
     } else {
 //        double statusScore =
 //                (bc.player.getStatus<PS::STRENGTH>() * .5);
