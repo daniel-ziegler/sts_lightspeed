@@ -1294,7 +1294,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::DISARM:
-            addToBot( Actions::DebuffEnemy(MS::STRENGTH, t, -2, false) );
+            addToBot( Actions::DebuffEnemy(MS::STRENGTH, t, up ? -3 : -2, false) );
             break;
 
         case CardId::DISCOVERY:
