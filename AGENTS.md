@@ -313,6 +313,132 @@ When adding relics that provide new player choices:
 - **MAW_BANK**: State tracking relic
 - **OMAMORI**: Curse negation with limited uses
 
+## Action Systems
+
+The codebase has two distinct Action systems: **combat Actions** and **search Actions**.
+
+### Combat Actions (`combat/Actions.h`)
+
+Combat Actions represent atomic game effects that modify battle state. They are defined using a macro-based system for code generation.
+
+#### Action Definition
+
+Actions are defined using the `FOREACH_ACTIONTYPE` macro, which generates:
+- Struct definitions with typed fields (e.g., `_BuffPlayer` with fields `PlayerStatus s` and `int amount`)
+- An enum `ActionType` for each action variant
+- Static factory methods in the `Actions` namespace
+- Operator overloads for copying, moving, and comparison
+
+Each action struct implements a `call operator` that modifies the `BattleContext`:
+
+```cpp
+void _BuffPlayer::operator()(BattleContext &bc) const {
+    if (s == PlayerStatus::CORRUPTION && !bc.player.hasStatus<PS::CORRUPTION>()) {
+        bc.cards.onBuffCorruption();
+    }
+    bc.player.buff(s, amount);
+}
+```
+
+#### Action Queue
+
+The `BattleContext` maintains an `ActionQueue<50>` (a fixed-capacity deque) that holds pending actions:
+
+```cpp
+ActionQueue<50> actionQueue;
+CardQueue cardQueue;
+```
+
+**Queue Operations:**
+- `addToTop(Action)` / `actionQueue.pushFront()` - Adds action to front (executes next)
+- `addToBot(Action)` / `actionQueue.pushBack()` - Adds action to back (executes later)
+- `actionQueue.popFront()` - Removes and returns next action
+
+**Execution Loop:**
+
+The `BattleContext::executeActions()` method processes both queues:
+
+1. Check for loop/turn limits (prevents infinite loops)
+2. If `actionQueue` not empty: pop and execute an `Action`
+3. If `cardQueue` not empty: pop and play a `CardQueueItem`
+4. Continue until `inputState != EXECUTING_ACTIONS` or combat ends
+
+Actions can add more actions to either queue during execution, enabling complex card effect chains. The queue architecture allows fine control over execution order - cards typically add effects to the bottom (after current effects), while some mechanics like "reactive" debuffs add to top (before pending effects).
+
+### Search Actions (`sim/search/Action.h`)
+
+Search Actions represent high-level player decisions for AI agents and tree search. These are compact 32-bit encoded actions.
+
+#### Bit-Packed Structure
+
+Actions pack into a single `uint32_t`:
+- Bits 29-31 (3 bits): `ActionType` enum
+- Bits 0-15 (16 bits): `idx1` (source index or select index)
+- Bits 16-28 (13 bits): `idx2` (target index)
+
+**Action Types:**
+- `CARD` - Play card from hand at target
+- `POTION` - Use/discard potion
+- `SINGLE_CARD_SELECT` - Pick one card (Armaments, Exhume, etc.)
+- `MULTI_CARD_SELECT` - Pick multiple cards (bit flags for indices)
+- `END_TURN` - End player turn
+
+#### Validation and Execution
+
+Search Actions validate against `BattleContext` state:
+
+```cpp
+bool Action::isValidAction(const BattleContext &bc) const {
+    // Check outcome, input state, and action-specific constraints
+}
+```
+
+When executed, search Actions translate to combat Actions:
+
+```cpp
+void Action::execute(BattleContext &bc) const {
+    switch (getActionType()) {
+        case ActionType::CARD:
+            const CardQueueItem item(bc.cards.hand[getSourceIdx()], getTargetIdx(), bc.player.energy);
+            bc.addToBotCard(item);
+            break;
+        // ... handle other types
+    }
+    bc.inputState = InputState::EXECUTING_ACTIONS;
+    bc.executeActions();  // Process the combat action queue
+}
+```
+
+Search Actions serve as the interface between AI agents and the game engine, while combat Actions implement the actual game mechanics.
+
+### RNG System
+
+`BattleContext` maintains a **single unified RNG stream**, seeded from `GameContext`:
+
+```cpp
+Random rng;  // All combat randomness
+```
+
+Each `Random` object uses an XORShift algorithm with a 64-bit state and maintains a `counter` for deterministic replay. The RNG is initialized at battle start:
+
+```cpp
+rng = Random(gc.seed + gc.floorNum);
+```
+
+After battle, the RNG state syncs back to `GameContext.rng` to persist across floors within the same act.
+
+**Key RNG Methods:**
+- `random(int range)` - Returns `[0, range]` inclusive, increments counter
+- `random(int start, int end)` - Returns `[start, end]` inclusive
+- `randomBoolean()` - Returns true/false
+- `randomFloat()` / `randomDouble()` - Returns normalized floating point
+
+The counter enables RNG state synchronization for replay/debugging. All combat-related randomness (monster AI, card generation, HP variance, potion drops, deck shuffling) uses this single stream.
+
+`GameContext` maintains separate RNG streams for non-combat systems: `cardRng` (card rewards), `eventRng` (events), `merchantRng` (shop), `monsterRng` (encounter generation), `neowRng` (Neow blessings), `relicRng` (relic generation), `treasureRng` (treasure rooms), and `rng` (general/combat-related).
+
+**Important:** RNG accuracy is no longer maintained relative to the base game, since we've unified the battle RNG streams into a single one.
+
 # Important instructions
 
 - Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.

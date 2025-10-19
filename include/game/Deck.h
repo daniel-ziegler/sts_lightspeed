@@ -48,8 +48,8 @@ namespace sts {
         [[nodiscard]] bool hasCardForWingStatue() const;
 
         void upgradeStrikesAndDefends();
-        void upgradeRandomCards(Random &miscRng, int count);
-        void transformRandomCards(Random &miscRng, int count);
+        void upgradeRandomCards(Random &rng, int count);
+        void transformRandomCards(Random &rng, int count);
 
         void obtain(GameContext &gc, Card card, int count=1); // for all cards
         void obtainRaw(Card card);

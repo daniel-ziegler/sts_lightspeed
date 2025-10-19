@@ -157,19 +157,14 @@ namespace sts {
         // ********* hidden from player *********
         std::int64_t seed;
 
-        Random aiRng;
-        Random cardRandomRng;
+        Random rng;
         Random cardRng;
         Random eventRng;
         Random mathUtilRng;
         Random merchantRng;
-        Random miscRng;
-        Random monsterHpRng;
         Random monsterRng;
         Random neowRng;
-        Random potionRng;
         Random relicRng;
-        Random shuffleRng;
         Random treasureRng;
 
         // todo change these to fixed lists

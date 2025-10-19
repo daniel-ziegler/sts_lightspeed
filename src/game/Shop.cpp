@@ -70,7 +70,7 @@ void Shop::setupRelics(GameContext &gc) {
 
 void Shop::setupPotions(GameContext &gc) {
     for (int i = 0; i < 3; ++i) {
-        potions[i] = returnRandomPotion(gc.potionRng, gc.cc);
+        potions[i] = returnRandomPotion(gc.rng, gc.cc);
         const auto rarity = potionRarities[(int)potions[i]];
         const int basePrice = potionRarityPrices[(int)rarity];
         potionPrice(i) = std::round(basePrice * gc.merchantRng.random(0.95f, 1.05f));
@@ -146,7 +146,7 @@ void Shop::buyPotion(GameContext &gc, int idx) {
     gc.obtainPotion(potions[idx]);
     gc.loseGold(potionPrice(idx), true);
     if (gc.hasRelic(RelicId::THE_COURIER)) {
-        potions[idx] = returnRandomPotion(gc.potionRng, gc.cc);
+        potions[idx] = returnRandomPotion(gc.rng, gc.cc);
         potionPrice(idx) = getNewPrice(gc, getPotionBaseCost(potions[idx]));
     } else {
         potionPrice(idx) = -1;

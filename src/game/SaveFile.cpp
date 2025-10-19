@@ -180,12 +180,11 @@ sts::SaveFile::SaveFile(const std::string &json, sts::CharacterClass cc): json(j
     j.at("mugged").get_to(mugged);
     j.at("current_room").get_to(current_room);
 
-    j.at("potion_seed_count").get_to(potion_seed_count);
+    j.at("rng_seed_count").get_to(rng_seed_count);
     j.at("relic_seed_count").get_to(relic_seed_count);
     j.at("event_seed_count").get_to(event_seed_count);
     j.at("monster_seed_count").get_to(monster_seed_count);
     j.at("merchant_seed_count").get_to(merchant_seed_count);
-    j.at("card_random_seed_count").get_to(card_random_seed_count);
     j.at("card_seed_count").get_to(card_seed_count);
     j.at("treasure_seed_count").get_to(treasure_seed_count);
 

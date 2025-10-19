@@ -192,8 +192,8 @@ CardId sts::getRandomCurse(Random &rng, CardId exclude) {
     }
 }
 
-CardId sts::getTrulyRandomCard(Random &cardRandomRng, CharacterClass cc) {
-    int idx = cardRandomRng.random(TrulyRandomCardPool::getPoolSizeForClass(cc)-1);
+CardId sts::getTrulyRandomCard(Random &rng, CharacterClass cc) {
+    int idx = rng.random(TrulyRandomCardPool::getPoolSizeForClass(cc)-1);
     return TrulyRandomCardPool::getPoolForClass(cc)[idx];
 }
 
@@ -206,39 +206,39 @@ CardId sts::returnTrulyRandomColorlessCardFromAvailable(Random &rng, CardId excl
     }
 }
 
-CardId sts::getTrulyRandomColorlessCardInCombat(Random &cardRandomRng) {
+CardId sts::getTrulyRandomColorlessCardInCombat(Random &rng) {
     const auto poolSize = CombatColorlessCardPool::getPoolSize();
-    const auto idx = cardRandomRng.random(poolSize-1);
+    const auto idx = rng.random(poolSize-1);
     return CombatColorlessCardPool::getCardAt(idx);
 }
 
-CardId sts::getTrulyRandomCardInCombat(Random &cardRandomRng, CharacterClass cc) {
+CardId sts::getTrulyRandomCardInCombat(Random &rng, CharacterClass cc) {
     const auto poolSize = CombatCardPool::getPoolSize(cc);
-    const auto idx = cardRandomRng.random(poolSize-1);
+    const auto idx = rng.random(poolSize-1);
     return CombatCardPool::getCardAt(cc, idx);
 }
 
-CardId sts::getTrulyRandomCardInCombat(Random &cardRandomRng, const CharacterClass cc, const CardType type) {
+CardId sts::getTrulyRandomCardInCombat(Random &rng, const CharacterClass cc, const CardType type) {
     const auto poolSize = CombatTypeCardPool::getPoolSize(cc, type);
-    const auto idx = cardRandomRng.random(poolSize-1);
+    const auto idx = rng.random(poolSize-1);
     return CombatTypeCardPool::getCardAt(cc, type, idx);
 }
 
 // using hacky arguments: status = colorless cards, invalid = any type
-std::array<CardId, 3> sts::generateDiscoveryCards(Random &cardRandomRng, CharacterClass cc, CardType type) {
+std::array<CardId, 3> sts::generateDiscoveryCards(Random &rng, CharacterClass cc, CardType type) {
     int cardCount = 0;
     std::array<CardId, 3> cards;
 
     while (cardCount < 3) {
         CardId id;
         if (type == CardType::INVALID) {
-            id = getTrulyRandomCardInCombat(cardRandomRng, cc);
+            id = getTrulyRandomCardInCombat(rng, cc);
 
         } else if (type == CardType::STATUS) {
-            id = getTrulyRandomColorlessCardInCombat(cardRandomRng);
+            id = getTrulyRandomColorlessCardInCombat(rng);
 
         } else {
-            id = getTrulyRandomCardInCombat(cardRandomRng, cc, type);
+            id = getTrulyRandomCardInCombat(rng, cc, type);
 
         }
 
@@ -291,12 +291,12 @@ RelicTier sts::returnRandomRelicTierElite(Random &relicRng) {
     }
 }
 
-Potion sts::returnRandomPotion(Random &potionRng, CharacterClass cc, bool limited) {
+Potion sts::returnRandomPotion(Random &rng, CharacterClass cc, bool limited) {
     assert (CharacterClass::IRONCLAD <= cc && cc <= CharacterClass::WATCHER);
 
     PotionRarity rarity;
 
-    int roll = potionRng.random(0,99);
+    int roll = rng.random(0,99);
     if (roll < 65) {
         rarity = PotionRarity::COMMON;
     } else if (roll < 90) {
@@ -305,16 +305,16 @@ Potion sts::returnRandomPotion(Random &potionRng, CharacterClass cc, bool limite
         rarity = PotionRarity::RARE;
     }
 
-    return returnRandomPotionOfRarity(potionRng, rarity, cc, limited);
+    return returnRandomPotionOfRarity(rng, rarity, cc, limited);
 }
 
-Potion sts::returnRandomPotionOfRarity(Random &potionRng, PotionRarity rarity, CharacterClass cc, bool limited) {
+Potion sts::returnRandomPotionOfRarity(Random &rng, PotionRarity rarity, CharacterClass cc, bool limited) {
     // this is dumb.
-    Potion temp = getRandomPotion(potionRng, cc);
+    Potion temp = getRandomPotion(rng, cc);
     bool spamCheck = limited;
     while(potionRarities[static_cast<int>(temp)] != rarity || spamCheck) {
         spamCheck = limited;
-        temp = getRandomPotion(potionRng, cc);
+        temp = getRandomPotion(rng, cc);
         if (temp != Potion::FRUIT_JUICE) {
             spamCheck = false;
         }
@@ -322,13 +322,13 @@ Potion sts::returnRandomPotionOfRarity(Random &potionRng, PotionRarity rarity, C
     return temp;
 }
 
-Potion sts::getRandomPotion(Random &potionRng, CharacterClass cc) {
-    int idx = potionRng.random(PotionPool::poolSize-1); // all characters have 33 possible potions
+Potion sts::getRandomPotion(Random &rng, CharacterClass cc) {
+    int idx = rng.random(PotionPool::poolSize-1); // all characters have 33 possible potions
     return PotionPool::getPotionForClass(cc, idx);
 }
 
 
-RelicId sts::getRandomFace(const RelicContainer &relics, Random &miscRng) {
+RelicId sts::getRandomFace(const RelicContainer &relics, Random &rng) {
     fixed_list<RelicId, 5> tmpList;
 
     if (!relics.has(sts::RelicId::CULTIST_HEADPIECE)) {
@@ -355,7 +355,7 @@ RelicId sts::getRandomFace(const RelicContainer &relics, Random &miscRng) {
         tmpList.push_back(sts::RelicId::CIRCLET);
     }
 
-    java::Collections::shuffle(tmpList.begin(), tmpList.end(), java::Random(miscRng.randomLong()));
+    java::Collections::shuffle(tmpList.begin(), tmpList.end(), java::Random(rng.randomLong()));
     return tmpList[0];
 }
 

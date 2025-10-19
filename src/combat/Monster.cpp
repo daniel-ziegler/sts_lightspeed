@@ -109,23 +109,23 @@ void Monster::applyEndOfRoundPowers(BattleContext &bc) {
 void Monster::construct(BattleContext &bc, MonsterId monsterId, int monsterIdx) {
     this->id = monsterId;
     this->idx = monsterIdx;
-    initHp(bc.monsterHpRng, bc.ascension);
+    initHp(bc.rng, bc.ascension);
 
     switch (id) {
         case MonsterId::GREEN_LOUSE:
         case MonsterId::RED_LOUSE:
             if (bc.ascension >= 2) {
-                miscInfo = bc.monsterHpRng.random(6, 8);
+                miscInfo = bc.rng.random(6, 8);
             } else {
-                miscInfo = bc.monsterHpRng.random(5, 7);
+                miscInfo = bc.rng.random(5, 7);
             }
             break;
 
         case MonsterId::DARKLING:
             if (bc.ascension >= 2) {
-                miscInfo = bc.monsterHpRng.random(9, 13);
+                miscInfo = bc.rng.random(9, 13);
             } else {
-                miscInfo = bc.monsterHpRng.random(7, 11);
+                miscInfo = bc.rng.random(7, 11);
             }
             break;
 
@@ -766,7 +766,7 @@ bool Monster::eitherLastTwo(MonsterMoveId moveId) const {
 void Monster::rollMove(BattleContext &bc) {
     auto miscInfoCopy = miscInfo;
 
-    const auto move = getMoveForRoll(bc, miscInfoCopy, bc.aiRng.random(99));
+    const auto move = getMoveForRoll(bc, miscInfoCopy, bc.rng.random(99));
 
     miscInfo = miscInfoCopy;
     setMove(move);

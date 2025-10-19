@@ -38,23 +38,23 @@ namespace sts {
     CardId getRandomCurse(Random &cardRng);
     CardId getRandomCurse(Random &rng, CardId exclude);
 
-    CardId getTrulyRandomCard(Random &cardRandomRng, CharacterClass cc);
+    CardId getTrulyRandomCard(Random &rng, CharacterClass cc);
     CardId returnTrulyRandomColorlessCardFromAvailable(Random &rng, CardId exclude);
 
-    CardId getTrulyRandomColorlessCardInCombat(Random &cardRandomRng);
-    CardId getTrulyRandomCardInCombat(Random &cardRandomRng, CharacterClass cc);
-    CardId getTrulyRandomCardInCombat(Random &cardRandomRng, CharacterClass cc, CardType type);
+    CardId getTrulyRandomColorlessCardInCombat(Random &rng);
+    CardId getTrulyRandomCardInCombat(Random &rng, CharacterClass cc);
+    CardId getTrulyRandomCardInCombat(Random &rng, CharacterClass cc, CardType type);
 
-    std::array<CardId, 3> generateDiscoveryCards(Random &cardRandomRng, CharacterClass cc, CardType type);
+    std::array<CardId, 3> generateDiscoveryCards(Random &rng, CharacterClass cc, CardType type);
 
     RelicTier returnRandomRelicTier(Random &relicRng, int act);
     RelicTier returnRandomRelicTierElite(Random &relicRng);
 
-    Potion returnRandomPotion(Random &potionRng, CharacterClass cc, bool limited=false);
-    Potion returnRandomPotionOfRarity(Random &potionRng, PotionRarity rarity, CharacterClass cc, bool limited= false);
-    Potion getRandomPotion(Random &potionRng, CharacterClass cc);
+    Potion returnRandomPotion(Random &rng, CharacterClass cc, bool limited=false);
+    Potion returnRandomPotionOfRarity(Random &rng, PotionRarity rarity, CharacterClass cc, bool limited= false);
+    Potion getRandomPotion(Random &rng, CharacterClass cc);
 
-    RelicId getRandomFace(const RelicContainer &relics, Random &miscRng);
+    RelicId getRandomFace(const RelicContainer &relics, Random &rng);
     CardId getStartCardForEvent(CharacterClass cc);
     ChestSize getRandomChestSize(Random &treasureRng);
     RelicTier getMatryoshkaRelicTier(Random &relicRng);

@@ -59,12 +59,7 @@ namespace sts {
         int cardsDrawn = 0;
         // end for debugging purposes
 
-        Random aiRng;
-        Random cardRandomRng;
-        Random miscRng;
-        Random monsterHpRng;
-        Random potionRng;
-        Random shuffleRng;
+        Random rng;
 
         int ascension = 0;
         Outcome outcome = Outcome::UNDECIDED;
@@ -189,7 +184,7 @@ namespace sts {
 
         void queuePurgeCard(const CardInstance &c, int target);
         void addPurgeCardToCardQueue(const CardQueueItem &item); // not really the front but hey
-        void noOpRollMove(); // called by monsters to manipulate the aiRng counter when their rollMove function doesn't do anything
+        void noOpRollMove(); // called by monsters to manipulate the rng counter when their rollMove function doesn't do anything
 
         void onManualDiscard(const CardInstance &c);
         void onShuffle();

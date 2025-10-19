@@ -103,12 +103,11 @@ namespace sts {
         bool mugged;
         Save::RoomType current_room;
 
-        int potion_seed_count;
+        int rng_seed_count;
         int relic_seed_count;
         int event_seed_count;
         int monster_seed_count;
         int merchant_seed_count;
-        int card_random_seed_count;
         int card_seed_count;
         int treasure_seed_count;
 

@@ -38,13 +38,10 @@ GameContext::GameContext(CharacterClass cc, std::int64_t seed, int ascension)
     treasureRng(seed),
     eventRng(seed),
     relicRng(seed),
-    potionRng(seed),
+    rng(seed),
     cardRng(seed),
-    cardRandomRng(seed),
     merchantRng(seed),
     monsterRng(seed),
-    shuffleRng(seed),
-    miscRng(seed),
     mathUtilRng(seed-897897), // uses a time based seed -_-
     cc(cc),
     map(new Map(Map::fromSeed(seed, ascension, 1, true))),
@@ -90,13 +87,11 @@ void GameContext::initFromSave(const SaveFile &s) {
     treasureRng = Random(seed, s.treasure_seed_count);
     eventRng = Random(seed, s.event_seed_count);
     relicRng = Random(seed, s.relic_seed_count);
-    potionRng = Random(seed, s.potion_seed_count);
+    rng = Random(seed, s.rng_seed_count);
     cardRng = Random(seed, s.card_seed_count);
-    cardRandomRng = Random(seed, s.card_random_seed_count);
     merchantRng = Random(seed, s.merchant_seed_count);
     mathUtilRng = Random(seed, 0);
     merchantRng = Random(seed, s.merchant_seed_count); // arbitrary
-    miscRng = Random(seed+floorNum);
     monsterRng = Random(seed, s.monster_seed_count);
 
     cardRarityFactor = s.card_random_seed_randomizer;
@@ -756,10 +751,7 @@ void GameContext::transitionToMapNode(int mapNodeX) {
     ++floorNum;
     ++curMapNodeY;
 
-    const auto r = Random(seed + floorNum);
-    miscRng = r;
-    shuffleRng = r;
-    cardRandomRng = r;
+    rng = Random(seed + floorNum);
 
     regainControlAction = [](auto &gs) {
         gs.screenState = ScreenState::MAP_SCREEN;
@@ -867,16 +859,16 @@ void GameContext::setupEvent() { // todo necronomicon event
         case Event::DEAD_ADVENTURER: {
             info.phase = 0;
             info.rewards = {0,1,2};
-            java::Collections::shuffle(info.rewards.begin(), info.rewards.end(), miscRng.randomLong());
+            java::Collections::shuffle(info.rewards.begin(), info.rewards.end(), rng.randomLong());
 
             const MonsterEncounter encounters[] { ME::THREE_SENTRIES, ME::GREMLIN_NOB, ME::LAGAVULIN_EVENT };
-            info.encounter = encounters[miscRng.random(2)];
+            info.encounter = encounters[rng.random(2)];
             break;
         }
 
         case Event::DESIGNER_IN_SPIRE:
-            info.upgradeOne = miscRng.randomBoolean();
-            info.cleanUpIsRemoveCard = miscRng.randomBoolean();
+            info.upgradeOne = rng.randomBoolean();
+            info.cleanUpIsRemoveCard = rng.randomBoolean();
             break;
 
         case Event::FACE_TRADER:
@@ -889,9 +881,9 @@ void GameContext::setupEvent() { // todo necronomicon event
                 ++counts[static_cast<int>(c.getType())];
             }
 
-            int attacksIdx = counts[0] > 0 ? miscRng.random(counts[0] - 1) : -1;
-            int skillsIdx = counts[1] > 0 ? miscRng.random(counts[1] - 1) : -1;
-            int powersIdx = counts[2] > 0 ? miscRng.random(counts[2] - 1) : -1;
+            int attacksIdx = counts[0] > 0 ? rng.random(counts[0] - 1) : -1;
+            int skillsIdx = counts[1] > 0 ? rng.random(counts[1] - 1) : -1;
+            int powersIdx = counts[2] > 0 ? rng.random(counts[2] - 1) : -1;
 
             int attackCount = 0;
             int skillCount = 0;
@@ -950,10 +942,10 @@ void GameContext::setupEvent() { // todo necronomicon event
         case Event::LAB: {
             Potion pReward[3];
             int pCount = 2;
-            pReward[0] = getRandomPotion(potionRng, cc);
-            pReward[1] = getRandomPotion(potionRng, cc);
+            pReward[0] = getRandomPotion(rng, cc);
+            pReward[1] = getRandomPotion(rng, cc);
             if (!unfavorable) {
-                pReward[2] = getRandomPotion(potionRng, cc);
+                pReward[2] = getRandomPotion(rng, cc);
                 ++pCount;
             }
             openCombatRewardScreen(Rewards(pReward, pCount));
@@ -980,7 +972,7 @@ void GameContext::setupEvent() { // todo necronomicon event
             cards[5] = previewObtainCard(getStartCardForEvent(cc));
 
             int indices[12] = {0,1,2,3,4,5,0,1,2,3,4,5};
-            java::Collections::shuffle(indices, indices+12, java::Random(miscRng.randomLong()));
+            java::Collections::shuffle(indices, indices+12, java::Random(rng.randomLong()));
 
             info.toSelectCards.resize(12);
             for (int i = 0; i < 12; ++i) {
@@ -1000,7 +992,7 @@ void GameContext::setupEvent() { // todo necronomicon event
             for (int i = 0; i < relics.size(); ++i) {
                 relicIdxs[i] = i;
             }
-            java::Collections::shuffle(relicIdxs, relicIdxs+relics.size(), java::Random(miscRng.randomLong()));
+            java::Collections::shuffle(relicIdxs, relicIdxs+relics.size(), java::Random(rng.randomLong()));
             info.relicIdx0 = relicIdxs[0];
             info.relicIdx1 = relicIdxs[1];
             break;
@@ -1035,7 +1027,7 @@ void GameContext::setupEvent() { // todo necronomicon event
             if (gold < 50) {
                 info.gold = -1;
             } else {
-                info.gold = miscRng.random(50, std::min(150, gold));
+                info.gold = rng.random(50, std::min(150, gold));
             }
             info.cardIdx = getRandomPlayerNonBasicCardIdx();
             break;
@@ -1049,9 +1041,9 @@ void GameContext::setupEvent() { // todo necronomicon event
 
         case Event::WORLD_OF_GOOP:
             if (unfavorable) {
-                info.goldLoss = std::min(gold, miscRng.random(35, 75));
+                info.goldLoss = std::min(gold, rng.random(35, 75));
             } else {
-                info.goldLoss = std::min(gold, miscRng.random(20, 50));
+                info.goldLoss = std::min(gold, rng.random(20, 50));
             }
             break;
 
@@ -1082,10 +1074,7 @@ void GameContext::setupTreasureRoom() {
 
 void GameContext::enterBossTreasureRoom() {
     ++floorNum;
-    Random r(seed+floorNum);
-    miscRng = r;
-    shuffleRng = r;
-    cardRandomRng = r;
+    rng = Random(seed+floorNum);
 
     relicsOnEnterRoom(Room::BOSS_TREASURE);
 
@@ -1162,10 +1151,7 @@ void GameContext::afterBattle() {
                 if (ascension >= 20 && info.encounter == boss) {
                     // go to second boss
                     ++floorNum;
-                    const auto r = Random(seed + floorNum);
-                    miscRng = r;
-                    shuffleRng = r;
-                    cardRandomRng = r;
+                    rng = Random(seed + floorNum);
                     relicsOnEnterRoom(curRoom);
 
                     regainControlAction = [](GameContext &gc) {
@@ -1285,7 +1271,7 @@ bool obtainBottleHelper(GameContext &gc, CardType bottleType) {
 
 void upgradeRandomCardsMatching(GameContext &gc, CardType type) {
     auto list = gc.deck.getIdxsMatching([=](const auto &c){ return c.canUpgrade() && c.getType() == type; });
-    java::Collections::shuffle(list.begin(), list.end(), java::Random(gc.miscRng.randomLong()));
+    java::Collections::shuffle(list.begin(), list.end(), java::Random(gc.rng.randomLong()));
     if (list.size() == 1) {
         gc.deck.upgrade(list[0]);
     } else if (list.size() >= 2) {
@@ -1353,7 +1339,7 @@ bool GameContext::obtainRelic(RelicId r) {
         case RelicId::CAULDRON: {
             Potion pReward[5];
             for (int i = 0; i < 5; ++i) {
-                pReward[i] = getRandomPotion(potionRng, cc);
+                pReward[i] = getRandomPotion(rng, cc);
             }
             openCombatRewardScreen({pReward, 5});
             opensScreen = true;
@@ -1425,7 +1411,7 @@ bool GameContext::obtainRelic(RelicId r) {
             CardId toObtain[15]; // 15 is more strikes/defends then we can ever have right?
 
             for (int i = 0; i < transformCount; ++i) {
-                toObtain[i] = getTrulyRandomCard(cardRandomRng, cc);
+                toObtain[i] = getTrulyRandomCard(rng, cc);
             }
 
             for (int i = transformCount-1; i >= 0; --i) {
@@ -1467,7 +1453,7 @@ bool GameContext::obtainRelic(RelicId r) {
 
         case RelicId::TINY_HOUSE: {
             auto upgradeCards = deck.getUpgradeableCardIdxs();
-            java::Collections::shuffle(upgradeCards.begin(), upgradeCards.end(), java::Random(miscRng.nextLong()));
+            java::Collections::shuffle(upgradeCards.begin(), upgradeCards.end(), java::Random(rng.nextLong()));
 
             if (!upgradeCards.empty()) {
                 deck.upgrade(upgradeCards[0]);
@@ -1476,7 +1462,7 @@ bool GameContext::obtainRelic(RelicId r) {
             playerIncreaseMaxHp(5);
             Rewards reward;
             reward.addGold(50);
-            reward.addPotion(getRandomPotion(miscRng, cc));
+            reward.addPotion(getRandomPotion(rng, cc));
             reward.addCardReward(createCardReward(curRoom));
             openCombatRewardScreen(reward);
             opensScreen = true;
@@ -1714,7 +1700,7 @@ Card GameContext::getTransformedCard(Random &rng, CardId exclude, bool autoUpgra
 
 CardId GameContext::returnColorlessCard(CardRarity rarity) {
     java::Collections::shuffle(colorlessCardPool.begin(), colorlessCardPool.end(),
-                               java::Random(shuffleRng.randomLong()));
+                               java::Random(rng.randomLong()));
     for (const auto &c : colorlessCardPool) { // todo optimize
         if (getCardRarity(c) == rarity) {
             return c;
@@ -1734,7 +1720,7 @@ int GameContext::getRandomPlayerPotionIdx() {
             potionIdxs.push_back(i);
         }
     }
-    java::Collections::shuffle(potionIdxs.begin(), potionIdxs.end(), java::Random(miscRng.nextLong()));
+    java::Collections::shuffle(potionIdxs.begin(), potionIdxs.end(), java::Random(rng.nextLong()));
     return potionIdxs[0];
 }
 
@@ -1752,7 +1738,7 @@ int GameContext::getRandomPlayerNonBasicCardIdx() {
         return -1;
     }
 
-    java::Collections::shuffle(cardIdxs.begin(), cardIdxs.end(), java::Random(miscRng.randomLong()));
+    java::Collections::shuffle(cardIdxs.begin(), cardIdxs.end(), java::Random(rng.randomLong()));
 
     int retIdx = cardIdxs[0];
     for (int i = 0; i < retIdx; ++i) {
@@ -1798,11 +1784,11 @@ void GameContext::addPotionRewards(Rewards &r) {
         chance = 0;
     }
 
-    if (potionRng.random(99) >= chance) {
+    if (rng.random(99) >= chance) {
         potionChance += 10;
 
     } else {
-        r.addPotion(returnRandomPotion(potionRng, cc));
+        r.addPotion(returnRandomPotion(rng, cc));
         potionChance -= 10;
     }
 }
@@ -1986,7 +1972,7 @@ Rewards GameContext::createEliteCombatReward() {
 Rewards GameContext::createBossCombatReward() {
     Rewards reward;
     // room == BOSS
-    int goldAmt = 100 + miscRng.random(-5, 5);
+    int goldAmt = 100 + rng.random(-5, 5);
     if (ascension >= 13) {
         goldAmt = static_cast<int>(std::round((float)goldAmt * 0.75f));
     }
@@ -2222,7 +2208,7 @@ void GameContext::drinkPotion(Potion p) {
         case Potion::ENTROPIC_BREW: {
             Potion randPotions[5];
             for (int i = 0 ; i < potionCapacity; ++i) {
-                randPotions[i] = returnRandomPotion(potionRng, cc);
+                randPotions[i] = returnRandomPotion(rng, cc);
                 if (potions[i] == Potion::EMPTY_POTION_SLOT) {
                     potions[i] = randPotions[i];
                 }
@@ -2339,7 +2325,7 @@ void GameContext::chooseNeowOption(const Neow::Option &o) {
             createCardReward(Room::EVENT);
             Potion potions[3];
             for (int i = 0; i < 3; ++i) {
-                potions[i] = getRandomPotion(potionRng, cc);
+                potions[i] = getRandomPotion(rng, cc);
             }
             openCombatRewardScreen(Rewards(potions, 3));
             break;
@@ -2601,7 +2587,7 @@ void GameContext::chooseEventOption(int idx) {
 
                 case 5: {
                     playerLoseHp(unfavorable ? 15 : 10);
-                    auto res = miscRng.random(2);
+                    auto res = rng.random(2);
                     auto book = res == 0 ? RelicId::NECRONOMICON :
                                 (res == 1 ? RelicId::ENCHIRIDION : RelicId::NILRYS_CODEX);
 
@@ -2626,10 +2612,10 @@ void GameContext::chooseEventOption(int idx) {
         case Event::DEAD_ADVENTURER: { // todo map onto unique idxs
             if (idx == 0) {
                 int encounterChance = info.phase * 25 + (unfavorable ? 35 : 25);
-                bool didEncounter = miscRng.random(99) < encounterChance;
+                bool didEncounter = rng.random(99) < encounterChance;
 
                 if (didEncounter) {
-                    int goldAmt = miscRng.random(25, 35);
+                    int goldAmt = rng.random(25, 35);
                     bool addRelic = false;
                     RelicId combatRewardRelic;
 
@@ -2688,7 +2674,7 @@ void GameContext::chooseEventOption(int idx) {
                     break;
 
                 case 1:
-                    deck.upgradeRandomCards(miscRng, 2);
+                    deck.upgradeRandomCards(rng, 2);
                     regainControl();
                     break;
 
@@ -2699,13 +2685,13 @@ void GameContext::chooseEventOption(int idx) {
 
                 case 3:
                     loseGold(unfavorable ? 75 : 60);
-                    deck.transformRandomCards(miscRng, 2); // TODO
+                    deck.transformRandomCards(rng, 2); // TODO
                     regainControl();
 
                 case 4:
                     loseGold(unfavorable ? 110 : 90);
                     regainControlAction = [=, this](GameContext &gc) {
-                        gc.deck.upgradeRandomCards(miscRng, 1);
+                        gc.deck.upgradeRandomCards(rng, 1);
                         returnToMapAction(gc);
                     };
                     openCardSelectScreen(CardSelectScreenType::REMOVE, 1);
@@ -2766,7 +2752,7 @@ void GameContext::chooseEventOption(int idx) {
                     break;
 
                 case 1:
-                    obtainRelic(getRandomFace(relics, miscRng));
+                    obtainRelic(getRandomFace(relics, rng));
                     regainControl();
                     break;
 
@@ -2929,7 +2915,7 @@ void GameContext::chooseEventOption(int idx) {
                     break;
 
                 case 1:
-                    obtainGold(miscRng.random(50, 80));
+                    obtainGold(rng.random(50, 80));
                     regainControl();
                     break;
 
@@ -2957,7 +2943,7 @@ void GameContext::chooseEventOption(int idx) {
 
                 case 2:
                     playerLoseHp(info.hpAmount2++);
-                    obtainPotion(getRandomPotion(potionRng, cc));
+                    obtainPotion(getRandomPotion(rng, cc));
                     break;
 
                 case 3:
@@ -3016,7 +3002,7 @@ void GameContext::chooseEventOption(int idx) {
                 regainControl();
 
             } else if (idx == 1) {
-                const int goldAmt = miscRng.random(25, 35);
+                const int goldAmt = rng.random(25, 35);
                 regainControlAction = [goldAmt](auto &gc) {
                     Rewards reward;
                     reward.addGold(goldAmt);
@@ -3046,7 +3032,7 @@ void GameContext::chooseEventOption(int idx) {
                         MonsterEncounter::HEXAGHOST,
                         MonsterEncounter::SLIME_BOSS,
                     };
-                    java::Collections::shuffle(bosses, bosses+3, java::Random(miscRng.randomLong()));
+                    java::Collections::shuffle(bosses, bosses+3, java::Random(rng.randomLong()));
 
                     const int goldAmt = unfavorable ? 25 : 50;
                     const RelicId rareRelic = returnRandomRelic(RelicTier::RARE);
@@ -3094,7 +3080,7 @@ void GameContext::chooseEventOption(int idx) {
 
         case Event::HYPNOTIZING_COLORED_MUSHROOMS: {
             if (idx == 0) {
-                const int goldAmt = miscRng.random(20, 30);
+                const int goldAmt = rng.random(20, 30);
                 regainControlAction = [=, this](GameContext &gc) {
                     Rewards reward;
                     reward.addGold(goldAmt);
@@ -3119,7 +3105,7 @@ void GameContext::chooseEventOption(int idx) {
 
         case Event::MYSTERIOUS_SPHERE: {
             if (idx == 0) {
-                const int goldAmt = miscRng.random(45, 55);
+                const int goldAmt = rng.random(45, 55);
                 const RelicId rareRelic = returnRandomScreenlessRelic(RelicTier::RARE);
                 info.bossRelics[0] = rareRelic;
                 info.gold = goldAmt;
@@ -3206,7 +3192,7 @@ void GameContext::chooseEventOption(int idx) {
         case Event::SCRAP_OOZE:
             if (idx == 0) {
                 damagePlayer(unfavorable ? 5 : 3);
-                const int roll = miscRng.random(99);
+                const int roll = rng.random(99);
                 const int relicChance = info.eventData*10 + 25;
                 if (roll >= 99 - relicChance) {
                     auto relic = returnRandomScreenlessRelic(returnRandomRelicTier(relicRng, 1));
@@ -3261,7 +3247,7 @@ void GameContext::chooseEventOption(int idx) {
             if (idx == 0) {
                 damagePlayer(info.hpAmount0);
                 auto list = deck.getUpgradeableCardIdxs();
-                java::Collections::shuffle(list.begin(), list.end(), java::Random(miscRng.randomLong()));
+                java::Collections::shuffle(list.begin(), list.end(), java::Random(rng.randomLong()));
                 if (!list.empty()) {
                     if (list.size() == 1) {
                         deck.upgrade(list[0]);
@@ -3305,7 +3291,7 @@ void GameContext::chooseEventOption(int idx) {
         }
 
         case Event::THE_JOUST: {
-            bool ownerWins = miscRng.randomBoolean(0.3f);
+            bool ownerWins = rng.randomBoolean(0.3f);
             loseGold(50);
             if (idx == 0) {
                 if (!ownerWins) {
@@ -3352,7 +3338,7 @@ void GameContext::chooseEventOption(int idx) {
 
         case Event::THE_MAUSOLEUM: {
             if (idx == 0) {
-                auto result = miscRng.randomBoolean();
+                auto result = rng.randomBoolean();
                 if (result || unfavorable) {
                     deck.obtain(*this, CardId::WRITHE);
                 }
@@ -3406,20 +3392,20 @@ void GameContext::chooseEventOption(int idx) {
             Potion pArr[3];
             switch (idx) {
                 case 0: {
-                    pArr[0] = getRandomPotion(potionRng, cc);
+                    pArr[0] = getRandomPotion(rng, cc);
                     openCombatRewardScreen(Rewards(pArr, 1));
                     break;
                 }
                 case 1: {
-                    pArr[0] = getRandomPotion(potionRng, cc);
-                    pArr[1] = getRandomPotion(potionRng, cc);
+                    pArr[0] = getRandomPotion(rng, cc);
+                    pArr[1] = getRandomPotion(rng, cc);
                     openCombatRewardScreen(Rewards(pArr, 2));
                     break;
                 }
                 case 2: {
-                    pArr[0] = getRandomPotion(potionRng, cc);
-                    pArr[1] = getRandomPotion(potionRng, cc);
-                    pArr[2] = getRandomPotion(potionRng, cc);
+                    pArr[0] = getRandomPotion(rng, cc);
+                    pArr[1] = getRandomPotion(rng, cc);
+                    pArr[2] = getRandomPotion(rng, cc);
                     openCombatRewardScreen(Rewards(pArr, 3));
                     break;
                 }
@@ -3547,7 +3533,7 @@ void GameContext::chooseEventOption(int idx) {
             if (idx != 0) {
                 assert(false);
             }
-            int result = miscRng.random(5);
+            int result = rng.random(5);
             switch (result) {
                 case 0:
                     obtainGold(act * 100);
@@ -3683,7 +3669,7 @@ void GameContext::chooseSelectCardScreenOption(int idx) {
             deck.removeSelected(*this, info.haveSelectedCards);
             for (int i = 0; i < info.haveSelectedCards.size(); ++i) {
                 auto id = info.haveSelectedCards[i].card.id;
-                deck.obtain(*this, getTransformedCard(miscRng, id, true));
+                deck.obtain(*this, getTransformedCard(rng, id, true));
             }
             regainControl();
             break;
@@ -3787,7 +3773,7 @@ void GameContext::selectScreenTransform() {
     Random *rng;
     switch (info.transformRng) {
         case MISC_RNG:
-            rng = &miscRng;
+            rng = &this->rng;
             break;
         case CARD_RNG:
             rng = &cardRng;

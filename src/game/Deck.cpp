@@ -105,9 +105,9 @@ void Deck::upgradeStrikesAndDefends() {
     }
 }
 
-void Deck::upgradeRandomCards(Random &miscRng, int count) {
+void Deck::upgradeRandomCards(Random &rng, int count) {
     auto list = getUpgradeableCardIdxs();
-    java::Collections::shuffle(list.begin(), list.end(), java::Random(miscRng.randomLong()));
+    java::Collections::shuffle(list.begin(), list.end(), java::Random(rng.randomLong()));
     const int end = std::min(list.size(), count);
     for (int i = 0; i < end; ++i) {
         --upgradeableCount;
@@ -115,7 +115,7 @@ void Deck::upgradeRandomCards(Random &miscRng, int count) {
     }
 }
 
-void Deck::transformRandomCards(Random &miscRng, int count) {
+void Deck::transformRandomCards(Random &rng, int count) {
     // todo
 }
 

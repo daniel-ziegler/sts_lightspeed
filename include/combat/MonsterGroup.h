@@ -41,10 +41,10 @@ namespace sts {
         void createWeakWildlife(BattleContext &bc);
         void createShapes(BattleContext &bc, int count);
 
-        static MonsterId getAncientShape(Random &miscRng);
+        static MonsterId getAncientShape(Random &rng);
         static MonsterId getGremlin(Random &rng);
-        static MonsterId getLouse(Random &miscRng);
-        static MonsterId getSlaver(Random &miscRng);
+        static MonsterId getLouse(Random &rng);
+        static MonsterId getSlaver(Random &rng);
 
         // actions
         void doMonsterTurn(BattleContext &bc); // take a turn for the next monster

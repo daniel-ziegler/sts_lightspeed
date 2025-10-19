@@ -28,7 +28,7 @@ void CardManager::init(const sts::GameContext &gc, BattleContext &bc) {
     for (int i = 0; i < idxs.size(); ++i) {
         idxs[i] = i;
     }
-    java::Collections::shuffle(idxs.begin(), idxs.end(), java::Random(bc.shuffleRng.randomLong()));
+    java::Collections::shuffle(idxs.begin(), idxs.end(), java::Random(bc.rng.randomLong()));
 
     drawPile.resize(gc.deck.size());
     discardPile.clear();
@@ -216,11 +216,11 @@ void CardManager::moveToDrawPileTop(const CardInstance &c) {
     drawPile.push_back(c);
 }
 
-void CardManager::shuffleIntoDrawPile(Random &cardRandomRng, const CardInstance &c) {
+void CardManager::shuffleIntoDrawPile(Random &rng, const CardInstance &c) {
     if (drawPile.empty()) {
         moveToDrawPileTop(c);
     } else {
-        int idx = cardRandomRng.random(static_cast<int>(drawPile.size()-1));
+        int idx = rng.random(static_cast<int>(drawPile.size()-1));
         insertToDrawPile(idx, c);
     }
 }
@@ -406,7 +406,7 @@ void CardManager::draw(BattleContext &bc, int amount) {
 
         if (bc.player.hasStatus<PS::CONFUSED>()) {
             if (c.cost >= 0) {  // todo status and curses affected by this?
-                const auto newCost = static_cast<std::int8_t>(bc.cardRandomRng.random(3));
+                const auto newCost = static_cast<std::int8_t>(bc.rng.random(3));
                 if (c.cost != newCost) {
                     c.costForTurn = newCost;
                     c.cost = newCost;

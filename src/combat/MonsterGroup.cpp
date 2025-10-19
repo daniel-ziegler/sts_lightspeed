@@ -115,7 +115,7 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
             };
             int lastIdx = 7;
             for (int i = 0; i < 4; ++i) {
-                int idx = bc.miscRng.random(lastIdx);
+                int idx = bc.rng.random(lastIdx);
                 MonsterId gremlin = gremlinPool[idx];
 
                 while (idx < lastIdx) {
@@ -129,7 +129,7 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
         }
 
         case MonsterEncounter::SMALL_SLIMES: {
-            if (bc.miscRng.randomBoolean()) {
+            if (bc.rng.randomBoolean()) {
                 createMonster(bc, MonsterId::SPIKE_SLIME_S);
                 createMonster(bc, MonsterId::ACID_SLIME_M);
             } else {
@@ -148,7 +148,7 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
                     MonsterId::ACID_SLIME_S
             };
             for (int i = 4; i >= 0; --i) {
-                int idx = bc.miscRng.random(i);
+                int idx = bc.rng.random(i);
                 MonsterId slime = slimePool[idx];
                 while (idx < i) {
                     slimePool[idx] = slimePool[idx + 1];
@@ -160,7 +160,7 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
         }
 
         case MonsterEncounter::LARGE_SLIME: {
-            auto id = bc.miscRng.randomBoolean() ? MonsterId::ACID_SLIME_L : MonsterId::SPIKE_SLIME_L;
+            auto id = bc.rng.randomBoolean() ? MonsterId::ACID_SLIME_L : MonsterId::SPIKE_SLIME_L;
             createMonster(bc, id);
             break;
         }
@@ -251,10 +251,10 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
             break;
 
         case MonsterEncounter::GREMLIN_LEADER: {
-            arr[1].construct(bc, getGremlin(bc.miscRng), 1);
+            arr[1].construct(bc, getGremlin(bc.rng), 1);
             arr[1].buff<MS::MINION>();
 
-            arr[2].construct(bc, getGremlin(bc.miscRng), 2);
+            arr[2].construct(bc, getGremlin(bc.rng), 2);
             arr[2].buff<MS::MINION>();
 
             arr[3].construct(bc, MonsterId::GREMLIN_LEADER, 3);
@@ -387,8 +387,8 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
             break;
 
         case MonsterEncounter::SPHERE_AND_TWO_SHAPES:
-            createMonster(bc, getAncientShape(bc.miscRng));
-            createMonster(bc, getAncientShape(bc.miscRng));
+            createMonster(bc, getAncientShape(bc.rng));
+            createMonster(bc, getAncientShape(bc.rng));
             createMonster(bc, MonsterId::SPHERIC_GUARDIAN);
             break;
 
@@ -427,9 +427,9 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
             break;
 
         case MonsterEncounter::THREE_LOUSE: {
-            createMonster(bc, getLouse(bc.miscRng));
-            createMonster(bc, getLouse(bc.miscRng));
-            createMonster(bc, getLouse(bc.miscRng));
+            createMonster(bc, getLouse(bc.rng));
+            createMonster(bc, getLouse(bc.rng));
+            createMonster(bc, getLouse(bc.rng));
             break;
         }
 
@@ -457,8 +457,8 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
             break;
 
         case MonsterEncounter::TWO_LOUSE: {
-            createMonster(bc, getLouse(bc.miscRng));
-            createMonster(bc, getLouse(bc.miscRng));
+            createMonster(bc, getLouse(bc.rng));
+            createMonster(bc, getLouse(bc.rng));
             break;
         }
 
@@ -481,10 +481,10 @@ void MonsterGroup::createMonsters(BattleContext &bc, MonsterEncounter encounter)
 void MonsterGroup::createStrongHumanoid(BattleContext &bc) {
     Monster temp[3] {};
     temp[0].construct(bc, MonsterId::CULTIST, monsterCount);
-    temp[1].construct(bc, getSlaver(bc.miscRng), monsterCount);
+    temp[1].construct(bc, getSlaver(bc.rng), monsterCount);
     temp[2].construct(bc, MonsterId::LOOTER, monsterCount);
 
-    const int idx = bc.miscRng.random(2);
+    const int idx = bc.rng.random(2);
     arr[monsterCount++] = temp[idx];
     monstersAlive++; // todo this is hacky
 }
@@ -493,7 +493,7 @@ void MonsterGroup::createStrongWildlife(BattleContext &bc) {
     Monster temp[2] {};
     temp[0].construct(bc, MonsterId::FUNGI_BEAST, 0);
     temp[1].construct(bc, MonsterId::JAW_WORM, 0);
-    const int idx = bc.miscRng.random(1);
+    const int idx = bc.rng.random(1);
     arr[monsterCount++] = temp[idx];
     monstersAlive++; // todo this is hacky
 }
@@ -501,11 +501,11 @@ void MonsterGroup::createStrongWildlife(BattleContext &bc) {
 
 void MonsterGroup::createWeakWildlife(BattleContext &bc) {
     Monster temp[3] {};
-    temp[0].construct(bc, getLouse(bc.miscRng), monsterCount);
+    temp[0].construct(bc, getLouse(bc.rng), monsterCount);
     temp[1].construct(bc, MonsterId::SPIKE_SLIME_M, monsterCount);
     temp[2].construct(bc, MonsterId::ACID_SLIME_M, monsterCount);
 
-    const int idx = bc.miscRng.random(2);
+    const int idx = bc.rng.random(2);
     arr[monsterCount++] = temp[idx];
     monstersAlive++; // todo this is hacky
 }
@@ -521,7 +521,7 @@ void MonsterGroup::createShapes(BattleContext &bc, int count) {
         };
     int lastIdx = 5;
     for (int i = 0; i < count; ++i) {
-        int idx = bc.miscRng.random(lastIdx);
+        int idx = bc.rng.random(lastIdx);
         MonsterId shape = shapePool[idx];
 
         while (idx < lastIdx) {
@@ -534,13 +534,13 @@ void MonsterGroup::createShapes(BattleContext &bc, int count) {
 }
 
 
-MonsterId MonsterGroup::getAncientShape(Random &miscRng) {
+MonsterId MonsterGroup::getAncientShape(Random &rng) {
     const MonsterId shapes[] {
             MonsterId::SPIKER,
             MonsterId::REPULSOR,
             MonsterId::EXPLODER,
     };
-    return shapes[miscRng.random(2)];
+    return shapes[rng.random(2)];
 }
 
 MonsterId MonsterGroup::getGremlin(Random &rng) {
@@ -557,16 +557,16 @@ MonsterId MonsterGroup::getGremlin(Random &rng) {
     return gremlins[rng.random(7)];
 }
 
-MonsterId MonsterGroup::getLouse(Random &miscRng) {
-    if (miscRng.randomBoolean()) {
+MonsterId MonsterGroup::getLouse(Random &rng) {
+    if (rng.randomBoolean()) {
         return MonsterId::RED_LOUSE;
     } else {
         return MonsterId::GREEN_LOUSE;
     }
 }
 
-MonsterId MonsterGroup::getSlaver(Random &miscRng) {
-    if (miscRng.randomBoolean()) {
+MonsterId MonsterGroup::getSlaver(Random &rng) {
+    if (rng.randomBoolean()) {
         return MonsterId::RED_SLAVER;
     } else {
         return MonsterId::BLUE_SLAVER;

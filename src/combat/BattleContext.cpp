@@ -26,13 +26,7 @@ void BattleContext::init_empty(const GameContext &gc) {
     seed = gc.seed;
     floorNum = gc.floorNum;
 
-    auto startRandom = Random(gc.seed+gc.floorNum);
-    aiRng = startRandom;
-    monsterHpRng = startRandom;
-    shuffleRng = startRandom;
-    cardRandomRng = startRandom;
-    miscRng = gc.miscRng;
-    potionRng = gc.potionRng;
+    rng = Random(gc.seed+gc.floorNum);
 
     ascension = gc.ascension;
     outcome = Outcome::UNDECIDED;
@@ -151,7 +145,7 @@ void BattleContext::initRelics(const GameContext &gc) {
                 break;
 
             case R::ENCHIRIDION: {
-                const auto cardId = getTrulyRandomCardInCombat(cardRandomRng, p.cc, CardType::POWER);
+                const auto cardId = getTrulyRandomCardInCombat(rng, p.cc, CardType::POWER);
                 CardInstance c(cardId);
                 c.setCostForTurn(0);
                 addToBot( Actions::MakeTempCardInHand(c) );
@@ -484,13 +478,8 @@ void BattleContext::exitBattle(GameContext &g) const {
     g.potionCount = potionCount;
     g.potions = potions;
 
-    // not sure its really necessary to sync these every time, (i believe colosseum is the only time two battles occur on the same floor)
-    g.aiRng = aiRng;
-    g.cardRandomRng = cardRandomRng;
-    g.miscRng = miscRng;
-    g.monsterHpRng = monsterHpRng;
-    g.potionRng = potionRng;
-    g.shuffleRng = shuffleRng;
+    // not sure its really necessary to sync this every time, (i believe colosseum is the only time two battles occur on the same floor)
+    g.rng = rng;
 
     g.curHp = player.curHp;
     g.maxHp = player.maxHp;
@@ -529,7 +518,7 @@ void BattleContext::exitBattle(GameContext &g) const {
     }
 
     BattleContext::sum += g.curHp + g.maxHp + g.gold + g.act
-            + g.ascension + g.floorNum + potionRng.counter + cardRandomRng.counter;
+            + g.ascension + g.floorNum + rng.counter;
 }
 
 void BattleContext::updateRelicsOnExit(GameContext &g) const {
@@ -856,7 +845,7 @@ void BattleContext::playCardQueueItem(CardQueueItem playItem) {
 
     // if cardQueueItem random target, assign a target
     if (item.randomTarget) {
-        item.target = monsters.getRandomMonsterIdx(cardRandomRng);
+        item.target = monsters.getRandomMonsterIdx(rng);
     }
 
 //    bool canPlayCard = false; // not really sure what this is used for
@@ -1350,7 +1339,7 @@ void BattleContext::useSkillCard() {
             break;
 
         case CardId::HAVOC:
-            addToBot( Actions::PlayTopCard(monsters.getRandomMonsterIdx(cardRandomRng, true), true) );
+            addToBot( Actions::PlayTopCard(monsters.getRandomMonsterIdx(rng, true), true) );
             break;
 
         case CardId::IMPATIENCE: {
@@ -1999,7 +1988,7 @@ void BattleContext::onAfterUseCard() {
 
     bool spoonProc = false;
     if (item.exhaustOnUse && player.hasRelic<R::STRANGE_SPOON>()) {
-        spoonProc = cardRandomRng.randomBoolean();
+        spoonProc = rng.randomBoolean();
     }
 
     if (item.exhaustOnUse && !spoonProc) {
@@ -2014,7 +2003,7 @@ void BattleContext::onAfterUseCard() {
             cards.moveToDrawPileTop(c);
 
         } else if (c.id == CardId::TANTRUM) {
-            cards.shuffleIntoDrawPile(cardRandomRng, c);
+            cards.shuffleIntoDrawPile(rng, c);
 
         } else {
             // The game calls OnCardDrawOrDiscard here which only does two things:
@@ -2309,7 +2298,7 @@ void BattleContext::drinkPotion(int idx, int target) {
         case Potion::DISTILLED_CHAOS: {
             const auto cardsToPlay = hasBark ? 6 : 3;
             for (int i = 0; i < cardsToPlay; ++i) {
-                addToBot( Actions::PlayTopCard(monsters.getRandomMonsterIdx(cardRandomRng), false) );
+                addToBot( Actions::PlayTopCard(monsters.getRandomMonsterIdx(rng), false) );
             }
             break;
         }
@@ -2328,7 +2317,7 @@ void BattleContext::drinkPotion(int idx, int target) {
 
         case Potion::ENTROPIC_BREW: {
             for (int i = 0; i < potionCapacity; ++i) {
-                Potion randomPotion = returnRandomPotion(potionRng, player.cc, true);
+                Potion randomPotion = returnRandomPotion(rng, player.cc, true);
                 obtainPotion(randomPotion);
             }
             break;
@@ -2800,7 +2789,7 @@ void BattleContext::addPurgeCardToCardQueue(const CardQueueItem &item) {
 }
 
 void BattleContext::noOpRollMove() {
-    aiRng.random(99);
+    rng.random(99);
 }
 
 void BattleContext::onManualDiscard(const CardInstance &c) {
@@ -2840,7 +2829,7 @@ void BattleContext::triggerAndMoveToExhaustPile(CardInstance c) {
     }
 
     if (player.hasRelic<R::DEAD_BRANCH>()){
-        CardId id = getTrulyRandomCardInCombat(cardRandomRng, player.cc);
+        CardId id = getTrulyRandomCardInCombat(rng, player.cc);
         addToBot(Actions::MakeTempCardInHand(id));
     }
 
@@ -2889,7 +2878,7 @@ void BattleContext::mummifiedHandOnUsePower() {
         return;
     }
 
-    const int selectedListIdx = cardRandomRng.random(0,matchingIdxList.size()-1);
+    const int selectedListIdx = rng.random(0,matchingIdxList.size()-1);
     const int selectedHandIdx = matchingIdxList[selectedListIdx];
     cards.hand[selectedHandIdx].setCostForTurn(0);
 }
@@ -2950,7 +2939,7 @@ void BattleContext::chooseCodexCard(CardId id) {
     CardInstance c(id);
     c.uniqueId = static_cast<std::int16_t>(cards.nextUniqueCardId++);
     cards.notifyAddCardToCombat(c);
-    cards.shuffleIntoDrawPile(cardRandomRng, c);
+    cards.shuffleIntoDrawPile(rng, c);
 }
 
 void BattleContext::chooseDualWieldCard(int handIdx) {
@@ -3126,12 +3115,7 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
         ascension == rhs.ascension &&
         loopCount == rhs.loopCount &&
         sum == rhs.sum &&
-        aiRng == rhs.aiRng &&
-        cardRandomRng == rhs.cardRandomRng &&
-        miscRng == rhs.miscRng &&
-        monsterHpRng == rhs.monsterHpRng &&
-        potionRng == rhs.potionRng &&
-        shuffleRng == rhs.shuffleRng &&
+        rng == rhs.rng &&
         outcome == rhs.outcome &&
         inputState == rhs.inputState &&
         cardSelectInfo == rhs.cardSelectInfo &&
@@ -3161,12 +3145,7 @@ namespace sts {
         const std::string separator = " ";
         os << '\t';
 
-        os << "aiRng: " << bc.aiRng.counter << separator;
-        os << "cardRandomRng: " << bc.cardRandomRng.counter << separator;
-        os << "shuffleRng: " << bc.shuffleRng.counter << separator;
-        os << "miscRng: " << bc.miscRng.counter << separator;
-        os << "monsterHpRng: " << bc.monsterHpRng.counter << separator;
-        os << "potionRng: " << bc.potionRng.counter << separator;
+        os << "rng: " << bc.rng.counter << separator;
 
         os << '\n';
     }

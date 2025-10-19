@@ -67,7 +67,7 @@ namespace sts {
 
         void insertToDrawPile(int drawPileIdx, const CardInstance &c);
         void moveToDrawPileTop(const CardInstance &c);
-        void shuffleIntoDrawPile(Random &cardRandomRng, const CardInstance &c);
+        void shuffleIntoDrawPile(Random &rng, const CardInstance &c);
 
         void moveToDiscardPile(const CardInstance &c);
         void moveDiscardPileIntoToDrawPile();

@@ -206,7 +206,7 @@ void _EmptyDeckShuffle::operator()(BattleContext &bc) const {
     java::Collections::shuffle(
             bc.cards.discardPile.begin(),
             bc.cards.discardPile.end(),
-            java::Random(bc.shuffleRng.randomLong())
+            java::Random(bc.rng.randomLong())
     );
 
     bc.cards.moveDiscardPileIntoToDrawPile();
@@ -216,14 +216,14 @@ void _ShuffleDrawPile::operator()(BattleContext &bc) const {
     java::Collections::shuffle(
             bc.cards.drawPile.begin(),
             bc.cards.drawPile.end(),
-            java::Random(bc.shuffleRng.randomLong())
+            java::Random(bc.rng.randomLong())
     );
 }
 
 void _ShuffleTempCardIntoDrawPile::operator()(BattleContext &bc) const {
     CardInstance c(id);
     for (int i = 0; i < count; ++i) {
-        const int idx = bc.cards.drawPile.empty() ? 0 : bc.cardRandomRng.random(static_cast<int>(bc.cards.drawPile.size()-1));
+        const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
         bc.cards.createTempCardInDrawPile(idx, c);
     }
 }
@@ -246,7 +246,7 @@ void _MakeTempCardInDrawPile::operator()(BattleContext &bc) const {
     // the random calculation is done in an effect so it be wrong to do it here?
     for (int i = 0; i < amount; ++i) {
         if (shuffleInto) {
-            const int idx = bc.cards.drawPile.empty() ? 0 : bc.cardRandomRng.random(static_cast<int>(bc.cards.drawPile.size()-1));
+            const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
             bc.cards.createTempCardInDrawPile(idx, c);
         }
         // todo else
@@ -321,7 +321,7 @@ void _ExhaustSpecificCardInHand::operator()(BattleContext &bc) const {
 }
 
 void _DamageRandomEnemy::operator()(BattleContext &bc) const {
-    const int idx = bc.monsters.getRandomMonsterIdx(bc.cardRandomRng, true);
+    const int idx = bc.monsters.getRandomMonsterIdx(bc.rng, true);
     if (idx == -1) {
         return;
     }
@@ -334,7 +334,7 @@ void _ExhaustRandomCardInHand::operator()(BattleContext &bc) const {
         if (bc.cards.cardsInHand <= 0) {
             return;
         }
-        const auto idx = bc.cards.getRandomCardIdxInHand(bc.cardRandomRng);
+        const auto idx = bc.cards.getRandomCardIdxInHand(bc.rng);
         auto c = bc.cards.hand[idx];
         bc.cards.removeFromHandAtIdx(idx);
         bc.triggerAndMoveToExhaustPile(c);
@@ -367,7 +367,7 @@ void _MadnessAction::operator()(BattleContext &bc) const {
 //#pragma clang diagnostic push
 //#pragma ide diagnostic ignored "EndlessLoop"
     while (true) {
-        const auto randomIdx = bc.cardRandomRng.random(bc.cards.cardsInHand-1);
+        const auto randomIdx = bc.rng.random(bc.cards.cardsInHand-1);
         auto &c = bc.cards.hand[randomIdx];
 
         if (haveNonZeroTurnCost) {
@@ -398,7 +398,7 @@ void _RandomizeHandCost::operator()(BattleContext &bc) const {
         for (int i = 0; i < bc.cards.cardsInHand; ++i) {
             auto &c = bc.cards.hand[i];
             if (c.cost >= 0) {
-                int newCost = bc.cardRandomRng.random(3);
+                int newCost = bc.rng.random(3);
                 c.cost = newCost;
                 c.costForTurn = newCost;
             }
@@ -418,7 +418,7 @@ void _GainBlockRandomEnemy::operator()(BattleContext &bc) const {
 
         int targetIdx;
         if (validCount > 0) {
-            targetIdx = validIdxs[bc.aiRng.random(validCount - 1)];
+            targetIdx = validIdxs[bc.rng.random(validCount - 1)];
         } else {
             targetIdx = sourceMonster;
         }
@@ -449,8 +449,8 @@ void _SummonGremlins::operator()(BattleContext &bc) const {
     gremlin0 = Monster();
     gremlin1 = Monster();
 
-    gremlin0.construct(bc, MonsterGroup::getGremlin(bc.aiRng), newGremlinIdxs[0]);
-    gremlin1.construct(bc, MonsterGroup::getGremlin(bc.aiRng), newGremlinIdxs[1]);
+    gremlin0.construct(bc, MonsterGroup::getGremlin(bc.rng), newGremlinIdxs[0]);
+    gremlin1.construct(bc, MonsterGroup::getGremlin(bc.rng), newGremlinIdxs[1]);
     bc.monsters.monstersAlive += 2;
 
     if (bc.player.hasRelic<R::PHILOSOPHERS_STONE>()) {
@@ -476,7 +476,7 @@ void _SpawnTorchHeads::operator()(BattleContext &bc) const {
         auto &torchHead = bc.monsters.arr[idx];
         torchHead = Monster();
         torchHead.construct(bc, MonsterId::TORCH_HEAD, idx);
-        torchHead.initHp(bc.monsterHpRng, bc.ascension); // bug somewhere in game
+        torchHead.initHp(bc.rng, bc.ascension); // bug somewhere in game
         torchHead.setMove(MMID::TORCH_HEAD_TACKLE);
         torchHead.buff<MS::MINION>();
 
@@ -492,7 +492,7 @@ void _SpawnTorchHeads::operator()(BattleContext &bc) const {
 }
 
 void _SpireShieldDebuff::operator()(BattleContext &bc) const {
-    if (bc.aiRng.randomBoolean()) {
+    if (bc.rng.randomBoolean()) {
         bc.player.debuff<PS::FOCUS>(-1);
     } else {
         bc.player.debuff<PS::STRENGTH>(-1);
@@ -507,7 +507,7 @@ void _OnAfterCardUsed::operator()(BattleContext &bc) const {
 void _PutRandomCardsInDrawPile::operator()(BattleContext &bc) const {
     CardId ids[5];
     for (int i = 0; i < count; ++i) {
-        ids[i] = getTrulyRandomCardInCombat(bc.cardRandomRng, bc.player.cc, type);
+        ids[i] = getTrulyRandomCardInCombat(bc.rng, bc.player.cc, type);
     }
 
     for (int i = 0; i < count; ++i) {
@@ -515,28 +515,28 @@ void _PutRandomCardsInDrawPile::operator()(BattleContext &bc) const {
         card.cost = 0;
         card.costForTurn = 0;
 
-        const int idx = bc.cards.drawPile.empty() ? 0 : bc.cardRandomRng.random(static_cast<int>(bc.cards.drawPile.size()-1));
+        const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
         bc.cards.createTempCardInDrawPile(idx, card);
     }
 }
 
 void _DiscoveryAction::operator()(BattleContext &bc) const {
     bc.haveUsedDiscoveryAction = true;
-    bc.openDiscoveryScreen(sts::generateDiscoveryCards(bc.cardRandomRng, bc.player.cc, type), amount);
+    bc.openDiscoveryScreen(sts::generateDiscoveryCards(bc.rng, bc.player.cc, type), amount);
 }
 
 void _InfernalBladeAction::operator()(BattleContext &bc) const {
-    const auto cid = getTrulyRandomCardInCombat(bc.cardRandomRng, bc.player.cc, CardType::ATTACK);
+    const auto cid = getTrulyRandomCardInCombat(bc.rng, bc.player.cc, CardType::ATTACK);
     CardInstance c(cid);
     c.setCostForTurn(0);
     bc.addToTop( Actions::MakeTempCardInHand(c) );
 }
 
 void _JackOfAllTradesAction::operator()(BattleContext &bc) const {
-    const auto c1 = sts::getTrulyRandomColorlessCardInCombat(bc.cardRandomRng);
+    const auto c1 = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
     bc.addToTop( Actions::MakeTempCardInHand(c1) );
     if (upgraded) {
-        auto c2 = sts::getTrulyRandomColorlessCardInCombat(bc.cardRandomRng);
+        auto c2 = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
         bc.addToTop( Actions::MakeTempCardInHand(c2) );
     }
 }
@@ -550,7 +550,7 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
 
     std::vector<CardInstance> cards;
    for (int i = 0; i < effectAmount; ++i) {
-       const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.cardRandomRng);
+       const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
        CardInstance c(cid, upgraded);
        c.setCostForTurn(0);
        cards.push_back(c);
@@ -572,7 +572,7 @@ void _ViolenceAction::operator()(BattleContext &bc) const {
             if (attackIdxList.empty()) {
                 attackIdxList.push_back(i);
             } else {
-                const auto randomIdx = bc.cardRandomRng.random(attackIdxList.size() - 1);
+                const auto randomIdx = bc.rng.random(attackIdxList.size() - 1);
                 attackIdxList.insert(randomIdx, i);
             }
         }
@@ -590,7 +590,7 @@ void _ViolenceAction::operator()(BattleContext &bc) const {
             return;
         }
 
-        java::Collections::shuffle(attackIdxList.begin()+i, attackIdxList.end(), java::Random(bc.shuffleRng.randomLong()));
+        java::Collections::shuffle(attackIdxList.begin()+i, attackIdxList.end(), java::Random(bc.rng.randomLong()));
         const auto removeIdx = attackIdxList[i];
         removeIdxs[i] = removeIdx;
 
@@ -780,7 +780,7 @@ void _DrawToHandAction::operator()(BattleContext &bc) const {
             if (count > 0) {
                 // for keeping rng consistent with game
                 // the game creates a temporary list with the skills
-                bc.cardRandomRng.random(count - 1);
+                bc.rng.random(count - 1);
             }
             idx = i;
             ++count;
@@ -808,7 +808,7 @@ void _WarcryAction::operator()(BattleContext &bc) const {
     }
 
     if (bc.cards.cardsInHand == 1) {
-        bc.cardRandomRng.random(1);
+        bc.rng.random(1);
         bc.chooseWarcryCard(0);
 
     } else {
@@ -870,7 +870,7 @@ void _UpgradeRandomCardAction::operator()(BattleContext &bc) const {
     java::Collections::shuffle(
             upgradeableHandIdxs.begin(),
             upgradeableHandIdxs.end(),
-            java::Random(bc.shuffleRng.randomLong())
+            java::Random(bc.rng.randomLong())
     );
 
     const auto upgradeIdx = upgradeableHandIdxs[0];
@@ -881,7 +881,7 @@ void _CodexAction::operator()(BattleContext &bc) const {
     bc.inputState = InputState::CARD_SELECT;
     bc.cardSelectInfo.cardSelectTask = CardSelectTask::CODEX;
     bc.cardSelectInfo.codexCards() =
-            generateDiscoveryCards(bc.cardRandomRng, CharacterClass::IRONCLAD, CardType::INVALID);
+            generateDiscoveryCards(bc.rng, CharacterClass::IRONCLAD, CardType::INVALID);
 }
 
 void _ExhaustMany::operator()(BattleContext &bc) const {
@@ -901,7 +901,7 @@ void _ToolboxAction::operator()(BattleContext &bc) const {
     bc.cardSelectInfo.discovery_CopyCount() = 1;
     bc.cardSelectInfo.setCostToZero = false;
     bc.cardSelectInfo.discovery_Cards() =
-            generateDiscoveryCards(bc.cardRandomRng, bc.player.cc, CardType::STATUS); // status is mapped to colorless
+            generateDiscoveryCards(bc.rng, bc.player.cc, CardType::STATUS); // status is mapped to colorless
 }
 
 void _DualityAction::operator()(BattleContext &bc) const {
@@ -1095,7 +1095,7 @@ void _SeverSoulExhaustAction::operator()(BattleContext &bc) const {
 void _SwordBoomerangAction::operator()(BattleContext &bc) const {
     // pretty hacky until I can figure out a better solution
     const static CardInstance swordBoomerang {CardId::SWORD_BOOMERANG};
-    const auto idx = bc.monsters.getRandomMonsterIdx(bc.cardRandomRng, true);
+    const auto idx = bc.monsters.getRandomMonsterIdx(bc.rng, true);
     if (idx == -1) {
         return;
     }

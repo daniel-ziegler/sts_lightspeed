@@ -100,14 +100,11 @@ namespace sts {
         os << separator << "treasureRng: " << gc.treasureRng.counter;
         os << separator << "eventRng: " << gc.eventRng.counter;
         os << separator << "relicRng: " << gc.relicRng.counter;
-        os << separator << "potionRng: " << gc.potionRng.counter;
+        os << separator << "rng: " << gc.rng.counter;
         os << separator << "cardRng: " << gc.cardRng.counter;
-        os << separator << "cardRandomRng: " << gc.cardRandomRng.counter;
         os << separator << "merchantRng: " << gc.merchantRng.counter;
         os << separator << "monsterRng: " << gc.monsterRng.counter;
-        os << separator << "shuffleRng: " << gc.shuffleRng.counter;
-        os << separator << "miscRng: " << gc.miscRng.counter;
-        os << separator << "mathUtilRng: " << gc.shuffleRng.counter;
+        os << separator << "mathUtilRng: " << gc.mathUtilRng.counter;
         os << '\n';
     }
 
@@ -173,12 +170,7 @@ namespace sts {
     }
 
     void printBattleContextRng(std::ostream &os, const BattleContext &bc) {
-        os << "aiRng: " << bc.aiRng.counter << "\n";
-        os << "cardRandomRng: " << bc.cardRandomRng.counter << "\n";
-        os << "miscRng: " << bc.miscRng.counter << "\n";
-        os << "monsterHpRng: " << bc.monsterHpRng.counter << "\n";
-        os << "potionRng: " << bc.potionRng.counter << "\n";
-        os << "shuffleRng: " << bc.shuffleRng.counter << "\n";
+        os << "rng: " << bc.rng.counter << "\n";
     }
 
     std::ostream& printCardInstanceSimple(std::ostream &os, const CardInstance &card) {
