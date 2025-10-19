@@ -39,8 +39,7 @@
 
 # battle search
 ## randomness
-rerandomize is cumbersome, need to get an LLM to do it....
-instead for now just record and replay randomness
+record and replay randomness
 
 ## randomness in search
 correlated randomness in parallel nodes
