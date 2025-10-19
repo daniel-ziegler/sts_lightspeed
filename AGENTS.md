@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Standard build process
+pyenv shell 3.10.18
 cmake .
 make -j8
 
@@ -61,7 +62,7 @@ The `test` executable provides various testing and simulation modes:
 - **Combat System** (`src/combat/`, `include/combat/`): BattleContext, Player/Monster, Actions, turn-based sequencing  
 - **Constants** (`include/constants/`): All game data definitions (Cards, Relics, Monsters, Events, StatusEffects)
 - **Simulation** (`src/sim/`, `include/sim/`): ConsoleSimulator, BattleSimulator, debug utilities
-- **AI Agents** (`src/sim/search/`): ScumSearchAgent2 (MCTS), SimpleAgent, ExpertKnowledge heuristics
+- **AI Agents** (`src/sim/search/`): SearchAgent (MCTS), SimpleAgent, ExpertKnowledge heuristics
 - **Python Bindings** (`bindings/`): PyBind11 integration for ML workflows
     - Main definitions: `bindings/slaythespire.cpp`
 

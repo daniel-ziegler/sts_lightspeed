@@ -22,7 +22,7 @@
 namespace sts {
 
     namespace search {
-        class ScumSearchAgent2;
+        class SearchAgent;
     }
 
 
@@ -84,7 +84,7 @@ namespace sts {
 
         void play();
 
-        search::ScumSearchAgent2* getAgent();
+        search::SearchAgent* getAgent();
         void setGc(const GameContext &gc);
         GameContext* getGc();
 

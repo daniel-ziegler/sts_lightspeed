@@ -12,7 +12,7 @@
 #include "game/GameContext.h"
 #include "game/Card.h"
 
-#include "sim/search/BattleScumSearcher2.h"
+#include "sim/search/BattleSearcher.h"
 
 using namespace sts;
 

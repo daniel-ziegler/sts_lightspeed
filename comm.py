@@ -1034,9 +1034,9 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
 def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext", game: game.Game) -> "Action":
     """
     Map a sim/search/Action to a spirecomm Action.
-    
+
     Args:
-        action: The search Action from BattleScumSearcher2
+        action: The search Action from BattleSearcher
         bc: The BattleContext for reference
         game: The spirecomm Game state for monster/card references
         
@@ -1343,7 +1343,7 @@ class STSLightspeedAgent:
         print(bc, file=sys.stderr)
         
         # Create and configure the battle searcher
-        searcher = sts.BattleScumSearcher2(bc)
+        searcher = sts.BattleSearcher(bc)
         
         # Run search with a moderate number of simulations
         # More simulations = better play but slower response

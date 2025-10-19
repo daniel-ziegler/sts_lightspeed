@@ -13,7 +13,7 @@
 #include "game/GameAction.h"
 
 #include "sim/BattleSimulator.h"
-#include "sim/search/ScumSearchAgent2.h"
+#include "sim/search/SearchAgent.h"
 
 namespace sts {
 
@@ -45,7 +45,7 @@ namespace sts {
         // state
         GameContext *gc = nullptr;
         BattleSimulator battleSim;
-        search::ScumSearchAgent2 autoBattleAgent;
+        search::SearchAgent autoBattleAgent;
 
         ConsoleSimulator() = default;
         void setupGame(std::uint64_t seed, CharacterClass c, int ascension);

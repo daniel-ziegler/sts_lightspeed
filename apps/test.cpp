@@ -21,10 +21,10 @@
 #include "sim/ConsoleSimulator.h"
 #include "sim/PrintHelpers.h"
 #include "sim/RandomAgent.h"
-#include "sim/search/ScumSearchAgent2.h"
+#include "sim/search/SearchAgent.h"
 #include "sim/search/SimpleAgent.h"
 
-#include "sim/search/BattleScumSearcher2.h"
+#include "sim/search/BattleSearcher.h"
 #include "combat/Actions.h"
 
 using namespace sts;
@@ -148,7 +148,7 @@ void agentMtRunner(AgentMtInfo *info) {
         }
 
         GameContext gc(CharacterClass::IRONCLAD, seed, g_searchAscension);
-        search::ScumSearchAgent2 agent;
+        search::SearchAgent agent;
         agent.simulationCountBase = g_simulationCount;
         agent.rng = std::default_random_engine(gc.seed);
 
@@ -229,7 +229,7 @@ int mcts(int argc, const char *argv[]) {
     BattleContext bc = BattleContext();
     bc.init(gc);
 
-    search::BattleScumSearcher2 searcher(bc);
+    search::BattleSearcher searcher(bc);
 
     auto startTime = std::chrono::high_resolution_clock::now();
     searcher.search(simulationCount);

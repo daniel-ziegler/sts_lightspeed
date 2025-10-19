@@ -28,8 +28,8 @@
 #include "combat/CardManager.h"
 #include "combat/CardInstance.h"
 #include "sim/ConsoleSimulator.h"
-#include "sim/search/ScumSearchAgent2.h"
-#include "sim/search/BattleScumSearcher2.h"
+#include "sim/search/SearchAgent.h"
+#include "sim/search/BattleSearcher.h"
 #include "sim/search/Action.h"
 #include "sim/SimHelpers.h"
 #include "sim/PrintHelpers.h"
@@ -80,14 +80,14 @@ PYBIND11_MODULE(slaythespire, m) {
     m.def("getFixedObservationMaximums", &py::getFixedObservationMaximums, "get the defined maximum values of the observation space");
     m.def("getNNRepresentation", &py::getNNRepresentation, "get the neural network representation of a GameContext");
 
-    pybind11::class_<search::ScumSearchAgent2> agent(m, "Agent");
+    pybind11::class_<search::SearchAgent> agent(m, "Agent");
     agent.def(pybind11::init<>());
-    agent.def_readwrite("simulation_count_base", &search::ScumSearchAgent2::simulationCountBase, "number of simulations the agent uses for monte carlo tree search each turn")
-        .def_readwrite("boss_simulation_multiplier", &search::ScumSearchAgent2::bossSimulationMultiplier, "bonus multiplier to the simulation count for boss fights")
-        .def_readwrite("pause_on_card_reward", &search::ScumSearchAgent2::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
-        .def_readwrite("verbosity_level", &search::ScumSearchAgent2::verbosityLevel, "verbosity level: 0=quiet, 1=concise, 2=full")
-        .def("pick_gameaction", &search::ScumSearchAgent2::pickOutOfCombatAction)
-        .def("playout_battle", [](search::ScumSearchAgent2 &agent, GameContext &gc) {
+    agent.def_readwrite("simulation_count_base", &search::SearchAgent::simulationCountBase, "number of simulations the agent uses for monte carlo tree search each turn")
+        .def_readwrite("boss_simulation_multiplier", &search::SearchAgent::bossSimulationMultiplier, "bonus multiplier to the simulation count for boss fights")
+        .def_readwrite("pause_on_card_reward", &search::SearchAgent::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
+        .def_readwrite("verbosity_level", &search::SearchAgent::verbosityLevel, "verbosity level: 0=quiet, 1=concise, 2=full")
+        .def("pick_gameaction", &search::SearchAgent::pickOutOfCombatAction)
+        .def("playout_battle", [](search::SearchAgent &agent, GameContext &gc) {
             pybind11::gil_scoped_release release;
             BattleContext bc;
             bc.init(gc);
@@ -95,7 +95,7 @@ PYBIND11_MODULE(slaythespire, m) {
             agent.playoutBattle(bc);
             bc.exitBattle(gc);
         }, "playout a battle")
-        .def("playout", &search::ScumSearchAgent2::playout);
+        .def("playout", &search::SearchAgent::playout);
 
     // ActionType enum binding
     pybind11::enum_<search::ActionType>(m, "ActionType")
@@ -335,16 +335,16 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def("execute", &search::Action::execute);
 
-    // BattleScumSearcher2 class binding
-    pybind11::class_<search::BattleScumSearcher2> battleSearcher(m, "BattleScumSearcher2");
+    // BattleSearcher class binding
+    pybind11::class_<search::BattleSearcher> battleSearcher(m, "BattleSearcher");
     battleSearcher.def(pybind11::init<const BattleContext&>())
         .def(pybind11::init<const BattleContext&, search::EvalFnc>())
-        .def("search", &search::BattleScumSearcher2::search)
-        .def("step", &search::BattleScumSearcher2::step)
-        .def_readonly("best_action_sequence", &search::BattleScumSearcher2::bestActionSequence)
-        .def_readwrite("exploration_parameter", &search::BattleScumSearcher2::explorationParameter)
-        .def_readonly("best_action_value", &search::BattleScumSearcher2::bestActionValue)
-        .def_readonly("outcome_player_hp", &search::BattleScumSearcher2::outcomePlayerHp);
+        .def("search", &search::BattleSearcher::search)
+        .def("step", &search::BattleSearcher::step)
+        .def_readonly("best_action_sequence", &search::BattleSearcher::bestActionSequence)
+        .def_readwrite("exploration_parameter", &search::BattleSearcher::explorationParameter)
+        .def_readonly("best_action_value", &search::BattleSearcher::bestActionValue)
+        .def_readonly("outcome_player_hp", &search::BattleSearcher::outcomePlayerHp);
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
     gameContext.def(pybind11::init<CharacterClass, std::int64_t, int>())

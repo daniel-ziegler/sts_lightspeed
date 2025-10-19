@@ -6,7 +6,7 @@
 
 #include "constants/Rooms.h"
 #include "sim/ConsoleSimulator.h"
-#include "sim/search/ScumSearchAgent2.h"
+#include "sim/search/SearchAgent.h"
 #include "sim/SimHelpers.h"
 #include "sim/PrintHelpers.h"
 #include "game/Game.h"
@@ -137,10 +137,10 @@ namespace sts::py {
         sim.play(std::cin, std::cout, ctx);
     }
 
-    search::ScumSearchAgent2* getAgent() {
-        static search::ScumSearchAgent2 *agent = nullptr;
+    search::SearchAgent* getAgent() {
+        static search::SearchAgent *agent = nullptr;
         if (agent == nullptr) {
-            agent = new search::ScumSearchAgent2();
+            agent = new search::SearchAgent();
             agent->pauseOnCardReward = true;
         }
         return agent;

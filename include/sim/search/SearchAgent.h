@@ -2,8 +2,8 @@
 // Created by keega on 9/19/2021.
 //
 
-#ifndef STS_LIGHTSPEED_SCUMSEARCHAGENT2_H
-#define STS_LIGHTSPEED_SCUMSEARCHAGENT2_H
+#ifndef STS_LIGHTSPEED_SEARCHAGENT_H
+#define STS_LIGHTSPEED_SEARCHAGENT_H
 
 #include "game/GameContext.h"
 #include "sim/search/Action.h"
@@ -14,9 +14,9 @@
 
 namespace sts::search {
 
-    class BattleScumSearcher2;
+    class BattleSearcher;
 
-    struct ScumSearchAgent2 {
+    struct SearchAgent {
         std::int64_t simulationCountTotal;
         std::vector<int> gameActionHistory;
 
@@ -44,7 +44,7 @@ namespace sts::search {
         void takeAction(BattleContext &bc, Action a);
 
         void stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions);
-        void stepThroughSearchTree(BattleContext &bc, const search::BattleScumSearcher2 &s);
+        void stepThroughSearchTree(BattleContext &bc, const search::BattleSearcher &s);
         
         void printConciseAction(const BattleContext &bc, const Action &action);
 
@@ -60,4 +60,4 @@ namespace sts::search {
 }
 
 
-#endif //STS_LIGHTSPEED_SCUMSEARCHAGENT2_H
+#endif //STS_LIGHTSPEED_SEARCHAGENT_H

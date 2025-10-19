@@ -2,8 +2,8 @@
 // Created by keega on 9/17/2021.
 //
 
-#ifndef STS_LIGHTSPEED_BATTLESCUMSEARCHER2_H
-#define STS_LIGHTSPEED_BATTLESCUMSEARCHER2_H
+#ifndef STS_LIGHTSPEED_BATTLESEARCHER_H
+#define STS_LIGHTSPEED_BATTLESEARCHER_H
 
 #include "sim/search/Action.h"
 
@@ -20,7 +20,7 @@ namespace sts::search {
     typedef std::function<double (const BattleContext&)> EvalFnc;
 
     // to find a solution to a battle with tree pruning
-    struct BattleScumSearcher2 {
+    struct BattleSearcher {
         class Edge;
         struct Node {
             std::int64_t simulationCount = 0;
@@ -51,7 +51,7 @@ namespace sts::search {
         
         SimpleAgent rolloutAgent;
 
-        explicit BattleScumSearcher2(const BattleContext &bc, EvalFnc evalFnc=&evaluateEndState);
+        explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=&evaluateEndState);
 
         // public methods
         void search(int64_t simulations);
@@ -77,9 +77,9 @@ namespace sts::search {
         void printSearchStack(std::ostream &os, bool skipLast=false);
     };
 
-    extern thread_local BattleScumSearcher2 *g_debug_scum_search;
+    extern thread_local BattleSearcher *g_debug_scum_search;
 
 }
 
 
-#endif //STS_LIGHTSPEED_BATTLESCUMSEARCHER2_H
+#endif //STS_LIGHTSPEED_BATTLESEARCHER_H

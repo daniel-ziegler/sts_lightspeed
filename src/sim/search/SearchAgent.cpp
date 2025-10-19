@@ -2,18 +2,18 @@
 // Created by keega on 9/19/2021.
 //
 
-#include "sim/search/ScumSearchAgent2.h"
+#include "sim/search/SearchAgent.h"
 
 #include <algorithm>
 
 #include <sim/search/ExpertKnowledge.h>
 #include <game/Game.h>
 #include "sim/PrintHelpers.h"
-#include "sim/search/BattleScumSearcher2.h"
+#include "sim/search/BattleSearcher.h"
 
 using namespace sts;
 
-void search::ScumSearchAgent2::takeAction(GameContext &gc, GameAction a) {
+void search::SearchAgent::takeAction(GameContext &gc, GameAction a) {
     if (printActions) {
         gameActionHistory.emplace_back(a.bits);
         std::cout << std::hex << a.bits << std::endl;
@@ -21,7 +21,7 @@ void search::ScumSearchAgent2::takeAction(GameContext &gc, GameAction a) {
     a.execute(gc);
 }
 
-void search::ScumSearchAgent2::takeAction(BattleContext &bc, search::Action a) {
+void search::SearchAgent::takeAction(BattleContext &bc, search::Action a) {
     if (printActions) {
         gameActionHistory.emplace_back(a.bits);
         std::cout << std::hex << a.bits << std::endl;
@@ -30,7 +30,7 @@ void search::ScumSearchAgent2::takeAction(BattleContext &bc, search::Action a) {
     a.execute(bc);
 }
 
-void search::ScumSearchAgent2::playout(GameContext &gc) {
+void search::SearchAgent::playout(GameContext &gc) {
     paused = false;
     BattleContext bc;
     const auto seedStr = std::string(SeedHelper::getString(gc.seed));
@@ -63,7 +63,7 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
     std::cout << bc << std::endl;
 }
 
-void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
+void search::SearchAgent::playoutBattle(BattleContext &bc) {
     std::vector<search::Action> bestActions;
     int bestOutcomePlayerHp = -1;
 
@@ -71,7 +71,7 @@ void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
         const std::int64_t simulationCount = isBossEncounter(bc.encounter) ?
                                               (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
 
-        search::BattleScumSearcher2 searcher(bc);
+        search::BattleSearcher searcher(bc);
         searcher.search(simulationCount);
 
         if (searcher.outcomePlayerHp > bestOutcomePlayerHp)
@@ -92,7 +92,7 @@ void search::ScumSearchAgent2::playoutBattle(BattleContext &bc) {
     }
 }
 
-void search::ScumSearchAgent2::stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions) {
+void search::SearchAgent::stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions) {
     for (int i = 0; i < stepsWithSolution; ++i) {
         if (actions.empty()) {
             break;
@@ -110,15 +110,15 @@ void search::ScumSearchAgent2::stepThroughSolution(BattleContext &bc, std::vecto
     }
 }
 
-void search::ScumSearchAgent2::stepThroughSearchTree(BattleContext &bc, const search::BattleScumSearcher2 &s) {
-    const search::BattleScumSearcher2::Node *curNode = &s.root;
+void search::SearchAgent::stepThroughSearchTree(BattleContext &bc, const search::BattleSearcher &s) {
+    const search::BattleSearcher::Node *curNode = &s.root;
     for (int actionCount = 0; actionCount < stepsNoSolution; ++actionCount) {
         if (bc.outcome != Outcome::UNDECIDED) {
             break;
         }
 
         std::int64_t maxSimulations = -1;
-        const sts::search::BattleScumSearcher2::Edge *maxEdge = nullptr;
+        const sts::search::BattleSearcher::Edge *maxEdge = nullptr;
 
         for (const auto &edge : curNode->edges) {
             if (edge.node.simulationCount > maxSimulations) {
@@ -142,20 +142,20 @@ void search::ScumSearchAgent2::stepThroughSearchTree(BattleContext &bc, const se
     }
 }
 
-GameAction search::ScumSearchAgent2::pickRandomAction(const GameContext &gc) {
+GameAction search::SearchAgent::pickRandomAction(const GameContext &gc) {
     std::vector<GameAction> possibleActions(GameAction::getAllActionsInState(gc));
     std::uniform_int_distribution<int> distr(0, static_cast<int>(possibleActions.size())-1);
     const int randomChoice = distr(rng);
     return possibleActions[randomChoice];
 }
 
-void search::ScumSearchAgent2::stepOutOfCombatPolicy(GameContext &gc) {
+void search::SearchAgent::stepOutOfCombatPolicy(GameContext &gc) {
     ++stepCount;
     GameAction action = pickOutOfCombatAction(gc);
     takeAction(gc, action);
 }
 
-GameAction search::ScumSearchAgent2::pickOutOfCombatAction(const GameContext &gc) {
+GameAction search::SearchAgent::pickOutOfCombatAction(const GameContext &gc) {
     switch (gc.screenState) {
         case ScreenState::EVENT_SCREEN:
             return pickEventAction(gc);
@@ -218,7 +218,7 @@ GameAction search::ScumSearchAgent2::pickOutOfCombatAction(const GameContext &gc
     }
 }
 
-GameAction search::ScumSearchAgent2::pickCardSelectAction(const GameContext &gc) {
+GameAction search::SearchAgent::pickCardSelectAction(const GameContext &gc) {
     fixed_list<std::pair<int,int>, Deck::MAX_SIZE> selectOrder;
 
     for (int i = 0; i < gc.info.toSelectCards.size(); ++i) {
@@ -259,7 +259,7 @@ GameAction search::ScumSearchAgent2::pickCardSelectAction(const GameContext &gc)
     return GameAction(selectOrder.front().first);
 }
 
-GameAction search::ScumSearchAgent2::pickRewardsAction(const GameContext &gc) {
+GameAction search::SearchAgent::pickRewardsAction(const GameContext &gc) {
     auto &r = gc.info.rewardsContainer;
     if (r.goldRewardCount > 0) {
         return GameAction(GameAction::RewardsActionType::GOLD, 0);
@@ -290,7 +290,7 @@ double getAvgDeckWeight(const GameContext &gc) {
     return (double) sum / gc.deck.size();
 }
 
-GameAction search::ScumSearchAgent2::pickWeightedCardRewardAction(const GameContext &gc) {
+GameAction search::SearchAgent::pickWeightedCardRewardAction(const GameContext &gc) {
     auto &r = gc.info.rewardsContainer;
     for (int rIdx = r.cardRewardCount-1; rIdx >= 0; --rIdx) {
 
@@ -354,7 +354,7 @@ GameAction search::ScumSearchAgent2::pickWeightedCardRewardAction(const GameCont
     return GameAction();
 }
 
-GameAction search::ScumSearchAgent2::pickEventAction(const GameContext &gc) {
+GameAction search::SearchAgent::pickEventAction(const GameContext &gc) {
     switch (gc.curEvent) {
 
         case Event::NEOW:
@@ -398,7 +398,7 @@ GameAction search::ScumSearchAgent2::pickEventAction(const GameContext &gc) {
     }
 }
 
-void search::ScumSearchAgent2::printConciseAction(const BattleContext &bc, const Action &action) {
+void search::SearchAgent::printConciseAction(const BattleContext &bc, const Action &action) {
     
     // Print player status: HP and block
     std::cout << "Player: " << bc.player.curHp << "/" << bc.player.maxHp << "hp";

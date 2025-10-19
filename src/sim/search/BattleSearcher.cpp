@@ -2,7 +2,7 @@
 // Created by keega on 9/18/2021.
 //
 
-#include "sim/search/BattleScumSearcher2.h"
+#include "sim/search/BattleSearcher.h"
 #include "sim/search/ExpertKnowledge.h"
 
 #include <algorithm>
@@ -15,16 +15,16 @@ using namespace sts;
 std::int64_t simulationIdx = 0; // for debugging
 
 namespace sts::search {
-    thread_local search::BattleScumSearcher2 *g_debug_scum_search;
+    thread_local search::BattleSearcher *g_debug_scum_search;
 }
 
 
 
-search::BattleScumSearcher2::BattleScumSearcher2(const BattleContext &bc, search::EvalFnc _evalFnc)
+search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc _evalFnc)
     : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum) {
 }
 
-void search::BattleScumSearcher2::search(int64_t simulations) {
+void search::BattleSearcher::search(int64_t simulations) {
     g_debug_scum_search = this;
 
     if (isTerminalState(*rootState)) {
@@ -41,7 +41,7 @@ void search::BattleScumSearcher2::search(int64_t simulations) {
     }
 }
 
-void search::BattleScumSearcher2::step() {
+void search::BattleSearcher::step() {
     searchStack = {&root};
     actionStack.clear();
     BattleContext curState;
@@ -86,7 +86,7 @@ void search::BattleScumSearcher2::step() {
     }
 }
 
-void search::BattleScumSearcher2::updateFromPlayout(const std::vector<Node *> &stack, const std::vector<Action> &actionStack, const BattleContext &endState) {
+void search::BattleSearcher::updateFromPlayout(const std::vector<Node *> &stack, const std::vector<Action> &actionStack, const BattleContext &endState) {
     const auto evaluation = evaluateEndState(endState);
 
     if (evaluation > bestActionValue) {
@@ -106,11 +106,11 @@ void search::BattleScumSearcher2::updateFromPlayout(const std::vector<Node *> &s
     }
 }
 
-bool search::BattleScumSearcher2::isTerminalState(const BattleContext &bc) const { // maybe can optimize by making this evaluate directly if score cannot possibly be higher than best
+bool search::BattleSearcher::isTerminalState(const BattleContext &bc) const { // maybe can optimize by making this evaluate directly if score cannot possibly be higher than best
     return bc.outcome != Outcome::UNDECIDED;
 }
 
-double search::BattleScumSearcher2::evaluateEdge(const search::BattleScumSearcher2::Node &parent, int edgeIdx) {
+double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &parent, int edgeIdx) {
 
     const auto &edge = parent.edges[edgeIdx];
     
@@ -126,7 +126,7 @@ double search::BattleScumSearcher2::evaluateEdge(const search::BattleScumSearche
     return qualityValue + explorationValue;
 }
 
-int search::BattleScumSearcher2::selectBestEdgeToSearch(const search::BattleScumSearcher2::Node &cur) {
+int search::BattleSearcher::selectBestEdgeToSearch(const search::BattleSearcher::Node &cur) {
     if (cur.edges.size() == 1) {
         return 0;
     }
@@ -147,12 +147,12 @@ int search::BattleScumSearcher2::selectBestEdgeToSearch(const search::BattleScum
     return bestEdge;
 }
 
-int search::BattleScumSearcher2::selectFirstActionForLeafNode(const search::BattleScumSearcher2::Node &leafNode) {
+int search::BattleSearcher::selectFirstActionForLeafNode(const search::BattleSearcher::Node &leafNode) {
     auto dist = std::uniform_int_distribution<int>(0, static_cast<int>(leafNode.edges.size())-1);
     return dist(randGen);
 }
 
-void search::BattleScumSearcher2::rolloutToEnd(BattleContext &bc, std::vector<Action> &actionStack) {
+void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action> &actionStack) {
     while (!isTerminalState(bc)) {
         ++simulationIdx;
         Action action;
@@ -178,7 +178,7 @@ void search::BattleScumSearcher2::rolloutToEnd(BattleContext &bc, std::vector<Ac
     }
 }
 
-void search::BattleScumSearcher2::enumerateActionsForNode(search::BattleScumSearcher2::Node &node,
+void search::BattleSearcher::enumerateActionsForNode(search::BattleSearcher::Node &node,
                                                                const BattleContext &bc) {
     switch (bc.inputState) {
         case InputState::PLAYER_NORMAL:
@@ -208,7 +208,7 @@ void search::BattleScumSearcher2::enumerateActionsForNode(search::BattleScumSear
 #endif
 }
 
-void search::BattleScumSearcher2::enumerateCardActions(search::BattleScumSearcher2::Node &node,
+void search::BattleSearcher::enumerateCardActions(search::BattleSearcher::Node &node,
                                                             const BattleContext &bc) {
     if (!bc.isCardPlayAllowed()) {
         return;
@@ -264,7 +264,7 @@ void search::BattleScumSearcher2::enumerateCardActions(search::BattleScumSearche
 
 }
 
-void search::BattleScumSearcher2::enumeratePotionActions(search::BattleScumSearcher2::Node &node,
+void search::BattleSearcher::enumeratePotionActions(search::BattleSearcher::Node &node,
                                                               const BattleContext &bc) {
 
     const auto hasValidTarget = bc.monsters.getTargetableCount() > 0;
@@ -305,7 +305,7 @@ void search::BattleScumSearcher2::enumeratePotionActions(search::BattleScumSearc
 }
 
 template <typename ForwardIt>
-void setupCardOptionsHelper(search::BattleScumSearcher2::Node &node, const ForwardIt begin, const ForwardIt end, const std::function<bool(const CardInstance &)> &p= nullptr) {
+void setupCardOptionsHelper(search::BattleSearcher::Node &node, const ForwardIt begin, const ForwardIt end, const std::function<bool(const CardInstance &)> &p= nullptr) {
     for (int i = 0; begin+i != end; ++i) {
         const auto &c = begin[i];
         if (!p || (p(c))) {
@@ -316,7 +316,7 @@ void setupCardOptionsHelper(search::BattleScumSearcher2::Node &node, const Forwa
     }
 }
 
-void search::BattleScumSearcher2::enumerateCardSelectActions(search::BattleScumSearcher2::Node &node,
+void search::BattleSearcher::enumerateCardSelectActions(search::BattleSearcher::Node &node,
                                                                   const BattleContext &bc) {
 
     switch (bc.cardSelectInfo.cardSelectTask) {
@@ -410,7 +410,7 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
     return (double)curHpTotal / maxHpTotal;
 }
 
-double search::BattleScumSearcher2::evaluateEndState(const BattleContext &bc) {
+double search::BattleSearcher::evaluateEndState(const BattleContext &bc) {
     double potionScore = bc.potionCount * 12;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
@@ -430,14 +430,14 @@ double search::BattleScumSearcher2::evaluateEndState(const BattleContext &bc) {
 }
 
 struct LayerStruct {
-    const search::BattleScumSearcher2::Node *node;
+    const search::BattleSearcher::Node *node;
     BattleContext *bc;
     int edgeIdx;
 };
 
-typedef std::pair<search::BattleScumSearcher2::Edge, std::unique_ptr<const BattleContext>> EdgeInfo;
+typedef std::pair<search::BattleSearcher::Edge, std::unique_ptr<const BattleContext>> EdgeInfo;
 
-std::vector<EdgeInfo> getEdgesForLayer(const search::BattleScumSearcher2 &s, int layerNum) {
+std::vector<EdgeInfo> getEdgesForLayer(const search::BattleSearcher &s, int layerNum) {
     if (layerNum <= 0) {
         return {};
     }
@@ -474,7 +474,7 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleScumSearcher2 &s, int
     return layerEdges;
 }
 
-void search::BattleScumSearcher2::printSearchTree(std::ostream &os, int levels) {
+void search::BattleSearcher::printSearchTree(std::ostream &os, int levels) {
     std::vector<std::vector<EdgeInfo>> layerEdges;
     for (int depth = 1; depth <= levels; ++depth) {
         layerEdges.push_back(getEdgesForLayer(*this, depth));
@@ -498,7 +498,7 @@ void search::BattleScumSearcher2::printSearchTree(std::ostream &os, int levels) 
 
 }
 
-void search::BattleScumSearcher2::printSearchStack(std::ostream &os, bool skipLast) {
+void search::BattleSearcher::printSearchStack(std::ostream &os, bool skipLast) {
     for (int i = 0; i < actionStack.size(); ++i) {
         const auto &a = actionStack[i];
         os << std::hex << a.bits << '\n';
