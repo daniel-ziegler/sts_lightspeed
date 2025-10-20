@@ -26,11 +26,24 @@ namespace sts::search {
             std::int64_t simulationCount = 0;
             double evaluationSum = 0;
             std::vector<Edge> edges;
+            // Node kind: player choice vs random outcome expansion
+            bool isRandomNode = false;
+            // For random nodes: action to execute starting from traversal state's pre-action
+            Action stochasticAction;
+            int outcomesGenerated = 0; // number of outcome children created
+
+            Node() = default;
+            Node(const Node& other);
+            Node(Node&&) = default;
+            Node& operator=(const Node& other);
+            Node& operator=(Node&&) = default;
         };
 
         struct Edge {
             Action action;
             Node node;
+            // For random nodes only: number of RNG advance steps applied before action
+            int rngAdvanceSteps = 0;
         };
 
         std::unique_ptr<const BattleContext> rootState;
@@ -75,6 +88,9 @@ namespace sts::search {
 
         void printSearchTree(std::ostream &os, int levels);
         void printSearchStack(std::ostream &os, bool skipLast=false);
+
+        // Random node helpers
+        void expandRandomOutcome(Node &randomNode, BattleContext &curState);
     };
 
     extern thread_local BattleSearcher *g_debug_scum_search;
