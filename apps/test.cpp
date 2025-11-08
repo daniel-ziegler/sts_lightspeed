@@ -237,18 +237,18 @@ int mcts(int argc, const char *argv[]) {
     double duration = std::chrono::duration<double>(endTime-startTime).count();
 
     std::cout << "steps: " << simulationCount << " search time: " << duration << "s\n";
-    std::cout << "best search value: " << searcher.bestActionValue << " depth: " << searcher.bestActionSequence.size() << '\n';
-    if (searcher.bestActionSequence.empty()) {
-        std::cout << "bestActionSequenceIsEmpty" << std::endl;
+
+    try {
+        auto bestAction = searcher.getBestAction();
+        std::cout << "best action: ";
+        bestAction.printDesc(std::cout, bc) << '\n';
+        bestAction.execute(bc);
+    } catch (const std::runtime_error& e) {
+        std::cout << "No actions available: " << e.what() << std::endl;
         return 0;
     }
 
-    for (auto bestAction : searcher.bestActionSequence) {
-        bestAction.printDesc(std::cout, bc) << '\n';
-        bestAction.execute(bc);
-    }
-
-    std::cout << "ending hp: " << bc.player.curHp << '\n';
+    std::cout << "player hp after action: " << bc.player.curHp << '\n';
 
     searcher.printSearchTree(std::cout, 3);
 

@@ -26,11 +26,9 @@ namespace sts::search {
             std::int64_t simulationCount = 0;
             double evaluationSum = 0;
             std::vector<Edge> edges;
-            // Node kind: player choice vs random outcome expansion
             bool isRandomNode = false;
-            // For random nodes: action to execute starting from traversal state's pre-action
             Action stochasticAction;
-            int outcomesGenerated = 0; // number of outcome children created
+            int outcomesGenerated = 0;
 
             Node() = default;
             Node(const Node& other);
@@ -42,7 +40,6 @@ namespace sts::search {
         struct Edge {
             Action action;
             Node node;
-            // For random nodes only: number of RNG advance steps applied before action
             int rngAdvanceSteps = 0;
         };
 
@@ -52,11 +49,6 @@ namespace sts::search {
         EvalFnc evalFnc;
         double explorationParameter = 3*sqrt(2);
 
-        double bestActionValue = std::numeric_limits<double>::min();
-        double minActionValue = std::numeric_limits<double>::max();
-        int outcomePlayerHp = 0;
-
-        std::vector<Action> bestActionSequence;
         std::default_random_engine randGen;
 
         std::vector<Node*> searchStack;
@@ -69,6 +61,8 @@ namespace sts::search {
         // public methods
         void search(int64_t simulations);
         void step();
+        Action getBestAction() const;
+        const std::vector<Edge>& getRootEdges() const { return root.edges; }
 
         // private helpers
         void updateFromPlayout(const std::vector<Node*> &stack, const std::vector<Action> &actionStack, const BattleContext &endState);
@@ -84,13 +78,11 @@ namespace sts::search {
         void enumerateCardActions(Node &node, const BattleContext &bc);
         void enumeratePotionActions(Node &node, const BattleContext &bc);
         void enumerateCardSelectActions(Node &node, const BattleContext &bc);
+        void expandRandomOutcome(Node &randomNode, BattleContext &curState);
         static double evaluateEndState(const BattleContext &bc);
 
         void printSearchTree(std::ostream &os, int levels);
         void printSearchStack(std::ostream &os, bool skipLast=false);
-
-        // Random node helpers
-        void expandRandomOutcome(Node &randomNode, BattleContext &curState);
     };
 
     extern thread_local BattleSearcher *g_debug_scum_search;

@@ -335,16 +335,24 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def("execute", &search::Action::execute);
 
+    // BattleSearcher Node and Edge bindings
+    pybind11::class_<search::BattleSearcher::Node>(m, "BattleSearcherNode")
+        .def_readonly("simulation_count", &search::BattleSearcher::Node::simulationCount)
+        .def_readonly("evaluation_sum", &search::BattleSearcher::Node::evaluationSum);
+
+    pybind11::class_<search::BattleSearcher::Edge>(m, "BattleSearcherEdge")
+        .def_readonly("action", &search::BattleSearcher::Edge::action)
+        .def_readonly("node", &search::BattleSearcher::Edge::node);
+
     // BattleSearcher class binding
     pybind11::class_<search::BattleSearcher> battleSearcher(m, "BattleSearcher");
     battleSearcher.def(pybind11::init<const BattleContext&>())
         .def(pybind11::init<const BattleContext&, search::EvalFnc>())
         .def("search", &search::BattleSearcher::search)
         .def("step", &search::BattleSearcher::step)
-        .def_readonly("best_action_sequence", &search::BattleSearcher::bestActionSequence)
-        .def_readwrite("exploration_parameter", &search::BattleSearcher::explorationParameter)
-        .def_readonly("best_action_value", &search::BattleSearcher::bestActionValue)
-        .def_readonly("outcome_player_hp", &search::BattleSearcher::outcomePlayerHp);
+        .def("get_best_action", &search::BattleSearcher::getBestAction)
+        .def("get_root_edges", &search::BattleSearcher::getRootEdges, pybind11::return_value_policy::reference_internal)
+        .def_readwrite("exploration_parameter", &search::BattleSearcher::explorationParameter);
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
     gameContext.def(pybind11::init<CharacterClass, std::int64_t, int>())

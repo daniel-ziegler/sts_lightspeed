@@ -64,31 +64,37 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
 }
 
 void search::SearchAgent::playoutBattle(BattleContext &bc) {
-    std::vector<search::Action> bestActions;
-    int bestOutcomePlayerHp = -1;
-
     while (bc.outcome == Outcome::UNDECIDED) {
         const std::int64_t simulationCount = isBossEncounter(bc.encounter) ?
-                                              (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
+                                             (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
 
         search::BattleSearcher searcher(bc);
         searcher.search(simulationCount);
-
-        if (searcher.outcomePlayerHp > bestOutcomePlayerHp)
-        {
-            bestActions = std::vector(
-                    searcher.bestActionSequence.rbegin(),
-                    searcher.bestActionSequence.rend());
-            bestOutcomePlayerHp = searcher.outcomePlayerHp;
-        }
-
         simulationCountTotal += searcher.root.simulationCount;
 
-        if (bestOutcomePlayerHp > 0) {
-            stepThroughSolution(bc, bestActions);
-        } else {
-            stepThroughSearchTree(bc, searcher);
+        const auto &rootNode = searcher.root;
+        if (rootNode.edges.empty()) {
+            break;
         }
+
+        const sts::search::BattleSearcher::Edge *bestEdge = nullptr;
+        std::int64_t maxVisits = -1;
+        for (const auto &edge : rootNode.edges) {
+            if (edge.node.simulationCount > maxVisits) {
+                maxVisits = edge.node.simulationCount;
+                bestEdge = &edge;
+            }
+        }
+
+        assert(bestEdge != nullptr);
+
+        if (verbosityLevel == 2) {
+            printHelper(bc, bestEdge->action);
+        } else if (verbosityLevel == 1) {
+            printConciseAction(bc, bestEdge->action);
+        }
+
+        takeAction(bc, bestEdge->action);
     }
 }
 

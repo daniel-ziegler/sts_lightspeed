@@ -50,8 +50,6 @@ void search::BattleSearcher::search(int64_t simulations) {
 
     if (isTerminalState(*rootState)) {
         auto evaluation = evaluateEndState(*rootState);
-        outcomePlayerHp = rootState->player.curHp;
-        bestActionSequence = {};
 
         root.evaluationSum = evaluation;
         root.simulationCount = 1;
@@ -144,16 +142,6 @@ void search::BattleSearcher::step() {
 void search::BattleSearcher::updateFromPlayout(const std::vector<Node *> &stack, const std::vector<Action> &actionStack, const BattleContext &endState) {
     const auto evaluation = evaluateEndState(endState);
 
-    if (evaluation > bestActionValue) {
-        bestActionSequence = actionStack;
-        bestActionValue = evaluation;
-        outcomePlayerHp = endState.player.curHp;
-    }
-
-    if (evaluation < minActionValue) {
-        minActionValue = evaluation;
-    }
-
     for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
         auto &node = *(*it);
         ++node.simulationCount;
@@ -237,16 +225,16 @@ void search::BattleSearcher::expandRandomOutcome(search::BattleSearcher::Node &r
 #ifdef sts_asserts
     assert(randomNode.isRandomNode);
 #endif
-    // Build state from current traversal state; at entry to a random node, curState is at pre-action
+    // Build state from current traversal state; at entry to a random node, curState is pre-action
     BattleContext bc = curState;
-    const int advance = randomNode.outcomesGenerated;
-    for (int i = 0; i < advance; ++i) {
-        bc.rng.randomBoolean();
-    }
+    // Constant-time branch RNG: sample one base value from pre-action RNG, then offset by outcomesGenerated
+    Random rngCopy = bc.rng;
+    const std::uint64_t base = static_cast<std::uint64_t>(rngCopy.randomLong());
+    bc.rng = Random(base + static_cast<std::uint64_t>(randomNode.outcomesGenerated));
     randomNode.stochasticAction.execute(bc);
 
     search::BattleSearcher::Edge e;
-    e.rngAdvanceSteps = advance;
+    e.rngAdvanceSteps = randomNode.outcomesGenerated;
     randomNode.edges.push_back(std::move(e));
     ++randomNode.outcomesGenerated;
 
@@ -505,6 +493,24 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) {
     }
 }
 
+search::Action search::BattleSearcher::getBestAction() const {
+    if (root.edges.empty()) {
+        throw std::runtime_error("BattleSearcher::getBestAction() called with no available actions");
+    }
+
+    int bestEdgeIdx = 0;
+    std::int64_t maxVisits = root.edges[0].node.simulationCount;
+
+    for (int i = 1; i < root.edges.size(); ++i) {
+        if (root.edges[i].node.simulationCount > maxVisits) {
+            maxVisits = root.edges[i].node.simulationCount;
+            bestEdgeIdx = i;
+        }
+    }
+
+    return root.edges[bestEdgeIdx].action;
+}
+
 struct LayerStruct {
     const search::BattleSearcher::Node *node;
     BattleContext *bc;
@@ -544,10 +550,10 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleSearcher &s, int laye
 
         BattleContext bc(*curStack.back().bc);
         if (parentNode->isRandomNode) {
-            // Parent is random node: we are at pre-action state; apply RNG advances and execute stochastic action
-            for (int i = 0; i < edgeRef.rngAdvanceSteps; ++i) {
-                bc.rng.randomBoolean();
-            }
+            // Parent is random node: constant-time reconstruction using base value + step index
+            Random rngCopy = bc.rng;
+            const std::uint64_t base = static_cast<std::uint64_t>(rngCopy.randomLong());
+            bc.rng = Random(base + static_cast<std::uint64_t>(edgeRef.rngAdvanceSteps));
             const auto &stochAction = parentNode->stochasticAction;
             stochAction.execute(bc);
         } else {

@@ -1354,33 +1354,32 @@ class STSLightspeedAgent:
         print("=" * 80, file=sys.stderr)
         print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)
         searcher.search(simulation_count)
-        
-        # Get the best action sequence
-        best_actions = searcher.best_action_sequence
-        
-        if not best_actions:
+
+        # Get the best action (most visited child of root)
+        try:
+            first_action = searcher.get_best_action()
+        except RuntimeError:
             # Fallback to ending turn if no actions found
             print("No actions found by searcher, ending turn", file=sys.stderr)
             return EndTurnAction()
 
-        print("-" * 80, file=sys.stderr)
-        print(f"Best action sequence found with {len(best_actions)} actions (outcome_hp={searcher.outcome_player_hp}):", file=sys.stderr)
-        for i, action in enumerate(best_actions):
-            action_desc = action.print_desc(bc)
-            print(f"{i+1}. {action_desc}", file=sys.stderr)
-            action.execute(bc)
-            if i in (0, len(best_actions)-1):
-                print(bc, file=sys.stderr)
-
-
-        # Take the first (immediate) action from the best sequence
-        first_action = best_actions[0]
-        
         # Map the search action to a spirecomm action
         spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game)
 
         print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
-        
+
+        # Print top 5 moves and their visit counts
+        edges = searcher.get_root_edges()
+        if edges:
+            # Sort edges by visit count (descending)
+            sorted_edges = sorted(edges, key=lambda e: e.node.simulation_count, reverse=True)
+            print("Top 5 moves by visit count:", file=sys.stderr)
+            for i, edge in enumerate(sorted_edges[:5]):
+                action_desc = edge.action.print_desc(bc)
+                visits = edge.node.simulation_count
+                avg_value = edge.node.evaluation_sum / visits if visits > 0 else 0
+                print(f"  {i+1}. {action_desc} - visits: {visits}, avg_value: {avg_value:.2f}", file=sys.stderr)
+
         return spirecomm_action
 
 
