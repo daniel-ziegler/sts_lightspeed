@@ -333,7 +333,7 @@ namespace sts {
         "GremlinTsundere",
         "SlimeBoss",
         "SnakePlant",
-        "SneakyGremlin",
+        "GremlinThief",
         "Snecko",
         "SphericGuardian",
         "Spiker",

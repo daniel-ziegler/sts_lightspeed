@@ -18,8 +18,11 @@ namespace sts::search {
         fixed_list<int,16> mapPath;
 
         bool print = false;
+        bool randomize = false;
+        std::default_random_engine rng;
 
         SimpleAgent();
+        SimpleAgent(bool randomizeMode, std::uint64_t seed = 0);
 
         [[nodiscard]] int getIncomingDamage(const BattleContext &bc) const;
 

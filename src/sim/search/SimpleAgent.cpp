@@ -36,42 +36,73 @@ bool shouldSkip(CardId id) {
     return cardPriorityMap[static_cast<int>(id)] > cardPriorityMap[static_cast<int>(CardId::ANGER)];
 }
 
-int getHighHpMonster(const BattleContext &bc) {
+int getHighHpMonster(const BattleContext &bc, bool randomize, std::default_random_engine &rng) {
     int highHp = -1;
-    int highIdx = -1;
+    fixed_list<int, 5> highIdxs;
+
     for (int i = 0; i < bc.monsters.monsterCount; ++i) {
-        if (bc.monsters.arr[i].isTargetable() && bc.monsters.arr[i].curHp > highHp) {
-            highHp = bc.monsters.arr[i].curHp;
-            highIdx = i;
+        if (bc.monsters.arr[i].isTargetable()) {
+            if (bc.monsters.arr[i].curHp > highHp) {
+                highHp = bc.monsters.arr[i].curHp;
+                highIdxs.clear();
+                highIdxs.push_back(i);
+            } else if (randomize && bc.monsters.arr[i].curHp == highHp) {
+                highIdxs.push_back(i);
+            }
         }
     }
-    return highIdx;
+
+    if (randomize && highIdxs.size() > 1) {
+        std::uniform_int_distribution<int> dist(0, highIdxs.size() - 1);
+        return highIdxs[dist(rng)];
+    }
+    return highIdxs.empty() ? -1 : highIdxs[0];
 }
 
-int getLowHpMonster(const BattleContext &bc) {
+int getLowHpMonster(const BattleContext &bc, bool randomize, std::default_random_engine &rng) {
     int lowHp = 10000;
-    int lowIdx = -1;
+    fixed_list<int, 5> lowIdxs;
+
     for (int i = 0; i < bc.monsters.monsterCount; ++i) {
-        if (bc.monsters.arr[i].isTargetable() && bc.monsters.arr[i].curHp < lowHp) {
-            lowHp = bc.monsters.arr[i].curHp;
-            lowIdx = i;
+        if (bc.monsters.arr[i].isTargetable()) {
+            if (bc.monsters.arr[i].curHp < lowHp) {
+                lowHp = bc.monsters.arr[i].curHp;
+                lowIdxs.clear();
+                lowIdxs.push_back(i);
+            } else if (randomize && bc.monsters.arr[i].curHp == lowHp) {
+                lowIdxs.push_back(i);
+            }
         }
     }
-    return lowIdx;
+
+    if (randomize && lowIdxs.size() > 1) {
+        std::uniform_int_distribution<int> dist(0, lowIdxs.size() - 1);
+        return lowIdxs[dist(rng)];
+    }
+    return lowIdxs.empty() ? -1 : lowIdxs[0];
 }
 
-int getBestCardToPlay(const BattleContext &bc, fixed_list<int,10> handIdxs) {
+int getBestCardToPlay(const BattleContext &bc, fixed_list<int,10> handIdxs, bool randomize, std::default_random_engine &rng) {
     int bestPriority = 10000;
-    int bestHandIdx;
+    fixed_list<int,10> bestHandIdxs;
+
     for (int i = 0; i < handIdxs.size(); ++i) {
         const auto c = bc.cards.hand[handIdxs[i]];
         const int priority = 2 * cardPlayMap[static_cast<int>(c.getId())] + (c.isUpgraded() ? -1 : 0);
         if (priority < bestPriority) {
             bestPriority = priority;
-            bestHandIdx = handIdxs[i];
+            bestHandIdxs.clear();
+            bestHandIdxs.push_back(handIdxs[i]);
+        } else if (randomize && priority == bestPriority) {
+            bestHandIdxs.push_back(handIdxs[i]);
         }
     }
-    return bestHandIdx;
+
+    if (randomize && bestHandIdxs.size() > 1) {
+        std::uniform_int_distribution<int> dist(0, bestHandIdxs.size() - 1);
+        return bestHandIdxs[dist(rng)];
+    }
+    return bestHandIdxs[0];
 }
 
 void sortCardOptions(const GameContext &gc, fixed_list<int,96> &sortedCardIdxs) {
@@ -248,6 +279,13 @@ search::SimpleAgent::SimpleAgent() {
     initMaps();
 }
 
+search::SimpleAgent::SimpleAgent(bool randomizeMode, std::uint64_t seed) : randomize(randomizeMode) {
+    initMaps();
+    if (randomize) {
+        rng.seed(seed);
+    }
+}
+
 void search::SimpleAgent::takeAction(GameContext &gc, GameAction a) {
     actionHistory.emplace_back(a.bits);
     if (print) {
@@ -297,7 +335,7 @@ bool search::SimpleAgent::playPotion(BattleContext &bc) {
                 if (bc.monsters.getTargetableCount() <= 0) {
                     continue;
                 }
-                target = getHighHpMonster(bc);
+                target = getHighHpMonster(bc, randomize, rng);
 
             } else {
 
@@ -393,16 +431,16 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
 
     int bestCardIdx = playableCardsIdxs.front();
     if (!zeroCostNonAttacks.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, zeroCostNonAttacks);
+        bestCardIdx = getBestCardToPlay(bc, zeroCostNonAttacks, randomize, rng);
 
     } else if (!nonZeroCostCards.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, nonZeroCostCards);
+        bestCardIdx = getBestCardToPlay(bc, nonZeroCostCards, randomize, rng);
         if (!aoeCards.empty() && bc.monsters.monstersAlive > 1 && bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
-            bestCardIdx = getBestCardToPlay(bc, aoeCards);
+            bestCardIdx = getBestCardToPlay(bc, aoeCards, randomize, rng);
         }
 
     } else if (!zeroCostAttacks.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, zeroCostAttacks);
+        bestCardIdx = getBestCardToPlay(bc, zeroCostAttacks, randomize, rng);
 
     } else {
         return Action(ActionType::END_TURN);
@@ -415,9 +453,9 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
 
     int targetIdx;
     if (c.getType() == CardType::ATTACK) {
-         targetIdx = getLowHpMonster(bc);
+         targetIdx = getLowHpMonster(bc, randomize, rng);
     } else {
-        targetIdx = getHighHpMonster(bc);
+        targetIdx = getHighHpMonster(bc, randomize, rng);
     }
     return Action(ActionType::CARD, bestCardIdx, targetIdx);
 }
@@ -532,10 +570,44 @@ search::Action search::SimpleAgent::chooseBattleCardSelect(BattleContext &bc) {
         case CardSelectTask::SETUP:
         case CardSelectTask::SEEK:
         case CardSelectTask::WARCRY:
+            if (randomize && !actions.empty()) {
+                // Find all cards with the same priority as the best card
+                auto bestPriority = 2 * cardPriorityMap[static_cast<int>(actions[0].second.id)] + (actions[0].second.isUpgraded() ? -1 : 0);
+                int count = 1;
+                for (int i = 1; i < actions.size(); ++i) {
+                    auto priority = 2 * cardPriorityMap[static_cast<int>(actions[i].second.id)] + (actions[i].second.isUpgraded() ? -1 : 0);
+                    if (priority == bestPriority) {
+                        count++;
+                    } else {
+                        break;
+                    }
+                }
+                if (count > 1) {
+                    std::uniform_int_distribution<int> dist(0, count - 1);
+                    return actions[dist(rng)].first;
+                }
+            }
             return actions.front().first;
 
         case CardSelectTask::EXHAUST_ONE:
         case CardSelectTask::RECYCLE:
+            if (randomize && !actions.empty()) {
+                // Find all cards with the same priority as the worst card
+                auto worstPriority = 2 * cardPriorityMap[static_cast<int>(actions.back().second.id)] + (actions.back().second.isUpgraded() ? -1 : 0);
+                int count = 1;
+                for (int i = actions.size() - 2; i >= 0; --i) {
+                    auto priority = 2 * cardPriorityMap[static_cast<int>(actions[i].second.id)] + (actions[i].second.isUpgraded() ? -1 : 0);
+                    if (priority == worstPriority) {
+                        count++;
+                    } else {
+                        break;
+                    }
+                }
+                if (count > 1) {
+                    std::uniform_int_distribution<int> dist(0, count - 1);
+                    return actions[actions.size() - 1 - dist(rng)].first;
+                }
+            }
             return actions.back().first;
 
         case CardSelectTask::EXHAUST_MANY:
@@ -563,13 +635,25 @@ void search::SimpleAgent::stepOutOfCombat(GameContext &gc) {
         case ScreenState::BOSS_RELIC_REWARDS: {
             int bestIdx;
             int bestPriority = 1000;
+            fixed_list<int, 3> bestIdxs;
+
             for (int i = 0; i < 3; ++i) {
                 const auto priority = bossRelicPriorityMap[static_cast<int>(gc.info.bossRelics[i])];
                 if (priority < bestPriority) {
                     bestPriority = priority;
+                    bestIdxs.clear();
+                    bestIdxs.push_back(i);
                     bestIdx = i;
+                } else if (randomize && priority == bestPriority) {
+                    bestIdxs.push_back(i);
                 }
             }
+
+            if (randomize && bestIdxs.size() > 1) {
+                std::uniform_int_distribution<int> dist(0, bestIdxs.size() - 1);
+                bestIdx = bestIdxs[dist(rng)];
+            }
+
             takeAction(gc, {GameAction::RewardsActionType::RELIC, bestIdx});
             break;
         }

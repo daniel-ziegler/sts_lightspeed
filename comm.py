@@ -1055,7 +1055,7 @@ def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext"
         if target_idx >= 0 and target_idx < len(game.monsters):
             target_monster = game.monsters[target_idx]
             
-        return PlayCardAction(card_index=card_index, target_monster=target_monster)
+        return PlayCardAction(card_index=card_index, target_index=target_idx)
         
     elif action_type == sts.ActionType.POTION:
         # Using a potion - need potion index and optional target
@@ -1071,7 +1071,7 @@ def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext"
             if target_idx >= 0 and target_idx < len(game.monsters):
                 target_monster = game.monsters[target_idx]
                 
-            return PotionAction(True, potion=potion, target_monster=target_monster)
+            return PotionAction(True, potion=potion, target_index=target_idx)
         else:
             raise ValueError(f"Invalid potion index: {potion_idx}")
             
@@ -1344,12 +1344,13 @@ class STSLightspeedAgent:
         
         # Create and configure the battle searcher
         searcher = sts.BattleSearcher(bc)
+        searcher.exploration_parameter = 20
         
         # Run search with a moderate number of simulations
         # More simulations = better play but slower response
-        simulation_count = 3000
-        if len(self.game.monsters) > 1:
-            simulation_count = 5000  # More simulations for multi-enemy fights
+        simulation_count = 5000
+        if len(self.game.monsters) > 1 or self.game.monsters[0].max_hp > 150:
+            simulation_count = 10000  # More simulations for multi-enemy fights or big baddies
         
         print("=" * 80, file=sys.stderr)
         print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)

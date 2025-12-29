@@ -21,7 +21,7 @@ namespace sts::search {
 
 
 search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc _evalFnc)
-    : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum) {
+    : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum), rolloutAgent(true, bc.seed+bc.floorNum) {
 }
 
 search::BattleSearcher::Node::Node(const Node& other)
