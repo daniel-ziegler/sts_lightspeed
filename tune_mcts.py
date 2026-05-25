@@ -86,7 +86,7 @@ def main():
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--search-budget", type=int, default=2000)
     ap.add_argument("--search-limit", type=int, default=500)
-    ap.add_argument("--valid-budget", type=int, default=20000)
+    ap.add_argument("--valid-budget", type=int, default=5000)
     ap.add_argument("--valid-limit", type=int, default=0)
     ap.add_argument("--max-fevals", type=int, default=120)
     ap.add_argument("--sigma0", type=float, default=0.25)

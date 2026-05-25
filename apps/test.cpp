@@ -13,6 +13,7 @@
 #include <random>
 #include <vector>
 #include <string>
+#include <cmath>
 
 #include "data_structure/fixed_list.h"
 #include "constants/Cards.h"
@@ -31,6 +32,7 @@
 
 #include "sim/search/BattleSearcher.h"
 #include "combat/Actions.h"
+#include "constants/MonsterEncounters.h"
 
 using namespace sts;
 
@@ -139,6 +141,9 @@ struct AgentMtInfo {
 static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
+static double g_explorationParameter = 3 * std::sqrt(2.0);
+static double g_chanceWideningC = 1.0;
+static double g_chanceWideningAlpha = 0.5;
 
 void agentMtRunner(AgentMtInfo *info) {
     std::uint64_t seed;
@@ -155,6 +160,9 @@ void agentMtRunner(AgentMtInfo *info) {
         GameContext gc(CharacterClass::IRONCLAD, seed, g_searchAscension);
         search::SearchAgent agent;
         agent.simulationCountBase = g_simulationCount;
+        agent.explorationParameter = g_explorationParameter;
+        agent.chanceWideningC = g_chanceWideningC;
+        agent.chanceWideningAlpha = g_chanceWideningAlpha;
         agent.rng = std::default_random_engine(gc.seed);
 
         agent.printActions = g_print_level & 0x1;
@@ -531,6 +539,26 @@ static int evalStates(int argc, const char *argv[]) {
     return 0;
 }
 
+static int showStates(int argc, const char *argv[]) {
+    const std::string stateFile = argv[2];
+    const int count = std::stoi(argv[3]);
+    const std::vector<GameStateRecord> records = loadRecords(stateFile, count);
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        const GameContext gc = loadPreBattleState(records[i]);
+        std::cout << "===== state " << i << "  seed=" << records[i].seed
+                  << "  (prefix " << records[i].actions.size() << " actions) =====\n";
+        std::cout << "  floor " << gc.floorNum << "  act " << gc.act
+                  << "  asc " << gc.ascension
+                  << "  | upcoming: " << monsterEncounterStrings[static_cast<int>(gc.info.encounter)] << "\n";
+        std::cout << "  hp " << gc.curHp << "/" << gc.maxHp
+                  << "  | gold " << gc.gold
+                  << "  | potions " << gc.potionCount << "/" << gc.potionCapacity << "\n";
+        std::cout << "  relics " << gc.relics << "\n";
+        std::cout << "  deck " << gc.deck << "\n";
+    }
+    return 0;
+}
+
 int main(int argc, const char* argv[]) {
 
     if (argc < 2) {
@@ -602,6 +630,19 @@ int main(int argc, const char* argv[]) {
         return genStates(argc, argv);
     } else if (command == "eval_states") {
         return evalStates(argc, argv);
+    } else if (command == "show_states") {
+        return showStates(argc, argv);
+    } else if (command == "winrate_mt") {
+        const int threadCount = std::stoi(argv[2]);
+        const std::uint64_t startSeed = std::stoull(argv[3]);
+        const int playoutCount = std::stoi(argv[4]);
+        g_simulationCount = std::stoi(argv[5]);
+        g_searchAscension = std::stoi(argv[6]);
+        g_explorationParameter = std::stod(argv[7]);
+        g_chanceWideningC = std::stod(argv[8]);
+        g_chanceWideningAlpha = std::stod(argv[9]);
+        g_print_level = 0;
+        agentMt(threadCount, startSeed, playoutCount);
     } else if (command == "playground") {
         std::vector<CardInstance> cards;
         cards.push_back(CardInstance(CardId::DEFEND_RED));
