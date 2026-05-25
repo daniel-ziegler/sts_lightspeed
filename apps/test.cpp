@@ -8,6 +8,11 @@
 #include <thread>
 #include <memory>
 #include <mutex>
+#include <fstream>
+#include <sstream>
+#include <random>
+#include <vector>
+#include <string>
 
 #include "data_structure/fixed_list.h"
 #include "constants/Cards.h"
@@ -256,6 +261,276 @@ int mcts(int argc, const char *argv[]) {
     return 0;
 }
 
+// ---- Pre-battle state collection + hyperparameter evaluation ----
+
+struct GameStateRecord {
+    int charInt;
+    std::uint64_t seed;
+    int ascension;
+    std::vector<std::uint32_t> actions;
+};
+
+// Reconstruct the GameContext sitting right at the start of the target battle by
+// replaying a recorded mixed GameAction/search::Action stream (no search). Mirrors
+// replayActionFile, but the prefix ends exactly when the battle screen is reached.
+static GameContext loadPreBattleState(const GameStateRecord &rec) {
+    GameContext gc(static_cast<CharacterClass>(rec.charInt), rec.seed, rec.ascension);
+    BattleContext bc;
+    bool inBattle = false;
+    std::size_t idx = 0;
+
+    while (idx < rec.actions.size()) {
+        if (inBattle) {
+            if (bc.outcome != sts::Outcome::UNDECIDED) {
+                bc.exitBattle(gc);
+                inBattle = false;
+            } else {
+                search::Action(rec.actions[idx++]).execute(bc);
+            }
+        } else {
+            if (gc.outcome != GameOutcome::UNDECIDED) {
+                throw std::runtime_error("loadPreBattleState: game ended before consuming prefix");
+            }
+            if (gc.screenState == ScreenState::BATTLE) {
+                bc = {};
+                bc.init(gc);
+                inBattle = true;
+            } else {
+                GameAction(rec.actions[idx++]).execute(gc);
+            }
+        }
+    }
+
+    if (inBattle) {
+        throw std::runtime_error("loadPreBattleState: prefix ended mid-battle");
+    }
+    if (gc.screenState != ScreenState::BATTLE) {
+        throw std::runtime_error("loadPreBattleState: prefix did not end at a battle");
+    }
+    return gc;
+}
+
+struct GenStatesInfo {
+    std::mutex m;
+    std::uint64_t curSeed = 0;
+    std::uint64_t seedEnd = 0;
+    int simBudget = 0;
+    int ascension = 0;
+    std::ofstream *out = nullptr;
+    int recordsWritten = 0;
+};
+
+static void genStatesRunner(GenStatesInfo *info) {
+    while (true) {
+        std::uint64_t seed;
+        {
+            std::scoped_lock lock(info->m);
+            if (info->curSeed >= info->seedEnd) {
+                break;
+            }
+            seed = info->curSeed++;
+        }
+
+        GameContext gc(CharacterClass::IRONCLAD, seed, info->ascension);
+        search::SearchAgent agent;
+        agent.simulationCountBase = info->simBudget;
+        agent.recordActions = true;
+        agent.verbosityLevel = 0;
+        agent.rng = std::default_random_engine(gc.seed);
+
+        agent.playout(gc);
+
+        if (agent.battleStartIndices.empty()) {
+            continue;
+        }
+
+        std::mt19937_64 pickRng(gc.seed);
+        std::uniform_int_distribution<std::size_t> dist(0, agent.battleStartIndices.size() - 1);
+        const int prefixLen = agent.battleStartIndices[dist(pickRng)];
+
+        std::ostringstream line;
+        line << static_cast<int>(CharacterClass::IRONCLAD) << ' '
+             << std::hex << seed << std::dec << ' '
+             << info->ascension << ' '
+             << prefixLen;
+        for (int i = 0; i < prefixLen; ++i) {
+            line << ' ' << std::hex << static_cast<std::uint32_t>(agent.gameActionHistory[i]) << std::dec;
+        }
+        line << '\n';
+
+        {
+            std::scoped_lock lock(info->m);
+            (*info->out) << line.str();
+            ++info->recordsWritten;
+            std::cout << "\rrecords: " << info->recordsWritten << std::flush;
+        }
+    }
+}
+
+static int genStates(int argc, const char *argv[]) {
+    const int threadCount = std::stoi(argv[2]);
+    const std::uint64_t startSeed = std::stoull(argv[3]);
+    const int gameCount = std::stoi(argv[4]);
+    const int simBudget = std::stoi(argv[5]);
+    const int ascension = std::stoi(argv[6]);
+    const std::string outFile = argv[7];
+
+    std::ofstream out(outFile);
+    if (!out) {
+        throw std::runtime_error("gen_states: cannot open output file: " + outFile);
+    }
+
+    GenStatesInfo info;
+    info.curSeed = startSeed;
+    info.seedEnd = startSeed + gameCount;
+    info.simBudget = simBudget;
+    info.ascension = ascension;
+    info.out = &out;
+
+    auto startTime = std::chrono::high_resolution_clock::now();
+    std::vector<std::unique_ptr<std::thread>> threads;
+    if (threadCount == 1) {
+        genStatesRunner(&info);
+    } else {
+        for (int t = 0; t < threadCount; ++t) {
+            threads.emplace_back(new std::thread(genStatesRunner, &info));
+        }
+        for (auto &th : threads) {
+            th->join();
+        }
+    }
+    out.flush();
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    const double duration = std::chrono::duration<double>(endTime - startTime).count();
+    std::cout << "\ngen_states: wrote " << info.recordsWritten << " records in "
+              << duration << "s" << std::endl;
+    return 0;
+}
+
+static std::vector<GameStateRecord> loadRecords(const std::string &path, int limit) {
+    std::ifstream ifs(path);
+    if (!ifs) {
+        throw std::runtime_error("cannot open state file: " + path);
+    }
+    std::vector<GameStateRecord> records;
+    std::string line;
+    while (std::getline(ifs, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        std::istringstream iss(line);
+        GameStateRecord rec;
+        int n = 0;
+        iss >> rec.charInt;
+        iss >> std::hex >> rec.seed;
+        iss >> std::dec >> rec.ascension >> n;
+        rec.actions.resize(n);
+        iss >> std::hex;
+        for (int i = 0; i < n; ++i) {
+            iss >> rec.actions[i];
+        }
+        records.push_back(std::move(rec));
+        if (limit > 0 && static_cast<int>(records.size()) >= limit) {
+            break;
+        }
+    }
+    return records;
+}
+
+struct EvalStatesInfo {
+    std::mutex m;
+    const std::vector<GameStateRecord> *records = nullptr;
+    std::size_t next = 0;
+
+    double explorationParameter = 0;
+    double chanceWideningC = 0;
+    double chanceWideningAlpha = 0;
+    int simBudget = 0;
+
+    double scoreSum = 0;
+    int winCount = 0;
+    double hpSum = 0;
+    int n = 0;
+};
+
+static void evalStatesRunner(EvalStatesInfo *info) {
+    while (true) {
+        std::size_t idx;
+        {
+            std::scoped_lock lock(info->m);
+            if (info->next >= info->records->size()) {
+                break;
+            }
+            idx = info->next++;
+        }
+
+        GameContext gc = loadPreBattleState((*info->records)[idx]);
+        BattleContext bc;
+        bc.init(gc);
+
+        search::SearchAgent agent;
+        agent.simulationCountBase = info->simBudget;
+        agent.explorationParameter = info->explorationParameter;
+        agent.chanceWideningC = info->chanceWideningC;
+        agent.chanceWideningAlpha = info->chanceWideningAlpha;
+        agent.verbosityLevel = 0;
+        agent.rng = std::default_random_engine(gc.seed);
+
+        agent.playoutBattle(bc);
+
+        const bool dead = (bc.outcome == sts::Outcome::PLAYER_LOSS);
+        const double score = dead ? -200.0 : (bc.player.curHp + 10.0 * bc.potionCount);
+
+        {
+            std::scoped_lock lock(info->m);
+            info->scoreSum += score;
+            if (!dead) {
+                ++info->winCount;
+                info->hpSum += bc.player.curHp;
+            }
+            ++info->n;
+        }
+    }
+}
+
+static int evalStates(int argc, const char *argv[]) {
+    const int threadCount = std::stoi(argv[2]);
+    const std::string stateFile = argv[3];
+    const double exploration = std::stod(argv[4]);
+    const double wideningC = std::stod(argv[5]);
+    const double wideningAlpha = std::stod(argv[6]);
+    const int simBudget = std::stoi(argv[7]);
+    const int stateLimit = std::stoi(argv[8]);
+
+    const std::vector<GameStateRecord> records = loadRecords(stateFile, stateLimit);
+
+    EvalStatesInfo info;
+    info.records = &records;
+    info.explorationParameter = exploration;
+    info.chanceWideningC = wideningC;
+    info.chanceWideningAlpha = wideningAlpha;
+    info.simBudget = simBudget;
+
+    std::vector<std::unique_ptr<std::thread>> threads;
+    if (threadCount == 1) {
+        evalStatesRunner(&info);
+    } else {
+        for (int t = 0; t < threadCount; ++t) {
+            threads.emplace_back(new std::thread(evalStatesRunner, &info));
+        }
+        for (auto &th : threads) {
+            th->join();
+        }
+    }
+
+    const double meanScore = info.n > 0 ? info.scoreSum / info.n : 0.0;
+    const double winRate = info.n > 0 ? static_cast<double>(info.winCount) / info.n : 0.0;
+    const double avgHp = info.winCount > 0 ? info.hpSum / info.winCount : 0.0;
+    std::cout << "SCORE " << meanScore << ' ' << winRate << ' ' << avgHp << ' ' << info.n << std::endl;
+    return 0;
+}
+
 int main(int argc, const char* argv[]) {
 
     if (argc < 2) {
@@ -323,6 +598,10 @@ int main(int argc, const char* argv[]) {
 
     } else if (command == "mcts_save") {
         return mcts(argc, argv);
+    } else if (command == "gen_states") {
+        return genStates(argc, argv);
+    } else if (command == "eval_states") {
+        return evalStates(argc, argv);
     } else if (command == "playground") {
         std::vector<CardInstance> cards;
         cards.push_back(CardInstance(CardId::DEFEND_RED));
