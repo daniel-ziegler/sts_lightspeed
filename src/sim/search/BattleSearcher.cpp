@@ -180,14 +180,11 @@ void search::BattleSearcher::step() {
     Node* cur = &root;
     int depth = 0;
     while (true) {
-        // Defensive bound only. The search-state key includes turn and cardsPlayedThisTurn,
-        // both monotonically non-decreasing along any action path, so the transposition graph
-        // is acyclic and this cannot fire in practice.
+        // The search-state key includes turn and cardsPlayedThisTurn, both non-decreasing along
+        // any action path, so the transposition graph is acyclic and descent is bounded. If this
+        // trips, that invariant is broken -- fail loudly rather than search a corrupt graph.
         if (++depth > 5000) {
-#ifdef sts_asserts
-            assert(false && "search descent exceeded depth bound -- unexpected state-key cycle");
-#endif
-            return;
+            throw std::runtime_error("BattleSearcher::step descent exceeded depth bound -- state-key cycle?");
         }
 
         if (cur->isRandomNode) {
