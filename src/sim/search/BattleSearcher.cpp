@@ -355,27 +355,54 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
     assert(chance.isRandomNode);
     assert(chance.parent != nullptr);
 #endif
-    // Sample a fresh outcome by reseeding from the canonical pre-action state and re-executing
-    // the stochastic action. Sequential N gives i.i.d. samples (Random hashes its seed), and
-    // identical outcomes dedup to one child so high-probability outcomes accumulate visits and
-    // deepen. NOTE: this widens on every visit; Double Progressive Widening is added next commit.
-    const std::uint64_t N = chance.outcomesGenerated++;
-    BattleContext out = chance.parent->state;
-    out.rng = Random(chance.randomnessBase + N);
-    chance.stochasticAction.execute(out);
+    // Double Progressive Widening. Below the cap we draw a fresh i.i.d. outcome; at the cap we
+    // reuse an existing one. This bounds the branching of high-entropy events so their children
+    // accumulate visits and the tree deepens, while the visit-weighted average over outcomes
+    // remains an unbiased estimate of the chance node's expectation.
+    const std::int64_t n = chance.simulationCount;
+    const int cap = std::max(1, static_cast<int>(
+            std::ceil(chanceWideningC * std::pow(static_cast<double>(n + 1), chanceWideningAlpha))));
 
-    Node* child = getOrCreateNode(out);
-    for (auto &e : chance.edges) {
-        if (e.node == child) {
-            return &e;  // resampled an outcome we have already seen
+    if (static_cast<int>(chance.edges.size()) < cap) {
+        // Widen: reseed from the canonical pre-action state, re-execute, dedup by state.
+        // Sequential N gives i.i.d. samples because Random hashes its seed (murmurHash3).
+        const std::uint64_t N = chance.outcomesGenerated++;
+        BattleContext out = chance.parent->state;
+        out.rng = Random(chance.randomnessBase + N);
+        chance.stochasticAction.execute(out);
+
+        Node* child = getOrCreateNode(out);
+        for (auto &e : chance.edges) {
+            if (e.node == child) {
+                return &e;  // resampled an outcome we already have
+            }
         }
+
+        Edge e;
+        e.action = Action{};
+        e.node = child;
+        e.rngAdvanceSteps = static_cast<int>(N);
+        chance.edges.push_back(std::move(e));
+        return &chance.edges.back();
     }
 
-    Edge e;
-    e.action = Action{};
-    e.node = child;
-    e.rngAdvanceSteps = static_cast<int>(N);
-    chance.edges.push_back(std::move(e));
+    // Capped: re-select an existing outcome proportional to its visit count, so the realized
+    // descent frequencies keep tracking the true outcome probabilities.
+    std::int64_t totalVisits = 0;
+    for (const auto &e : chance.edges) {
+        totalVisits += e.visitCount;
+    }
+    if (totalVisits <= 0) {
+        return &chance.edges[0];
+    }
+    std::uniform_int_distribution<std::int64_t> dist(0, totalVisits - 1);
+    std::int64_t r = dist(randGen);
+    for (auto &e : chance.edges) {
+        r -= e.visitCount;
+        if (r < 0) {
+            return &e;
+        }
+    }
     return &chance.edges.back();
 }
 

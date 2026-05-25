@@ -54,6 +54,11 @@ namespace sts::search {
         EvalFnc evalFnc;
         double explorationParameter = 3*sqrt(2);
 
+        // Double Progressive Widening for chance nodes: after n visits a chance node may
+        // hold at most ceil(chanceWideningC * (n+1)^chanceWideningAlpha) distinct outcomes.
+        double chanceWideningC = 1.0;
+        double chanceWideningAlpha = 0.5;
+
         std::default_random_engine randGen;
 
         std::vector<Node*> searchStack;
