@@ -27,25 +27,29 @@ namespace sts::search {
             std::int64_t simulationCount = 0;
             double evaluationSum = 0;
             std::vector<Edge> edges;
-            // BattleContext state;  // TODO: Re-enable after fixing copy issues
+            BattleContext state;                // game state at this node (decision nodes; chance nodes read parent->state)
             bool isRandomNode = false;
-            Action stochasticAction;
-            int outcomesGenerated = 0;
-            std::uint64_t randomnessBase = 0;  // Base value for RNG branching, sampled from parent's pre-action RNG
+            Action stochasticAction;            // chance node: the action that consumed RNG
+            Node* parent = nullptr;             // chance node: spawning decision node (source of pre-action state)
+            int outcomesGenerated = 0;          // chance node: number of RNG outcomes sampled so far
+            std::uint64_t randomnessBase = 0;   // chance node: RNG base, sampled from parent's pre-action RNG
         };
 
         struct Edge {
             Action action;
-            Node* node = nullptr;  // Raw pointer for graph search
-            int rngAdvanceSteps = 0;
+            Node* node = nullptr;               // child (shared across paths via transposition)
+            int rngAdvanceSteps = 0;            // chance outcome edge: the N used for Random(base + N)
+            std::int32_t visitCount = 0;        // times this edge was traversed (UCB / DPW reselection)
         };
 
         std::unique_ptr<const BattleContext> rootState;
         Node root;
 
-        // Graph search: node pool and state deduplication
+        // Graph search: node pool and state deduplication.
+        // stateToNode buckets by search-hash; collisions are resolved by equalForSearch,
+        // so distinct states that happen to share a hash are never merged.
         std::vector<std::unique_ptr<Node>> allNodes;  // Pool of all created nodes
-        std::unordered_map<size_t, Node*> stateToNode;  // State hash -> Node mapping
+        std::unordered_map<size_t, std::vector<Node*>> stateToNode;
 
         EvalFnc evalFnc;
         double explorationParameter = 3*sqrt(2);
@@ -83,7 +87,7 @@ namespace sts::search {
         void enumerateCardActions(Node &node, const BattleContext &bc);
         void enumeratePotionActions(Node &node, const BattleContext &bc);
         void enumerateCardSelectActions(Node &node, const BattleContext &bc);
-        void expandRandomOutcome(Node &randomNode, BattleContext &curState);
+        Edge* selectChanceOutcome(Node &chance);
         static double evaluateEndState(const BattleContext &bc);
 
         void printSearchTree(std::ostream &os, int levels);

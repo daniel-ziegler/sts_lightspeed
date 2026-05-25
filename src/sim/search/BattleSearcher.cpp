@@ -133,38 +133,38 @@ search::BattleSearcher::~BattleSearcher() {
 }
 
 search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(const BattleContext &state) {
-    // Compute hash of the game state
-    size_t hash = search::hashBattleState(state);
+    const size_t hash = search::hashBattleState(state);
 
-    // Check if we've seen this state before
-    auto it = stateToNode.find(hash);
-    if (it != stateToNode.end()) {
-        return it->second;
+    // Resolve hash collisions exactly: only reuse a node whose stored state is
+    // search-equal. This is what makes transposition safe without a perfect hash.
+    auto &bucket = stateToNode[hash];
+    for (Node* candidate : bucket) {
+        if (candidate->state.equalForSearch(state)) {
+            return candidate;
+        }
     }
 
-    // New state - create new node
     allNodes.push_back(std::make_unique<Node>());
     Node* newNode = allNodes.back().get();
-
-    // Add to hash map for future deduplication
-    stateToNode[hash] = newNode;
-
+    newNode->state = state;
+    bucket.push_back(newNode);
     return newNode;
 }
 
 void search::BattleSearcher::search(int64_t simulations) {
     g_debug_scum_search = this;
 
-    if (isTerminalState(*rootState)) {
-        auto evaluation = evaluateEndState(*rootState);
-
-        root.evaluationSum = evaluation;
-        root.simulationCount = 1;
-    }
-
-    // Clear node pool for fresh search
+    // Fresh search: reset the node pool and root (root.edges hold raw pointers into the pool).
     allNodes.clear();
     stateToNode.clear();
+    root = Node();
+    root.state = *rootState;
+
+    if (isTerminalState(root.state)) {
+        root.evaluationSum = evaluateEndState(root.state);
+        root.simulationCount = 1;
+        return;
+    }
 
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
@@ -172,163 +172,98 @@ void search::BattleSearcher::search(int64_t simulations) {
 }
 
 void search::BattleSearcher::step() {
-    searchStack = {&root};
+    searchStack.clear();
+    searchStack.push_back(&root);
     actionStack.clear();
-    BattleContext curState = *rootState;
 
-    int loopCount = 0;
+    Node* cur = &root;
+    int depth = 0;
     while (true) {
-        ++loopCount;
-        if (loopCount > 1000) {
+        // Safety valve. With proper chance handling and a monotonic turn counter this
+        // should never trigger; a cycle guard replaces it in a later commit.
+        if (++depth > 5000) {
             return;
         }
 
-        auto &curNode = *searchStack.back();
+        if (cur->isRandomNode) {
+            // Chance node: resolve one outcome (sampled/selected), descend into it.
+            Edge* outcomeEdge = selectChanceOutcome(*cur);
+            ++outcomeEdge->visitCount;
+            Node* child = outcomeEdge->node;
+            searchStack.push_back(child);
 
-        if (curNode.isRandomNode) {
-            // For random nodes, always expand a new outcome each visit
-            // (This explores the probability distribution over RNG outcomes)
-#ifdef sts_asserts
-            std::cerr << "RANDOM NODE: Expanding outcome, curState.cardsInHand=" << curState.cards.cardsInHand << std::endl;
-#endif
-            expandRandomOutcome(curNode, curState);
-            auto &edgeTaken = curNode.edges.back();
-
-            // Lazy node creation for random outcome
-            if (edgeTaken.node == nullptr) {
-                edgeTaken.node = getOrCreateNode(curState);
+            if (child->simulationCount == 0) {
+                BattleContext rollout = child->state;
+                rolloutToEnd(rollout, actionStack);
+                updateFromPlayout(searchStack, actionStack, rollout);
+                return;
             }
-
-            searchStack.push_back(edgeTaken.node);
+            cur = child;
             continue;
         }
 
-        if (isTerminalState(curState)) {
-            updateFromPlayout(searchStack, actionStack, curState);
+        if (isTerminalState(cur->state)) {
+            updateFromPlayout(searchStack, actionStack, cur->state);
             return;
         }
 
-        const bool isLeaf = curNode.edges.empty();
-        if (isLeaf) {
+        if (cur->edges.empty()) {
             ++simulationIdx;
-            enumerateActionsForNode(curNode, curState);
-            const auto selectIdx = selectFirstActionForLeafNode(curNode);
-            auto &edgeTaken = curNode.edges[selectIdx];
-
-            // Snapshot RNG before executing action
-            const auto rngCounterBefore = curState.rng.counter;
-            Random preActionRng = curState.rng;
-
-            edgeTaken.action.execute(curState);
-            actionStack.push_back(edgeTaken.action);
-
-            const bool rngChanged = curState.rng.counter != rngCounterBefore;
-            if (rngChanged) {
-                // Stochastic action - create random node if needed
-                if (edgeTaken.node == nullptr) {
-                    // First visit: create and initialize random node
-                    allNodes.push_back(std::make_unique<Node>());
-                    edgeTaken.node = allNodes.back().get();
-
-                    edgeTaken.node->isRandomNode = true;
-                    edgeTaken.node->stochasticAction = edgeTaken.action;
-                    edgeTaken.node->outcomesGenerated = 0;
-                    edgeTaken.node->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
-
-                    // First outcome edge
-                    search::BattleSearcher::Edge observedOutcomeEdge;
-                    observedOutcomeEdge.action = Action{};
-                    observedOutcomeEdge.rngAdvanceSteps = 0;
-                    edgeTaken.node->edges.push_back(std::move(observedOutcomeEdge));
-                    ++edgeTaken.node->outcomesGenerated;
-                }
-
-                // Descend through random node into first outcome
-                searchStack.push_back(edgeTaken.node);
-
-                auto &firstOutcomeEdge = edgeTaken.node->edges[0];
-                if (firstOutcomeEdge.node == nullptr) {
-                    firstOutcomeEdge.node = getOrCreateNode(curState);
-                }
-                searchStack.push_back(firstOutcomeEdge.node);
-            } else {
-                // Deterministic: lazy create and descend normally
-                if (edgeTaken.node == nullptr) {
-                    edgeTaken.node = getOrCreateNode(curState);
-                }
-                searchStack.push_back(edgeTaken.node);
-            }
-
-            rolloutToEnd(curState, actionStack);
-            updateFromPlayout(searchStack, actionStack, curState);
-            return;
-
-        } else {
-            const auto selectIdx = selectBestEdgeToSearch(curNode);
-            auto &edgeTaken = curNode.edges[selectIdx];
-
-            if (!curNode.isRandomNode) {
-                // Normal node: execute action and track state
-                const auto rngCounterBefore = curState.rng.counter;
-                Random preActionRng = curState.rng;
-
-                edgeTaken.action.execute(curState);
-                actionStack.push_back(edgeTaken.action);
-
-                // Lazy node creation on first visit
-                const bool rngChanged = curState.rng.counter != rngCounterBefore;
-                if (edgeTaken.node == nullptr) {
-                    if (rngChanged) {
-                        // Action was stochastic - create random node (no deduplication)
-                        allNodes.push_back(std::make_unique<Node>());
-                        edgeTaken.node = allNodes.back().get();
-                        edgeTaken.node->isRandomNode = true;
-                        edgeTaken.node->stochasticAction = edgeTaken.action;
-                        edgeTaken.node->outcomesGenerated = 0;
-                        edgeTaken.node->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
-
-                        // Create first outcome edge
-                        Edge firstOutcome;
-                        firstOutcome.action = Action{};
-                        firstOutcome.node = nullptr;
-                        firstOutcome.rngAdvanceSteps = 0;
-                        edgeTaken.node->edges.push_back(std::move(firstOutcome));
-                        ++edgeTaken.node->outcomesGenerated;
-                    } else {
-                        // Deterministic action - can be deduplicated
-                        edgeTaken.node = getOrCreateNode(curState);
-                    }
-                }
-
-                if (rngChanged && edgeTaken.node->isRandomNode) {
-                    // Descend through random node into first outcome
-                    searchStack.push_back(edgeTaken.node);
-
-                    auto &firstOutcomeEdge = edgeTaken.node->edges[0];
-                    if (firstOutcomeEdge.node == nullptr) {
-                        firstOutcomeEdge.node = getOrCreateNode(curState);
-                    }
-                    searchStack.push_back(firstOutcomeEdge.node);
-                } else {
-                    searchStack.push_back(edgeTaken.node);
-                }
-
-            } else {
-                // Random node: replay the RNG outcome to update state
-                const std::uint64_t base = curNode.randomnessBase;
-                curState.rng = Random(base + static_cast<std::uint64_t>(edgeTaken.rngAdvanceSteps));
-
-                curNode.stochasticAction.execute(curState);
-
-                actionStack.push_back(edgeTaken.action);
-
-                if (edgeTaken.node == nullptr) {
-                    edgeTaken.node = getOrCreateNode(curState);
-                }
-
-                searchStack.push_back(edgeTaken.node);
+            enumerateActionsForNode(*cur, cur->state);
+            if (cur->edges.empty()) {
+                // No legal actions but not terminal: nothing to do but evaluate.
+                updateFromPlayout(searchStack, actionStack, cur->state);
+                return;
             }
         }
+
+        const int selectIdx = selectBestEdgeToSearch(*cur);
+        Edge &edge = cur->edges[selectIdx];
+        ++edge.visitCount;
+
+        if (edge.node != nullptr) {
+            // Already expanded: descend (transposition or revisit).
+            actionStack.push_back(edge.action);
+            cur = edge.node;
+            searchStack.push_back(cur);
+            continue;
+        }
+
+        // First traversal of this action: execute on a copy of the current state.
+        BattleContext next = cur->state;
+        const auto rngCounterBefore = next.rng.counter;
+        Random preActionRng = next.rng;
+        edge.action.execute(next);
+        actionStack.push_back(edge.action);
+        const bool rngChanged = next.rng.counter != rngCounterBefore;
+
+        if (rngChanged) {
+            // Stochastic action: create a chance node that sources its pre-action state
+            // from `cur` and resolves outcomes via Random(randomnessBase + N).
+            allNodes.push_back(std::make_unique<Node>());
+            Node* chance = allNodes.back().get();
+            chance->isRandomNode = true;
+            chance->stochasticAction = edge.action;
+            chance->parent = cur;
+            chance->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
+            edge.node = chance;
+            cur = chance;
+            searchStack.push_back(cur);
+            continue;  // outcome resolved at the top of the loop next iteration
+        }
+
+        // Deterministic action: deduplicate into a decision node.
+        Node* child = getOrCreateNode(next);
+        edge.node = child;
+        searchStack.push_back(child);
+
+        if (child->simulationCount == 0) {
+            BattleContext rollout = next;  // next == child->state
+            rolloutToEnd(rollout, actionStack);
+            updateFromPlayout(searchStack, actionStack, rollout);
+            return;
+        }
+        cur = child;  // transposed into an existing node: keep selecting downward
     }
 }
 
@@ -415,23 +350,33 @@ void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action>
     }
 }
 
-void search::BattleSearcher::expandRandomOutcome(search::BattleSearcher::Node &randomNode, BattleContext &curState) {
+search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search::BattleSearcher::Node &chance) {
 #ifdef sts_asserts
-    assert(randomNode.isRandomNode);
+    assert(chance.isRandomNode);
+    assert(chance.parent != nullptr);
 #endif
-    // Use stored randomnessBase + outcome index to create deterministic, consistent RNG stream
-    // All sibling random nodes use the same base, so outcome N has the same RNG across siblings
-    const std::uint64_t base = randomNode.randomnessBase;
-    curState.rng = Random(base + static_cast<std::uint64_t>(randomNode.outcomesGenerated));
-    randomNode.stochasticAction.execute(curState);
+    // Sample a fresh outcome by reseeding from the canonical pre-action state and re-executing
+    // the stochastic action. Sequential N gives i.i.d. samples (Random hashes its seed), and
+    // identical outcomes dedup to one child so high-probability outcomes accumulate visits and
+    // deepen. NOTE: this widens on every visit; Double Progressive Widening is added next commit.
+    const std::uint64_t N = chance.outcomesGenerated++;
+    BattleContext out = chance.parent->state;
+    out.rng = Random(chance.randomnessBase + N);
+    chance.stochasticAction.execute(out);
 
-    // Create edge with nullptr node (will be lazily created on first visit)
-    search::BattleSearcher::Edge e;
+    Node* child = getOrCreateNode(out);
+    for (auto &e : chance.edges) {
+        if (e.node == child) {
+            return &e;  // resampled an outcome we have already seen
+        }
+    }
+
+    Edge e;
     e.action = Action{};
-    e.node = nullptr;  // Lazy creation
-    e.rngAdvanceSteps = randomNode.outcomesGenerated;
-    randomNode.edges.push_back(std::move(e));
-    ++randomNode.outcomesGenerated;
+    e.node = child;
+    e.rngAdvanceSteps = static_cast<int>(N);
+    chance.edges.push_back(std::move(e));
+    return &chance.edges.back();
 }
 
 void search::BattleSearcher::enumerateActionsForNode(search::BattleSearcher::Node &node,

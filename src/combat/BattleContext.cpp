@@ -3138,6 +3138,34 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
     );
 }
 
+bool BattleContext::equalForSearch(const BattleContext &rhs) const {
+    // Same as operator== but excludes rng, loopCount, and sum (RNG + debug-only).
+    return (
+        seed == rhs.seed &&
+        turn == rhs.turn &&
+        ascension == rhs.ascension &&
+        outcome == rhs.outcome &&
+        inputState == rhs.inputState &&
+        cardSelectInfo == rhs.cardSelectInfo &&
+        monsterTurnIdx == rhs.monsterTurnIdx &&
+        isBattleOver == rhs.isBattleOver &&
+        endTurnQueued == rhs.endTurnQueued &&
+        turnHasEnded == rhs.turnHasEnded &&
+        skipMonsterTurn == rhs.skipMonsterTurn &&
+        smokeBombUsed == rhs.smokeBombUsed &&
+        actionQueue == rhs.actionQueue &&
+        cardQueue == rhs.cardQueue &&
+        potionCount == rhs.potionCount &&
+        potionCapacity == rhs.potionCapacity &&
+        potions == rhs.potions &&
+        player == rhs.player &&
+        monsters == rhs.monsters &&
+        cards == rhs.cards &&
+        curCardQueueItem == rhs.curCardQueueItem &&
+        miscBits == rhs.miscBits
+    );
+}
+
 namespace sts {
 
 

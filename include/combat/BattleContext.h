@@ -214,6 +214,12 @@ namespace sts {
         void chooseGambleCards(const fixed_list<int,10> &idxs);
 
         bool operator==(const BattleContext &rhs) const;
+
+        // Equality for MCTS transposition. Compares gameplay state but ignores the
+        // RNG stream and pure-debug counters: two states that differ only in their
+        // RNG have the same distribution of futures, so the search must treat them
+        // as the same node (randomness is averaged over at chance nodes).
+        [[nodiscard]] bool equalForSearch(const BattleContext &rhs) const;
     };
 
     std::ostream& operator<<(std::ostream &os, const BattleContext &bc);
