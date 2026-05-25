@@ -78,11 +78,10 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
         }
 
         const sts::search::BattleSearcher::Edge *bestEdge = nullptr;
-        std::int64_t maxVisits = -1;
+        std::int32_t maxVisits = -1;
         for (const auto &edge : rootNode.edges) {
-            std::int64_t sims = edge.node ? edge.node->simulationCount : 0;
-            if (sims > maxVisits) {
-                maxVisits = sims;
+            if (edge.visitCount > maxVisits) {
+                maxVisits = edge.visitCount;
                 bestEdge = &edge;
             }
         }
@@ -124,13 +123,12 @@ void search::SearchAgent::stepThroughSearchTree(BattleContext &bc, const search:
             break;
         }
 
-        std::int64_t maxSimulations = -1;
+        std::int32_t maxSimulations = -1;
         const sts::search::BattleSearcher::Edge *maxEdge = nullptr;
 
         for (const auto &edge : curNode->edges) {
-            std::int64_t sims = edge.node ? edge.node->simulationCount : 0;
-            if (sims > maxSimulations) {
-                maxSimulations = sims;
+            if (edge.visitCount > maxSimulations) {
+                maxSimulations = edge.visitCount;
                 maxEdge = &edge;
             }
         }

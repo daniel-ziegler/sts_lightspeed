@@ -290,15 +290,17 @@ double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &
 
     const auto &edge = parent.edges[edgeIdx];
 
-    // Unvisited edges (nullptr or zero visits) should be explored first
-    if (edge.node == nullptr || edge.node->simulationCount == 0) {
+    // Explore actions not yet taken from THIS parent first.
+    if (edge.visitCount == 0 || edge.node == nullptr) {
         return std::numeric_limits<double>::infinity();
     }
 
-    double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
-
-    double explorationValue = explorationParameter *
-            std::sqrt(std::log(parent.simulationCount+1) / (edge.node->simulationCount+1));
+    // Q-value uses the (possibly transposition-shared) child state estimate, but the exploration
+    // term uses this edge's own visit count rather than the child's simulationCount. With node
+    // sharing the two diverge, and using edge visits keeps UCB well-formed (Childs et al. 2008).
+    const double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
+    const double explorationValue = explorationParameter *
+            std::sqrt(std::log(parent.simulationCount + 1) / (edge.visitCount + 1));
 
     return qualityValue + explorationValue;
 }
@@ -663,12 +665,11 @@ search::Action search::BattleSearcher::getBestAction() const {
     }
 
     int bestEdgeIdx = 0;
-    std::int64_t maxVisits = root.edges[0].node ? root.edges[0].node->simulationCount : 0;
+    std::int32_t maxVisits = root.edges[0].visitCount;
 
     for (int i = 1; i < root.edges.size(); ++i) {
-        std::int64_t visits = root.edges[i].node ? root.edges[i].node->simulationCount : 0;
-        if (visits > maxVisits) {
-            maxVisits = visits;
+        if (root.edges[i].visitCount > maxVisits) {
+            maxVisits = root.edges[i].visitCount;
             bestEdgeIdx = i;
         }
     }
