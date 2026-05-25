@@ -446,48 +446,59 @@ The battle AI uses a sophisticated Monte Carlo Tree Search (MCTS) variant with g
 
 ### Core Architecture
 
+The searcher is **closed-loop**: every node stores its game state, and the tree is walked by
+following pointers and reading `node.state` — actions are not replayed from the root each
+iteration.
+
 **Node Structure:**
 ```cpp
 struct Node {
     std::int64_t simulationCount;      // Total visits to this node
     double evaluationSum;               // Cumulative evaluation scores
-    std::vector<Edge> edges;            // Available actions from this node
-    BattleContext state;                // Game state at this node
-    bool isRandomNode;                  // True if this represents a stochastic action
-    Action stochasticAction;            // The action that caused randomness
-    int outcomesGenerated;              // Number of RNG outcomes explored
-    std::uint64_t randomnessBase;       // RNG seed base for outcome generation
+    std::vector<Edge> edges;            // Decision node: legal actions. Chance node: sampled outcomes.
+    BattleContext state;                // Game state (decision nodes; chance nodes read parent->state)
+    bool isRandomNode;                  // True if this is a chance node (stochastic action pending)
+    Action stochasticAction;            // Chance node: the action that consumed RNG
+    Node* parent;                       // Chance node: spawning decision node (its pre-action state)
+    int outcomesGenerated;              // Chance node: number of RNG outcomes sampled so far
+    std::uint64_t randomnessBase;       // Chance node: RNG base, sampled from the pre-action RNG
 };
 ```
 
 **Edge Structure:**
 ```cpp
 struct Edge {
-    Action action;                      // The action this edge represents
-    std::shared_ptr<Node> node;         // Child node (shared for graph search)
-    std::int32_t visitCount;            // Times this edge was traversed
-    int rngAdvanceSteps;                // RNG offset for random node outcomes
+    Action action;                      // The action this edge represents (dummy for chance outcomes)
+    Node* node;                         // Child; a raw pointer into the node pool (shared via transposition)
+    int rngAdvanceSteps;                // Chance outcome edge: the N used for Random(base + N)
+    std::int32_t visitCount;            // Times this edge was traversed (UCB + DPW reselection)
 };
 ```
 
+Nodes are owned by a pool (`std::vector<std::unique_ptr<Node>> allNodes`); edges hold raw
+`Node*` into that pool, which stays valid as the pool grows.
+
 ### Graph Search
 
-The search builds a **directed acyclic graph** rather than a tree. When different action sequences lead to identical game states, the algorithm **shares nodes**:
+The search builds a **directed acyclic graph** rather than a tree. When different action
+sequences lead to identical game states, `getOrCreateNode` **shares the node**. Dedup is done
+by a hash table keyed on a search-hash, with collisions resolved by an exact equality check:
 
 ```cpp
-// After creating a new node by executing an action
-bool found = false;
-for (auto &n : allNodes) {
-    if (n->state == edgeTaken.node->state && !n->isRandomNode) {
-        found = true;
-        edgeTaken.node = n;  // Reuse existing node!
-        break;
+auto &bucket = stateToNode[hashBattleState(state)];   // unordered_map<size_t, vector<Node*>>
+for (Node* candidate : bucket) {
+    if (candidate->state.equalForSearch(state)) {
+        return candidate;                              // reuse the transposed node
     }
 }
-if (!found) {
-    allNodes.push_back(edgeTaken.node);
-}
+// otherwise allocate a new node, store its state, add to the bucket
 ```
+
+**`equalForSearch` (and the hash) deliberately ignore the RNG stream** (and pure-debug
+counters). Two states that differ only in their RNG have the *same distribution of futures*, so
+the search — which averages over randomness at chance nodes — must treat them as the same node.
+Using the full `operator==` (which compares `rng`) would prevent almost all transposition and is
+semantically wrong here.
 
 **Benefits:**
 - Avoids redundant exploration of transposed states
@@ -495,74 +506,94 @@ if (!found) {
 - More sample-efficient than pure tree search
 
 **Exclusions:**
-- Random nodes are never deduplicated (they represent branching points, not game states)
-- Only deterministic nodes participate in state sharing
+- Chance nodes are never deduplicated (they represent a branching point, not a game state)
+- Only decision nodes participate in state sharing
+
+The graph is acyclic because the search key includes `turn` and `cardsPlayedThisTurn`, both
+non-decreasing along any action path, so a state can never recur deeper in a path.
 
 ### Randomization Handling
 
-Stochastic actions (cards with random effects, enemy AI, etc.) create **random nodes** that branch into multiple outcome children.
+We can't enumerate an action's outcome distribution a priori — we only learn an action was
+stochastic *after* executing it. So a stochastic action's child becomes a **chance node** that
+samples outcomes on demand. The guiding principle (standard expectimax MCTS): decision nodes use
+UCB; **chance nodes sample outcomes from the true distribution, and their value is the
+visit-weighted average — i.e. the expectation.**
 
 #### Detection
 
-When executing an action, we detect randomness by monitoring RNG consumption:
+When first taking an action we execute it on a copy of the parent's state and watch the RNG
+counter:
 
 ```cpp
-const auto rngCounterBefore = curState.rng.counter;
-Random preActionRng = curState.rng;
-edgeTaken.action.execute(edgeTaken.node->state);
+BattleContext next = cur->state;
+const auto rngCounterBefore = next.rng.counter;
+Random preActionRng = next.rng;
+edge.action.execute(next);
 
-const bool rngChanged = edgeTaken.node->state.rng.counter != rngCounterBefore;
-if (rngChanged) {
-    // This action consumed RNG → create random node
-    edgeTaken.node->isRandomNode = true;
-    edgeTaken.node->randomnessBase = preActionRng.randomLong();  // Sample base
+if (next.rng.counter != rngCounterBefore) {
+    // consumed RNG -> make a chance node sourcing its pre-action state from `cur`
+    chance->isRandomNode = true;
+    chance->stochasticAction = edge.action;
+    chance->parent = cur;
+    chance->randomnessBase = preActionRng.randomLong();
 }
 ```
 
 #### Outcome Generation
 
-Random nodes expand outcomes **on-demand** during search. Each outcome uses a deterministic RNG stream:
+A chance node generates outcome `N` **canonically** from its parent's (pre-action) state by
+reseeding and re-executing the stochastic action:
 
 ```cpp
-// For outcome N from a random node
-bc.rng = Random(randomNode.randomnessBase + N);
-randomNode.stochasticAction.execute(bc);
+BattleContext out = chance.parent->state;
+out.rng = Random(chance.randomnessBase + N);
+chance.stochasticAction.execute(out);
+Node* child = getOrCreateNode(out);   // dedup: identical outcomes share a child
 ```
 
-**Key Property:** All **sibling random nodes** (different actions from the same parent) use the **same randomnessBase** value, sampled from their common parent state. This means:
-- Sibling A's outcome 0 uses RNG stream `base + 0`
-- Sibling B's outcome 0 uses RNG stream `base + 0` ← **same stream!**
-- If they roll the same outcome → **same resulting state** → graph search can merge them
+Sequential `N` give i.i.d. samples of the outcome distribution because `sts::Random` runs its
+seed through `murmurHash3` twice, so `base+0`, `base+1`, … are decorrelated streams. There is no
+"realized vs reconstructed" special case — every outcome, including the first, is produced this
+way.
 
-This maximizes sharing opportunities while maintaining proper RNG separation between generations.
+**Double Progressive Widening (DPW).** A chance node holds at most
+`ceil(C * (n+1)^alpha)` distinct outcomes after `n` visits (`C=1`, `alpha=0.5`). Below the cap it
+draws a fresh outcome; at the cap it re-selects an existing outcome **proportional to its edge
+visit count**. This bounds the branching of high-entropy events so outcome subtrees actually
+deepen, while keeping the realized descent frequencies tracking the true probabilities. Low-entropy
+events (a coin flip, a 2-move enemy) collapse to a couple of children and converge quickly.
+
+**Common random numbers:** sibling stochastic actions from the same decision node draw the *same*
+`randomnessBase` (sampled from the shared, immutable parent state), which reduces variance when UCB
+compares those actions. Identical outcomes still merge via `equalForSearch` regardless of base.
 
 ### Search Algorithm (UCT with Rollouts)
 
 Each simulation performs one iteration:
 
-1. **Selection**: Traverse from root using UCT (Upper Confidence bounds for Trees):
+1. **Selection**: Traverse from root using UCT. The exploration term uses the **edge's** visit
+   count (not the child's `simulationCount`, which transposition inflates), so node sharing
+   doesn't distort UCB:
    ```cpp
    double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
-   double explorationValue = c * sqrt(log(parent.simulationCount) / edge.node->simulationCount);
-   return qualityValue + explorationValue;  // Select highest
+   double explorationValue = c * sqrt(log(parent.simulationCount + 1) / (edge.visitCount + 1));
+   return qualityValue + explorationValue;  // Select highest; unvisited edges = +inf
    ```
 
-2. **Expansion**: When reaching a leaf node:
-   - Enumerate all legal actions
-   - Create edges (don't create child nodes yet - lazy)
-   - Select one action randomly for this playout
+2. **Expansion**: When reaching a leaf decision node:
+   - Enumerate all legal actions into edges (child nodes created lazily)
+   - Unvisited edges score `+inf`, so each action is tried once before UCB applies
 
-3. **Node Creation**: Create child node by executing the action:
-   - If action consumed RNG → mark as random node
-   - If deterministic → check for duplicate state (graph search)
-   - Lazy child creation: nodes only exist if visited
+3. **Node Creation**: Create the child by executing the action on a copy of the node's state:
+   - If it consumed RNG → the child is a **chance node** (never deduplicated)
+   - Otherwise → `getOrCreateNode` deduplicates by search state (transposition)
 
-4. **Rollout**: From the new state, play randomly to game end:
-   - Uses `SimpleAgent` for fast random play
-   - No tree building during rollout
-   - Terminates at victory/death
+4. **Rollout**: From a brand-new node's state, play to game end:
+   - Uses `SimpleAgent` (in randomize mode) for fast, varied playouts
+   - No tree building during rollout; terminates at victory/death
 
-5. **Backpropagation**: Update all nodes in the path:
+5. **Backpropagation**: Update every node on the path:
    ```cpp
    const auto evaluation = evaluateEndState(endState);
    for (auto &node : searchStack) {
@@ -571,10 +602,10 @@ Each simulation performs one iteration:
    }
    ```
 
-6. **Random Node Handling**: When visiting a random node:
-   - If unexplored outcomes remain, generate a new one
-   - Otherwise, select best outcome using UCT
-   - Outcome edges have dummy actions (actual action stored in random node)
+6. **Chance Node Handling**: On reaching a chance node, resolve one outcome via DPW (widen with a
+   fresh sample or re-select an existing outcome proportional to edge visits), then descend into
+   that outcome's child. Outcome edges carry dummy actions; the real action lives on the chance
+   node. The chance node's running mean is therefore the expectation over outcomes.
 
 ### Evaluation Function
 
@@ -594,15 +625,16 @@ This encourages winning quickly with high HP while penalizing wasteful play even
 
 ### Action Selection
 
-After search completes, select the action with **most visits** (not highest average value):
+After search completes, select the root action with the **most edge visits** (not highest average
+value):
 
 ```cpp
 Action getBestAction() const {
     int bestEdgeIdx = 0;
-    std::int64_t maxVisits = root.edges[0].node->simulationCount;
+    std::int32_t maxVisits = root.edges[0].visitCount;
     for (int i = 1; i < root.edges.size(); ++i) {
-        if (root.edges[i].node->simulationCount > maxVisits) {
-            maxVisits = root.edges[i].node->simulationCount;
+        if (root.edges[i].visitCount > maxVisits) {
+            maxVisits = root.edges[i].visitCount;
             bestEdgeIdx = i;
         }
     }
@@ -614,10 +646,13 @@ Visit count is more robust than mean value in the presence of high variance.
 
 ### Memory Management
 
-- **Shared Pointers**: Nodes use `std::shared_ptr` to enable graph structure
-- **Lifecycle**: All unique nodes stored in `allNodes` vector
-- **Cleanup**: Automatic when `BattleSearcher` destructs
-- **Capacity**: No hard limit; grows with search complexity
+- **Node pool**: nodes are owned by `allNodes` (`vector<unique_ptr<Node>>`); edges hold raw
+  `Node*`. The DAG structure comes from multiple edges pointing at the same pooled node.
+- **Stored state**: every decision node holds a full `BattleContext` (the closed-loop tradeoff —
+  more memory, no per-iteration replay). Chance nodes don't copy state; they read `parent->state`.
+- **Cleanup**: automatic when `BattleSearcher` destructs; the pool is reset at the start of each
+  `search()`.
+- **Capacity**: no hard limit; grows with the number of distinct reachable states.
 
 ### Integration with SearchAgent
 
@@ -636,10 +671,12 @@ Typical simulation budgets:
 
 ### Performance Characteristics
 
-- **Throughput**: ~250,000 simulations/second single-threaded (varies by battle complexity)
-- **Graph Sharing**: Can provide 2-10x effective simulation count in battles with transpositions
-- **Random Node Overhead**: Minimal; outcomes created lazily
-- **Memory**: ~100-500 MB for typical battles with deep search
+- **Throughput**: lower than the old stateless open-loop searcher — each new node copies a
+  `BattleContext`, and each rollout copies one — but no actions are replayed from the root.
+- **Graph Sharing**: can provide 2-10x effective simulation count in battles with transpositions
+- **Chance Node Overhead**: one state copy + re-execution of the stochastic action per sampled
+  outcome; DPW bounds how many are sampled
+- **Memory**: ~100-500 MB for typical battles with deep search (one `BattleContext` per state)
 
 ### Debugging
 
