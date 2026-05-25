@@ -882,6 +882,7 @@ def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.
 
     agent = sts.Agent()
     agent.simulation_count_base = 1000
+    agent.verbosity_level = 0  # silence per-action battle prints
     choices: list[Decision] = []
 
     # Create an event to signal timeout

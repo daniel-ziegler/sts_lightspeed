@@ -204,6 +204,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -
     
     agent = sts.Agent()
     agent.simulation_count_base = 1000
+    agent.verbosity_level = 0  # silence per-action battle prints (keep ppo_train's own stdout)
     experiences = []
     values = []  # Collect values separately
     reward_fn_vals = []
