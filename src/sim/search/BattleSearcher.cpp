@@ -93,11 +93,10 @@ namespace sts::search {
             hash_combine_fnv(hash, c.upgraded);
         }
 
-        // Hash draw pile (including top cards with position for ordering)
+        // Hash draw pile with position (order is significant for future draws)
         hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile.size()));
-        int drawToHash = std::min(5, static_cast<int>(bc.cards.drawPile.size()));
-        for (int i = 0; i < drawToHash; ++i) {
-            hash_combine_fnv(hash, i); // Position in draw pile
+        for (int i = 0; i < static_cast<int>(bc.cards.drawPile.size()); ++i) {
+            hash_combine_fnv(hash, i);
             hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile[i].id));
         }
 
@@ -109,8 +108,11 @@ namespace sts::search {
             hash_combine_fnv(hash, static_cast<int>(c.id));
         }
 
-        // Hash exhaust pile
+        // Hash exhaust pile contents (iteration order is order-sensitive via the accumulator)
         hash_combine_fnv(hash, static_cast<int>(bc.cards.exhaustPile.size()));
+        for (const auto& c : bc.cards.exhaustPile) {
+            hash_combine_fnv(hash, static_cast<int>(c.id));
+        }
 
         // Hash potions
         hash_combine_fnv(hash, bc.potionCount);

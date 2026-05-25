@@ -3124,6 +3124,7 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
         endTurnQueued == rhs.endTurnQueued &&
         turnHasEnded == rhs.turnHasEnded &&
         skipMonsterTurn == rhs.skipMonsterTurn &&
+        smokeBombUsed == rhs.smokeBombUsed &&
         actionQueue == rhs.actionQueue &&
         cardQueue == rhs.cardQueue &&
         potionCount == rhs.potionCount &&
