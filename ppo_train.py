@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 import threading
 from collections import Counter
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -20,12 +21,21 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm.auto import tqdm
 
-from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy
-from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice
+from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo
+from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
 import slaythespire as sts
 
 # Set up logging
 log = logging.getLogger(__name__)
+
+# Map a choice_space path category to its ActionType (for offline SL labels).
+_PATH_TO_ACTIONTYPE = {
+    'cards': ActionType.CARD,
+    'relics': ActionType.RELIC,
+    'potions': ActionType.POTION,
+    'paths': ActionType.PATH,
+    'fixed': ActionType.FIXED,
+}
 
 
 class Stats:
@@ -150,6 +160,7 @@ class PPOExperience(NamedTuple):
     log_prob: float
     metrics: GameMetrics
     action_str: str  # Store clean action description for debugging
+    choice_type: int  # ActionType value of the chosen action (offline SL label)
 
 
 class PPOTrajectory(NamedTuple):
@@ -251,7 +262,8 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -
                         
                         # Convert back to game action
                         path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
-                        
+                        choice_type = _PATH_TO_ACTIONTYPE[path[0]]
+
                         # Generate clean action description based on path
                         action, action_desc = path_to_action_and_desc(choice, path, gc)
                         
@@ -272,7 +284,8 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -
                             'action_idx': chosen_idx,
                             'log_prob': log_prob,
                             'value': value,
-                            'action_str': action_desc
+                            'action_str': action_desc,
+                            'choice_type': int(choice_type),
                         }
                         
                         assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
@@ -283,7 +296,8 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -
                             action_idx=exp_data['action_idx'],
                             log_prob=exp_data['log_prob'],
                             metrics=metrics,
-                            action_str=exp_data['action_str']
+                            action_str=exp_data['action_str'],
+                            choice_type=exp_data['choice_type'],
                         )
                         experiences.append(exp)
                         values.append(exp_data['value'])  # Store value separately
@@ -364,11 +378,12 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     return trajectories
 
 
-def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv_norm: RunningMoments, debug_traj: bool = False) -> tuple[List[PPOExperience], List[float], List[float]]:
+def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv_norm: RunningMoments, debug_traj: bool = False) -> tuple[List[PPOExperience], List[float], List[float], List[dict]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
     all_advantages = []
     all_returns = []
+    all_meta = []  # per-experience {seed, outcome, final_floor, reward, value} for episode dumps
     
     # debug_traj_idx = max(range(len(trajectories)), key=lambda i: trajectories[i].final_reward) if debug_traj and trajectories else None
     debug_traj_idx = random.randint(0, len(trajectories) - 1) if debug_traj and trajectories else None
@@ -455,6 +470,13 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv
         all_experiences.extend(traj.experiences)
         all_advantages.extend(advantages.tolist())
         all_returns.extend(returns.tolist())
+        outcome_label = 1 if traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0
+        all_meta.extend([
+            {'seed': traj.seed, 'outcome': outcome_label,
+             'final_floor': traj.final_metrics.floor_num,
+             'reward': float(rewards[t]), 'value': float(values[t])}
+            for t in range(num_steps)
+        ])
 
     # Normalize advantages across the whole batch (never per-trajectory -- that would erase
     # the relative scale between good and bad games, which is most of the signal under sparse
@@ -467,7 +489,53 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv
         advantages_arr = (advantages_arr - adv_norm.mean) / adv_norm.std
     all_advantages = advantages_arr.tolist()
 
-    return all_experiences, all_advantages, all_returns
+    return all_experiences, all_advantages, all_returns, all_meta
+
+
+def _serialize_choice(choice: Choice) -> dict:
+    """Flatten a Choice to parquet-safe columns matching collate_fn's expectations:
+    numpy arrays (incl. 2-D obs.map.pathXs) become (nested) lists, and fixed_actions
+    becomes a list of uniform int-valued structs so pyarrow can store it."""
+    flat = {}
+    for k, v in flatten_dict(choice.as_dict()).items():
+        if isinstance(v, np.ndarray) and v.ndim >= 2:
+            # 2-D (obs.map.pathXs): pyarrow rejects 2-D ndarray cells, store nested lists.
+            flat[k] = v.tolist()
+        elif k == 'fixed_actions':
+            flat[k] = [
+                {'action': int(d['action']),
+                 'gold': int(d.get('gold', 0)),
+                 'card': int(d.get('card', sts.CardId.INVALID)),
+                 'relic': int(d.get('relic', sts.RelicId.INVALID)),
+                 'info': int(d.get('info', EventFixedInfo.NONE))}
+                for d in v
+            ]
+        else:
+            flat[k] = v
+    return flat
+
+
+def save_episodes(experiences: List[PPOExperience], advantages: List[float], returns: List[float], meta: List[dict], path: str):
+    """Dump collected decisions to parquet in the SL schema train.py consumes
+    (flattened choice + choice_type + chosen_idx + outcome/seed/final_floor/pstrike_count),
+    plus PPO extras (reward, value, advantage, return, old_log_prob)."""
+    rows = []
+    for exp, adv, ret, m in zip(experiences, advantages, returns, meta):
+        rows.append({
+            **_serialize_choice(exp.choice),
+            'choice_type': int(exp.choice_type),
+            'chosen_idx': exp.action_idx,
+            'outcome': m['outcome'],
+            'seed': m['seed'],
+            'final_floor': m['final_floor'],
+            'pstrike_count': sum(1 for cid in exp.choice.obs.deck.cards if cid == int(sts.CardId.PERFECTED_STRIKE)),
+            'reward': m['reward'],
+            'value': m['value'],
+            'advantage': float(adv),
+            'return': float(ret),
+            'old_log_prob': float(exp.log_prob),
+        })
+    pd.DataFrame(rows).to_parquet(path, engine='pyarrow')
 
 
 def experiences_to_batches(experiences: List[PPOExperience], advantages: List[float], returns: List[float]) -> List[dict]:
@@ -711,6 +779,8 @@ def main():
                         help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
     parser.add_argument('--torch-compile', type=str, default='default',
                         help='Torch compile mode: "default", "max-autotune", "reduce-overhead", or "no" to disable')
+    parser.add_argument('--save-episodes', action='store_true',
+                        help='Dump each iteration of collected decisions to {save_path}.episodes/iter_N.parquet (SL schema + PPO extras) for offline experiments')
     
     # Automatically add all PPOConfig fields as command line arguments
     config_defaults = PPOConfig()
@@ -971,13 +1041,20 @@ def main():
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
             
             # Prepare training data (with debug output for first trajectory)
-            experiences, advantages, returns = compute_advantages(trajectories, config, adv_norm, debug_traj=True)
-            
+            experiences, advantages, returns, ep_meta = compute_advantages(trajectories, config, adv_norm, debug_traj=True)
+
             if not experiences:
                 print("No experiences to train on, skipping iteration")
                 continue
-            
+
             print(f"Training on {len(experiences)} experiences")
+
+            if args.save_episodes:
+                ep_dir = f"{args.save_path}.episodes"
+                os.makedirs(ep_dir, exist_ok=True)
+                ep_path = f"{ep_dir}/iter_{iteration + 1}.parquet"
+                save_episodes(experiences, advantages, returns, ep_meta, ep_path)
+                print(f"Saved {len(experiences)} decisions to {ep_path}")
             
             # Perform PPO training step
             train_start = time.time()
