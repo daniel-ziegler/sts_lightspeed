@@ -9,6 +9,7 @@
 #include <utility>
 #include <string>
 #include <memory>
+#include <unordered_set>
 
 using namespace sts;
 
@@ -179,9 +180,13 @@ void search::BattleSearcher::step() {
     Node* cur = &root;
     int depth = 0;
     while (true) {
-        // Safety valve. With proper chance handling and a monotonic turn counter this
-        // should never trigger; a cycle guard replaces it in a later commit.
+        // Defensive bound only. The search-state key includes turn and cardsPlayedThisTurn,
+        // both monotonically non-decreasing along any action path, so the transposition graph
+        // is acyclic and this cannot fire in practice.
         if (++depth > 5000) {
+#ifdef sts_asserts
+            assert(false && "search descent exceeded depth bound -- unexpected state-key cycle");
+#endif
             return;
         }
 
@@ -317,11 +322,6 @@ int search::BattleSearcher::selectBestEdgeToSearch(const search::BattleSearcher:
     }
     //std::cout << "\n";
     return bestEdge;
-}
-
-int search::BattleSearcher::selectFirstActionForLeafNode(const search::BattleSearcher::Node &leafNode) {
-    auto dist = std::uniform_int_distribution<int>(0, static_cast<int>(leafNode.edges.size())-1);
-    return dist(randGen);
 }
 
 void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action> &actionStack) {
@@ -676,85 +676,59 @@ search::Action search::BattleSearcher::getBestAction() const {
     return root.edges[bestEdgeIdx].action;
 }
 
-struct LayerStruct {
-    const search::BattleSearcher::Node *node;
-    BattleContext *bc;
-    int edgeIdx;
-};
+// (edge, state-to-describe-the-action-in). Reads stored node state directly -- no replay.
+typedef std::pair<const search::BattleSearcher::Edge*, const BattleContext*> EdgeInfo;
 
-typedef std::pair<search::BattleSearcher::Edge, std::unique_ptr<const BattleContext>> EdgeInfo;
-
+// Collect the edges of every node at the given depth (root == depth 1). An edge's action is
+// described in its parent decision node's state; chance-node outcome edges carry dummy actions
+// and borrow the chance node's parent state. Shared (transposed) nodes are printed once.
 std::vector<EdgeInfo> getEdgesForLayer(const search::BattleSearcher &s, int layerNum) {
     if (layerNum <= 0) {
         return {};
     }
 
     std::vector<EdgeInfo> layerEdges;
+    std::unordered_set<const search::BattleSearcher::Node*> seen;
+    std::vector<std::pair<const search::BattleSearcher::Node*, int>> stack { {&s.root, 1} };
 
-    std::vector<LayerStruct> curStack { {&s.root, new BattleContext(*s.rootState), 0} };
+    while (!stack.empty()) {
+        const auto [node, depth] = stack.back();
+        stack.pop_back();
+        if (node == nullptr || !seen.insert(node).second) {
+            continue;
+        }
 
-    while (!curStack.empty()) {
-        if (curStack.size() == layerNum) {
-            for (const auto &edge : curStack.back().node->edges) {
-                layerEdges.emplace_back(edge, std::make_unique<const BattleContext>(*curStack.back().bc));
+        const BattleContext* describeState =
+                node->isRandomNode ? (node->parent ? &node->parent->state : nullptr)
+                                   : &node->state;
+
+        if (depth == layerNum) {
+            for (const auto &edge : node->edges) {
+                layerEdges.emplace_back(&edge, describeState);
+            }
+            continue;
+        }
+
+        for (const auto &edge : node->edges) {
+            if (edge.node != nullptr) {
+                stack.push_back({edge.node, depth + 1});
             }
         }
-
-       // curStack size less than layerNum
-       const bool visitedAll = curStack.back().edgeIdx >= curStack.back().node->edges.size();
-       if (visitedAll || curStack.size() == layerNum) {
-           delete curStack.back().bc;
-           curStack.pop_back();
-           continue;
-       }
-
-        // visit next edge
-        auto &nextIdx = curStack.back().edgeIdx;
-        const auto *parentNode = curStack.back().node;
-        const auto &edgeRef = parentNode->edges[nextIdx];
-
-        BattleContext bc(*curStack.back().bc);
-        if (parentNode->isRandomNode) {
-            // Parent is random node: constant-time reconstruction using base value + step index
-            Random rngCopy = bc.rng;
-            const std::uint64_t base = static_cast<std::uint64_t>(rngCopy.randomLong());
-            bc.rng = Random(base + static_cast<std::uint64_t>(edgeRef.rngAdvanceSteps));
-            const auto &stochAction = parentNode->stochasticAction;
-            stochAction.execute(bc);
-        } else {
-            edgeRef.action.execute(bc);
-        }
-
-        curStack.push_back( {edgeRef.node, new BattleContext(bc), 0} );
-        ++nextIdx;
     }
 
     return layerEdges;
 }
 
 void search::BattleSearcher::printSearchTree(std::ostream &os, int levels) {
-    std::vector<std::vector<EdgeInfo>> layerEdges;
     for (int depth = 1; depth <= levels; ++depth) {
-        layerEdges.push_back(getEdgesForLayer(*this, depth));
-    }
-
-//    auto maxIt = std::max(layerEdges.begin(), layerEdges.end(), [](auto a, auto b) { return a->size() < b->size(); });
-//    if (maxIt == layerEdges.end()) {
-//        return;
-//    }
-//    // maxIt points to something
-//    const auto maxSize = maxIt->size();
-//    constexpr auto edgeWidth = 30;
-
-    for (int depth = 0; depth < levels; ++depth) {
-        for (const auto &x : layerEdges[depth]) {
-            os << "(" << (x.first.node ? x.first.node->simulationCount : 0) << ")";
-            // We don't print the action for random edges; they reflect RNG branches
-            x.first.action.printDesc(os, *x.second) << "\t";
+        for (const auto &x : getEdgesForLayer(*this, depth)) {
+            os << "(" << (x.first->node ? x.first->node->simulationCount : 0) << ")";
+            if (x.second != nullptr) {
+                x.first->action.printDesc(os, *x.second) << "\t";
+            }
         }
-        std::cout << '\n';
+        os << '\n';
     }
-
 }
 
 void search::BattleSearcher::printSearchStack(std::ostream &os, bool skipLast) {

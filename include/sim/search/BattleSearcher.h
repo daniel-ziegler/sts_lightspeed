@@ -84,7 +84,6 @@ namespace sts::search {
 
         double evaluateEdge(const Node &parent, int edgeIdx);
         int selectBestEdgeToSearch(const Node &cur);
-        int selectFirstActionForLeafNode(const Node &leafNode);
 
         void rolloutToEnd(BattleContext &state, std::vector<Action> &actionStack);
 
