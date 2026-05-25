@@ -14,19 +14,22 @@
 using namespace sts;
 
 void search::SearchAgent::takeAction(GameContext &gc, GameAction a) {
-    if (printActions) {
+    if (recordActions) {
         gameActionHistory.emplace_back(a.bits);
+    }
+    if (printActions) {
         std::cout << std::hex << a.bits << std::endl;
     }
     a.execute(gc);
 }
 
 void search::SearchAgent::takeAction(BattleContext &bc, search::Action a) {
-    if (printActions) {
+    if (recordActions) {
         gameActionHistory.emplace_back(a.bits);
+    }
+    if (printActions) {
         std::cout << std::hex << a.bits << std::endl;
     }
-//    a.printDesc(std::cout, bc);
     a.execute(bc);
 }
 
@@ -37,6 +40,10 @@ void search::SearchAgent::playout(GameContext &gc) {
 
     while (gc.outcome == GameOutcome::UNDECIDED && !paused) {
         if (gc.screenState == ScreenState::BATTLE) {
+            if (recordActions) {
+                battleStartIndices.push_back(static_cast<int>(gameActionHistory.size()));
+            }
+
             bc = BattleContext();
             bc.init(gc);
 
@@ -69,6 +76,9 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
                                              (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
 
         search::BattleSearcher searcher(bc);
+        searcher.explorationParameter = explorationParameter;
+        searcher.chanceWideningC = chanceWideningC;
+        searcher.chanceWideningAlpha = chanceWideningAlpha;
         searcher.search(simulationCount);
         simulationCountTotal += searcher.root.simulationCount;
 

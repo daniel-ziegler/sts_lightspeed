@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <random>
+#include <cmath>
 
 namespace sts::search {
 
@@ -19,6 +20,9 @@ namespace sts::search {
     struct SearchAgent {
         std::int64_t simulationCountTotal = 0;
         std::vector<int> gameActionHistory;
+
+        bool recordActions = false;
+        std::vector<int> battleStartIndices;
 
         int stepCount = 0;
         bool paused = false;
@@ -31,6 +35,10 @@ namespace sts::search {
         double bossSimulationMultiplier = 3;
         int stepsNoSolution = 5;
         int stepsWithSolution = 15;
+
+        double explorationParameter = 3 * std::sqrt(2.0);
+        double chanceWideningC = 1.0;
+        double chanceWideningAlpha = 0.5;
 
         std::default_random_engine rng;
 
