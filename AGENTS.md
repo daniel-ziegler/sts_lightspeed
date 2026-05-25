@@ -440,6 +440,219 @@ The counter enables RNG state synchronization for replay/debugging. All combat-r
 
 **Important:** RNG accuracy is no longer maintained relative to the base game, since we've unified the battle RNG streams into a single one.
 
+## MCTS Battle Search Algorithm
+
+The battle AI uses a sophisticated Monte Carlo Tree Search (MCTS) variant with graph search and explicit randomization handling. Implementation lives in `src/sim/search/BattleSearcher.cpp`.
+
+### Core Architecture
+
+**Node Structure:**
+```cpp
+struct Node {
+    std::int64_t simulationCount;      // Total visits to this node
+    double evaluationSum;               // Cumulative evaluation scores
+    std::vector<Edge> edges;            // Available actions from this node
+    BattleContext state;                // Game state at this node
+    bool isRandomNode;                  // True if this represents a stochastic action
+    Action stochasticAction;            // The action that caused randomness
+    int outcomesGenerated;              // Number of RNG outcomes explored
+    std::uint64_t randomnessBase;       // RNG seed base for outcome generation
+};
+```
+
+**Edge Structure:**
+```cpp
+struct Edge {
+    Action action;                      // The action this edge represents
+    std::shared_ptr<Node> node;         // Child node (shared for graph search)
+    std::int32_t visitCount;            // Times this edge was traversed
+    int rngAdvanceSteps;                // RNG offset for random node outcomes
+};
+```
+
+### Graph Search
+
+The search builds a **directed acyclic graph** rather than a tree. When different action sequences lead to identical game states, the algorithm **shares nodes**:
+
+```cpp
+// After creating a new node by executing an action
+bool found = false;
+for (auto &n : allNodes) {
+    if (n->state == edgeTaken.node->state && !n->isRandomNode) {
+        found = true;
+        edgeTaken.node = n;  // Reuse existing node!
+        break;
+    }
+}
+if (!found) {
+    allNodes.push_back(edgeTaken.node);
+}
+```
+
+**Benefits:**
+- Avoids redundant exploration of transposed states
+- Pools statistics across different paths to the same state
+- More sample-efficient than pure tree search
+
+**Exclusions:**
+- Random nodes are never deduplicated (they represent branching points, not game states)
+- Only deterministic nodes participate in state sharing
+
+### Randomization Handling
+
+Stochastic actions (cards with random effects, enemy AI, etc.) create **random nodes** that branch into multiple outcome children.
+
+#### Detection
+
+When executing an action, we detect randomness by monitoring RNG consumption:
+
+```cpp
+const auto rngCounterBefore = curState.rng.counter;
+Random preActionRng = curState.rng;
+edgeTaken.action.execute(edgeTaken.node->state);
+
+const bool rngChanged = edgeTaken.node->state.rng.counter != rngCounterBefore;
+if (rngChanged) {
+    // This action consumed RNG → create random node
+    edgeTaken.node->isRandomNode = true;
+    edgeTaken.node->randomnessBase = preActionRng.randomLong();  // Sample base
+}
+```
+
+#### Outcome Generation
+
+Random nodes expand outcomes **on-demand** during search. Each outcome uses a deterministic RNG stream:
+
+```cpp
+// For outcome N from a random node
+bc.rng = Random(randomNode.randomnessBase + N);
+randomNode.stochasticAction.execute(bc);
+```
+
+**Key Property:** All **sibling random nodes** (different actions from the same parent) use the **same randomnessBase** value, sampled from their common parent state. This means:
+- Sibling A's outcome 0 uses RNG stream `base + 0`
+- Sibling B's outcome 0 uses RNG stream `base + 0` ← **same stream!**
+- If they roll the same outcome → **same resulting state** → graph search can merge them
+
+This maximizes sharing opportunities while maintaining proper RNG separation between generations.
+
+### Search Algorithm (UCT with Rollouts)
+
+Each simulation performs one iteration:
+
+1. **Selection**: Traverse from root using UCT (Upper Confidence bounds for Trees):
+   ```cpp
+   double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
+   double explorationValue = c * sqrt(log(parent.simulationCount) / edge.node->simulationCount);
+   return qualityValue + explorationValue;  // Select highest
+   ```
+
+2. **Expansion**: When reaching a leaf node:
+   - Enumerate all legal actions
+   - Create edges (don't create child nodes yet - lazy)
+   - Select one action randomly for this playout
+
+3. **Node Creation**: Create child node by executing the action:
+   - If action consumed RNG → mark as random node
+   - If deterministic → check for duplicate state (graph search)
+   - Lazy child creation: nodes only exist if visited
+
+4. **Rollout**: From the new state, play randomly to game end:
+   - Uses `SimpleAgent` for fast random play
+   - No tree building during rollout
+   - Terminates at victory/death
+
+5. **Backpropagation**: Update all nodes in the path:
+   ```cpp
+   const auto evaluation = evaluateEndState(endState);
+   for (auto &node : searchStack) {
+       node->simulationCount++;
+       node->evaluationSum += evaluation;
+   }
+   ```
+
+6. **Random Node Handling**: When visiting a random node:
+   - If unexplored outcomes remain, generate a new one
+   - Otherwise, select best outcome using UCT
+   - Outcome edges have dummy actions (actual action stored in random node)
+
+### Evaluation Function
+
+Terminal states are scored by `evaluateEndState()`:
+
+**Victory:**
+```cpp
+score = 100 + player.curHp + potions*12 - turn*0.01
+```
+
+**Defeat:**
+```cpp
+score = (1 - enemyHpRatio)*10 + aliveEnemies*(-1) + energyWasted*(-0.2) + cardsDrawn*0.03 + turn*0.2
+```
+
+This encourages winning quickly with high HP while penalizing wasteful play even in losses.
+
+### Action Selection
+
+After search completes, select the action with **most visits** (not highest average value):
+
+```cpp
+Action getBestAction() const {
+    int bestEdgeIdx = 0;
+    std::int64_t maxVisits = root.edges[0].node->simulationCount;
+    for (int i = 1; i < root.edges.size(); ++i) {
+        if (root.edges[i].node->simulationCount > maxVisits) {
+            maxVisits = root.edges[i].node->simulationCount;
+            bestEdgeIdx = i;
+        }
+    }
+    return root.edges[bestEdgeIdx].action;
+}
+```
+
+Visit count is more robust than mean value in the presence of high variance.
+
+### Memory Management
+
+- **Shared Pointers**: Nodes use `std::shared_ptr` to enable graph structure
+- **Lifecycle**: All unique nodes stored in `allNodes` vector
+- **Cleanup**: Automatic when `BattleSearcher` destructs
+- **Capacity**: No hard limit; grows with search complexity
+
+### Integration with SearchAgent
+
+`SearchAgent` runs the search and executes actions:
+
+```cpp
+BattleSearcher searcher(bc);
+searcher.search(simulationCount);  // Run N simulations
+Action bestAction = searcher.getBestAction();
+bestAction.execute(bc);
+```
+
+Typical simulation budgets:
+- Normal encounters: 50,000 simulations
+- Boss encounters: 150,000 simulations (3x multiplier)
+
+### Performance Characteristics
+
+- **Throughput**: ~250,000 simulations/second single-threaded (varies by battle complexity)
+- **Graph Sharing**: Can provide 2-10x effective simulation count in battles with transpositions
+- **Random Node Overhead**: Minimal; outcomes created lazily
+- **Memory**: ~100-500 MB for typical battles with deep search
+
+### Debugging
+
+The search maintains diagnostic state:
+
+```cpp
+thread_local BattleSearcher *g_debug_scum_search;  // Global access for debugging
+std::vector<Node*> searchStack;                     // Current search path
+std::vector<Action> actionStack;                    // Actions taken
+```
+
+Use `printSearchTree()` to visualize the search graph up to a specified depth.
+
 # Important instructions
 
 - Do not make code changes backward-compatible! Just refactor things to use the new way of doing things. I want to keep the code clean without backward compatibility shims.

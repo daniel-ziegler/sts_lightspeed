@@ -16,6 +16,109 @@ std::int64_t simulationIdx = 0; // for debugging
 
 namespace sts::search {
     thread_local search::BattleSearcher *g_debug_scum_search;
+
+    // FNV-1a hash constants for 64-bit
+    constexpr std::uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
+    constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
+
+    // Hash a value into accumulator using FNV-1a (better distribution than simple XOR)
+    inline void hash_combine_fnv(std::uint64_t& hash, std::uint64_t value) {
+        // Split value into bytes for better mixing
+        for (int i = 0; i < 8; ++i) {
+            hash ^= (value & 0xFF);
+            hash *= FNV_PRIME;
+            value >>= 8;
+        }
+    }
+
+    inline void hash_combine_fnv(std::uint64_t& hash, std::uint32_t value) {
+        for (int i = 0; i < 4; ++i) {
+            hash ^= (value & 0xFF);
+            hash *= FNV_PRIME;
+            value >>= 8;
+        }
+    }
+
+    inline void hash_combine_fnv(std::uint64_t& hash, int value) {
+        hash_combine_fnv(hash, static_cast<std::uint32_t>(value));
+    }
+
+    inline void hash_combine_fnv(std::uint64_t& hash, bool value) {
+        hash ^= (value ? 1 : 0);
+        hash *= FNV_PRIME;
+    }
+
+    // Hash BattleContext state for graph search deduplication
+    // Only hashes observable game state, not internal RNG or debug counters
+    std::size_t hashBattleState(const BattleContext& bc) {
+        std::uint64_t hash = FNV_OFFSET_BASIS;
+
+        // Hash turn and outcome
+        hash_combine_fnv(hash, bc.turn);
+        hash_combine_fnv(hash, static_cast<int>(bc.outcome));
+        hash_combine_fnv(hash, static_cast<int>(bc.inputState));
+
+        // Hash player state
+        const auto& p = bc.player;
+        hash_combine_fnv(hash, p.curHp);
+        hash_combine_fnv(hash, p.maxHp);
+        hash_combine_fnv(hash, p.block);
+        hash_combine_fnv(hash, p.energy);
+        hash_combine_fnv(hash, p.cardsPlayedThisTurn);
+        hash_combine_fnv(hash, p.statusBits0);
+        hash_combine_fnv(hash, p.statusBits1);
+        hash_combine_fnv(hash, p.strength);
+        hash_combine_fnv(hash, p.dexterity);
+
+        // Hash monsters
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const auto& m = bc.monsters.arr[i];
+            hash_combine_fnv(hash, static_cast<int>(m.id));
+            hash_combine_fnv(hash, m.curHp);
+            hash_combine_fnv(hash, m.maxHp);
+            hash_combine_fnv(hash, m.block);
+            hash_combine_fnv(hash, m.statusBits);
+            hash_combine_fnv(hash, static_cast<int>(m.moveHistory[0]));
+        }
+
+        // Hash cards in hand (INCLUDING POSITION to prevent invalid deduplication)
+        hash_combine_fnv(hash, bc.cards.cardsInHand);
+        for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+            const auto& c = bc.cards.hand[i];
+            hash_combine_fnv(hash, i); // Hash position to preserve ordering
+            hash_combine_fnv(hash, static_cast<int>(c.id));
+            hash_combine_fnv(hash, c.cost);
+            hash_combine_fnv(hash, c.costForTurn);
+            hash_combine_fnv(hash, c.upgraded);
+        }
+
+        // Hash draw pile (including top cards with position for ordering)
+        hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile.size()));
+        int drawToHash = std::min(5, static_cast<int>(bc.cards.drawPile.size()));
+        for (int i = 0; i < drawToHash; ++i) {
+            hash_combine_fnv(hash, i); // Position in draw pile
+            hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile[i].id));
+        }
+
+        // Hash discard pile (including position for ordering)
+        hash_combine_fnv(hash, static_cast<int>(bc.cards.discardPile.size()));
+        int discardIdx = 0;
+        for (const auto& c : bc.cards.discardPile) {
+            hash_combine_fnv(hash, discardIdx++); // Position in discard
+            hash_combine_fnv(hash, static_cast<int>(c.id));
+        }
+
+        // Hash exhaust pile
+        hash_combine_fnv(hash, static_cast<int>(bc.cards.exhaustPile.size()));
+
+        // Hash potions
+        hash_combine_fnv(hash, bc.potionCount);
+        for (int i = 0; i < bc.potionCount; ++i) {
+            hash_combine_fnv(hash, static_cast<int>(bc.potions[i]));
+        }
+
+        return hash;
+    }
 }
 
 
@@ -24,25 +127,29 @@ search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc 
     : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum), rolloutAgent(true, bc.seed+bc.floorNum) {
 }
 
-search::BattleSearcher::Node::Node(const Node& other)
-    : simulationCount(other.simulationCount)
-    , evaluationSum(other.evaluationSum)
-    , edges(other.edges)
-    , isRandomNode(other.isRandomNode)
-    , stochasticAction(other.stochasticAction)
-    , outcomesGenerated(other.outcomesGenerated)
-{}
+search::BattleSearcher::~BattleSearcher() {
+    stateToNode.clear();
+    allNodes.clear();
+}
 
-search::BattleSearcher::Node& search::BattleSearcher::Node::operator=(const Node& other) {
-    if (this != &other) {
-        simulationCount = other.simulationCount;
-        evaluationSum = other.evaluationSum;
-        edges = other.edges;
-        isRandomNode = other.isRandomNode;
-        stochasticAction = other.stochasticAction;
-        outcomesGenerated = other.outcomesGenerated;
+search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(const BattleContext &state) {
+    // Compute hash of the game state
+    size_t hash = search::hashBattleState(state);
+
+    // Check if we've seen this state before
+    auto it = stateToNode.find(hash);
+    if (it != stateToNode.end()) {
+        return it->second;
     }
-    return *this;
+
+    // New state - create new node
+    allNodes.push_back(std::make_unique<Node>());
+    Node* newNode = allNodes.back().get();
+
+    // Add to hash map for future deduplication
+    stateToNode[hash] = newNode;
+
+    return newNode;
 }
 
 void search::BattleSearcher::search(int64_t simulations) {
@@ -55,6 +162,10 @@ void search::BattleSearcher::search(int64_t simulations) {
         root.simulationCount = 1;
     }
 
+    // Clear node pool for fresh search
+    allNodes.clear();
+    stateToNode.clear();
+
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
     }
@@ -63,16 +174,32 @@ void search::BattleSearcher::search(int64_t simulations) {
 void search::BattleSearcher::step() {
     searchStack = {&root};
     actionStack.clear();
-    BattleContext curState;
-    curState = *rootState;
+    BattleContext curState = *rootState;
 
+    int loopCount = 0;
     while (true) {
+        ++loopCount;
+        if (loopCount > 1000) {
+            return;
+        }
+
         auto &curNode = *searchStack.back();
 
         if (curNode.isRandomNode) {
+            // For random nodes, always expand a new outcome each visit
+            // (This explores the probability distribution over RNG outcomes)
+#ifdef sts_asserts
+            std::cerr << "RANDOM NODE: Expanding outcome, curState.cardsInHand=" << curState.cards.cardsInHand << std::endl;
+#endif
             expandRandomOutcome(curNode, curState);
             auto &edgeTaken = curNode.edges.back();
-            searchStack.push_back(&edgeTaken.node);
+
+            // Lazy node creation for random outcome
+            if (edgeTaken.node == nullptr) {
+                edgeTaken.node = getOrCreateNode(curState);
+            }
+
+            searchStack.push_back(edgeTaken.node);
             continue;
         }
 
@@ -83,39 +210,53 @@ void search::BattleSearcher::step() {
 
         const bool isLeaf = curNode.edges.empty();
         if (isLeaf) {
-
             ++simulationIdx;
             enumerateActionsForNode(curNode, curState);
             const auto selectIdx = selectFirstActionForLeafNode(curNode);
             auto &edgeTaken = curNode.edges[selectIdx];
 
-            // Snapshot RNG state before executing action
+            // Snapshot RNG before executing action
             const auto rngCounterBefore = curState.rng.counter;
-            const BattleContext preActionState = curState;
+            Random preActionRng = curState.rng;
 
             edgeTaken.action.execute(curState);
-
             actionStack.push_back(edgeTaken.action);
 
             const bool rngChanged = curState.rng.counter != rngCounterBefore;
             if (rngChanged) {
-                // Convert child to random node and seed first observed outcome as an edge
-                edgeTaken.node.isRandomNode = true;
-                edgeTaken.node.stochasticAction = edgeTaken.action;
-                edgeTaken.node.outcomesGenerated = 0;
+                // Stochastic action - create random node if needed
+                if (edgeTaken.node == nullptr) {
+                    // First visit: create and initialize random node
+                    allNodes.push_back(std::make_unique<Node>());
+                    edgeTaken.node = allNodes.back().get();
 
-                // First outcome child corresponds to no extra RNG advance beyond what action consumed on creation path
-                search::BattleSearcher::Edge observedOutcomeEdge;
-                observedOutcomeEdge.rngAdvanceSteps = 0;
-                edgeTaken.node.edges.push_back(std::move(observedOutcomeEdge));
-                ++edgeTaken.node.outcomesGenerated;
+                    edgeTaken.node->isRandomNode = true;
+                    edgeTaken.node->stochasticAction = edgeTaken.action;
+                    edgeTaken.node->outcomesGenerated = 0;
+                    edgeTaken.node->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
 
-                // Descend through random node into the observed outcome child
-                searchStack.push_back(&edgeTaken.node);
-                searchStack.push_back(&edgeTaken.node.edges.back().node);
+                    // First outcome edge
+                    search::BattleSearcher::Edge observedOutcomeEdge;
+                    observedOutcomeEdge.action = Action{};
+                    observedOutcomeEdge.rngAdvanceSteps = 0;
+                    edgeTaken.node->edges.push_back(std::move(observedOutcomeEdge));
+                    ++edgeTaken.node->outcomesGenerated;
+                }
+
+                // Descend through random node into first outcome
+                searchStack.push_back(edgeTaken.node);
+
+                auto &firstOutcomeEdge = edgeTaken.node->edges[0];
+                if (firstOutcomeEdge.node == nullptr) {
+                    firstOutcomeEdge.node = getOrCreateNode(curState);
+                }
+                searchStack.push_back(firstOutcomeEdge.node);
             } else {
-                // Deterministic: descend normally
-                searchStack.push_back(&edgeTaken.node);
+                // Deterministic: lazy create and descend normally
+                if (edgeTaken.node == nullptr) {
+                    edgeTaken.node = getOrCreateNode(curState);
+                }
+                searchStack.push_back(edgeTaken.node);
             }
 
             rolloutToEnd(curState, actionStack);
@@ -126,14 +267,66 @@ void search::BattleSearcher::step() {
             const auto selectIdx = selectBestEdgeToSearch(curNode);
             auto &edgeTaken = curNode.edges[selectIdx];
 
-            if (edgeTaken.node.isRandomNode) {
-                // Transition into random node; do not execute action here
-                actionStack.push_back(edgeTaken.action);
-                searchStack.push_back(&edgeTaken.node);
-            } else {
+            if (!curNode.isRandomNode) {
+                // Normal node: execute action and track state
+                const auto rngCounterBefore = curState.rng.counter;
+                Random preActionRng = curState.rng;
+
                 edgeTaken.action.execute(curState);
                 actionStack.push_back(edgeTaken.action);
-                searchStack.push_back(&edgeTaken.node);
+
+                // Lazy node creation on first visit
+                const bool rngChanged = curState.rng.counter != rngCounterBefore;
+                if (edgeTaken.node == nullptr) {
+                    if (rngChanged) {
+                        // Action was stochastic - create random node (no deduplication)
+                        allNodes.push_back(std::make_unique<Node>());
+                        edgeTaken.node = allNodes.back().get();
+                        edgeTaken.node->isRandomNode = true;
+                        edgeTaken.node->stochasticAction = edgeTaken.action;
+                        edgeTaken.node->outcomesGenerated = 0;
+                        edgeTaken.node->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
+
+                        // Create first outcome edge
+                        Edge firstOutcome;
+                        firstOutcome.action = Action{};
+                        firstOutcome.node = nullptr;
+                        firstOutcome.rngAdvanceSteps = 0;
+                        edgeTaken.node->edges.push_back(std::move(firstOutcome));
+                        ++edgeTaken.node->outcomesGenerated;
+                    } else {
+                        // Deterministic action - can be deduplicated
+                        edgeTaken.node = getOrCreateNode(curState);
+                    }
+                }
+
+                if (rngChanged && edgeTaken.node->isRandomNode) {
+                    // Descend through random node into first outcome
+                    searchStack.push_back(edgeTaken.node);
+
+                    auto &firstOutcomeEdge = edgeTaken.node->edges[0];
+                    if (firstOutcomeEdge.node == nullptr) {
+                        firstOutcomeEdge.node = getOrCreateNode(curState);
+                    }
+                    searchStack.push_back(firstOutcomeEdge.node);
+                } else {
+                    searchStack.push_back(edgeTaken.node);
+                }
+
+            } else {
+                // Random node: replay the RNG outcome to update state
+                const std::uint64_t base = curNode.randomnessBase;
+                curState.rng = Random(base + static_cast<std::uint64_t>(edgeTaken.rngAdvanceSteps));
+
+                curNode.stochasticAction.execute(curState);
+
+                actionStack.push_back(edgeTaken.action);
+
+                if (edgeTaken.node == nullptr) {
+                    edgeTaken.node = getOrCreateNode(curState);
+                }
+
+                searchStack.push_back(edgeTaken.node);
             }
         }
     }
@@ -156,15 +349,16 @@ bool search::BattleSearcher::isTerminalState(const BattleContext &bc) const { //
 double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &parent, int edgeIdx) {
 
     const auto &edge = parent.edges[edgeIdx];
-    
-    if (edge.node.simulationCount == 0) {
+
+    // Unvisited edges (nullptr or zero visits) should be explored first
+    if (edge.node == nullptr || edge.node->simulationCount == 0) {
         return std::numeric_limits<double>::infinity();
     }
 
-    double qualityValue = edge.node.evaluationSum / edge.node.simulationCount;
+    double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
 
     double explorationValue = explorationParameter *
-            std::sqrt(std::log(parent.simulationCount+1) / (edge.node.simulationCount+1));
+            std::sqrt(std::log(parent.simulationCount+1) / (edge.node->simulationCount+1));
 
     return qualityValue + explorationValue;
 }
@@ -225,21 +419,19 @@ void search::BattleSearcher::expandRandomOutcome(search::BattleSearcher::Node &r
 #ifdef sts_asserts
     assert(randomNode.isRandomNode);
 #endif
-    // Build state from current traversal state; at entry to a random node, curState is pre-action
-    BattleContext bc = curState;
-    // Constant-time branch RNG: sample one base value from pre-action RNG, then offset by outcomesGenerated
-    Random rngCopy = bc.rng;
-    const std::uint64_t base = static_cast<std::uint64_t>(rngCopy.randomLong());
-    bc.rng = Random(base + static_cast<std::uint64_t>(randomNode.outcomesGenerated));
-    randomNode.stochasticAction.execute(bc);
+    // Use stored randomnessBase + outcome index to create deterministic, consistent RNG stream
+    // All sibling random nodes use the same base, so outcome N has the same RNG across siblings
+    const std::uint64_t base = randomNode.randomnessBase;
+    curState.rng = Random(base + static_cast<std::uint64_t>(randomNode.outcomesGenerated));
+    randomNode.stochasticAction.execute(curState);
 
+    // Create edge with nullptr node (will be lazily created on first visit)
     search::BattleSearcher::Edge e;
+    e.action = Action{};
+    e.node = nullptr;  // Lazy creation
     e.rngAdvanceSteps = randomNode.outcomesGenerated;
     randomNode.edges.push_back(std::move(e));
     ++randomNode.outcomesGenerated;
-
-    // Update the traversal state to match this realized outcome
-    curState = bc;
 }
 
 void search::BattleSearcher::enumerateActionsForNode(search::BattleSearcher::Node &node,
@@ -499,11 +691,12 @@ search::Action search::BattleSearcher::getBestAction() const {
     }
 
     int bestEdgeIdx = 0;
-    std::int64_t maxVisits = root.edges[0].node.simulationCount;
+    std::int64_t maxVisits = root.edges[0].node ? root.edges[0].node->simulationCount : 0;
 
     for (int i = 1; i < root.edges.size(); ++i) {
-        if (root.edges[i].node.simulationCount > maxVisits) {
-            maxVisits = root.edges[i].node.simulationCount;
+        std::int64_t visits = root.edges[i].node ? root.edges[i].node->simulationCount : 0;
+        if (visits > maxVisits) {
+            maxVisits = visits;
             bestEdgeIdx = i;
         }
     }
@@ -560,7 +753,7 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleSearcher &s, int laye
             edgeRef.action.execute(bc);
         }
 
-        curStack.push_back( {&edgeRef.node, new BattleContext(bc), 0} );
+        curStack.push_back( {edgeRef.node, new BattleContext(bc), 0} );
         ++nextIdx;
     }
 
@@ -583,7 +776,7 @@ void search::BattleSearcher::printSearchTree(std::ostream &os, int levels) {
 
     for (int depth = 0; depth < levels; ++depth) {
         for (const auto &x : layerEdges[depth]) {
-            os << "(" << x.first.node.simulationCount << ")";
+            os << "(" << (x.first.node ? x.first.node->simulationCount : 0) << ")";
             // We don't print the action for random edges; they reflect RNG branches
             x.first.action.printDesc(os, *x.second) << "\t";
         }

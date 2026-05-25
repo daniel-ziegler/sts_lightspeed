@@ -12,6 +12,7 @@
 #include <random>
 #include <iostream>
 #include <limits>
+#include <unordered_map>
 
 #include "sim/search/SimpleAgent.h"
 
@@ -26,25 +27,25 @@ namespace sts::search {
             std::int64_t simulationCount = 0;
             double evaluationSum = 0;
             std::vector<Edge> edges;
+            // BattleContext state;  // TODO: Re-enable after fixing copy issues
             bool isRandomNode = false;
             Action stochasticAction;
             int outcomesGenerated = 0;
-
-            Node() = default;
-            Node(const Node& other);
-            Node(Node&&) = default;
-            Node& operator=(const Node& other);
-            Node& operator=(Node&&) = default;
+            std::uint64_t randomnessBase = 0;  // Base value for RNG branching, sampled from parent's pre-action RNG
         };
 
         struct Edge {
             Action action;
-            Node node;
+            Node* node = nullptr;  // Raw pointer for graph search
             int rngAdvanceSteps = 0;
         };
 
         std::unique_ptr<const BattleContext> rootState;
         Node root;
+
+        // Graph search: node pool and state deduplication
+        std::vector<std::unique_ptr<Node>> allNodes;  // Pool of all created nodes
+        std::unordered_map<size_t, Node*> stateToNode;  // State hash -> Node mapping
 
         EvalFnc evalFnc;
         double explorationParameter = 3*sqrt(2);
@@ -57,6 +58,7 @@ namespace sts::search {
         SimpleAgent rolloutAgent;
 
         explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=&evaluateEndState);
+        ~BattleSearcher();
 
         // public methods
         void search(int64_t simulations);
@@ -67,6 +69,9 @@ namespace sts::search {
         // private helpers
         void updateFromPlayout(const std::vector<Node*> &stack, const std::vector<Action> &actionStack, const BattleContext &endState);
         [[nodiscard]] bool isTerminalState(const BattleContext &bc) const;
+
+        // Graph search deduplication
+        Node* getOrCreateNode(const BattleContext &state);
 
         double evaluateEdge(const Node &parent, int edgeIdx);
         int selectBestEdgeToSearch(const Node &cur);
