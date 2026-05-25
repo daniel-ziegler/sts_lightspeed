@@ -178,15 +178,21 @@ void search::BattleSearcher::step() {
     searchStack.clear();
     searchStack.push_back(&root);
     actionStack.clear();
+    onPathSet.clear();
+    onPathSet.insert(&root);
 
     Node* cur = &root;
     int depth = 0;
     while (true) {
-        // The search-state key includes turn and cardsPlayedThisTurn, both non-decreasing along
-        // any action path, so the transposition graph is acyclic and descent is bounded. If this
-        // trips, that invariant is broken -- fail loudly rather than search a corrupt graph.
+        // turn / cardsPlayedThisTurn are NOT globally monotonic -- potion use and card-select
+        // actions advance neither -- so the transposition graph can genuinely cycle. The known
+        // case is drinking Entropic Brew, which can re-roll itself: a stochastic action whose
+        // outcome is gameplay-identical to the pre-action state (differing only in rng, which
+        // equalForSearch ignores), deduping the outcome back onto the path. The onPathSet guards
+        // below break such cycles by rolling out instead of descending into an on-path node; this
+        // bound is only a backstop for any cycle they fail to catch.
         if (++depth > 5000) {
-            throw std::runtime_error("BattleSearcher::step descent exceeded depth bound -- state-key cycle?");
+            throw std::runtime_error("BattleSearcher::step descent exceeded depth bound");
         }
 
         if (cur->isRandomNode) {
@@ -194,7 +200,17 @@ void search::BattleSearcher::step() {
             Edge* outcomeEdge = selectChanceOutcome(*cur);
             ++outcomeEdge->visitCount;
             Node* child = outcomeEdge->node;
+
+            if (onPathSet.count(child) != 0) {
+                // Outcome reproduces a state already on the path -> cycle. Roll out instead.
+                BattleContext rollout = child->state;
+                rolloutToEnd(rollout, actionStack);
+                updateFromPlayout(searchStack, actionStack, rollout);
+                return;
+            }
+
             searchStack.push_back(child);
+            onPathSet.insert(child);
 
             if (child->simulationCount == 0) {
                 BattleContext rollout = child->state;
@@ -227,9 +243,17 @@ void search::BattleSearcher::step() {
 
         if (edge.node != nullptr) {
             // Already expanded: descend (transposition or revisit).
+            if (onPathSet.count(edge.node) != 0) {
+                // Descending would revisit an on-path node -> cycle. Roll out instead.
+                BattleContext rollout = edge.node->state;
+                rolloutToEnd(rollout, actionStack);
+                updateFromPlayout(searchStack, actionStack, rollout);
+                return;
+            }
             actionStack.push_back(edge.action);
             cur = edge.node;
             searchStack.push_back(cur);
+            onPathSet.insert(cur);
             continue;
         }
 
@@ -253,13 +277,24 @@ void search::BattleSearcher::step() {
             edge.node = chance;
             cur = chance;
             searchStack.push_back(cur);
+            onPathSet.insert(cur);
             continue;  // outcome resolved at the top of the loop next iteration
         }
 
         // Deterministic action: deduplicate into a decision node.
         Node* child = getOrCreateNode(next);
         edge.node = child;
+
+        if (onPathSet.count(child) != 0) {
+            // Deterministic action cycled back to an on-path node. Roll out instead.
+            BattleContext rollout = next;  // next == child->state
+            rolloutToEnd(rollout, actionStack);
+            updateFromPlayout(searchStack, actionStack, rollout);
+            return;
+        }
+
         searchStack.push_back(child);
+        onPathSet.insert(child);
 
         if (child->simulationCount == 0) {
             BattleContext rollout = next;  // next == child->state
@@ -640,21 +675,17 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
 }
 
 double search::BattleSearcher::evaluateEndState(const BattleContext &bc) {
-    double potionScore = bc.potionCount * 12;
+    double potionScore = bc.potionCount * 10;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
-        double score = 100 + bc.player.curHp + potionScore - (bc.turn * 0.01);
-        // std::cout << "Victory! Turn " << bc.turn << " " << bc.player.curHp << "/" << bc.player.maxHp << "hp " << bc.potionCount << "pots: " << score << "\n";
-        return score;
+        return 100 + bc.player.curHp + potionScore - (bc.turn * 0.01);
     } else {
-//        double statusScore =
-//                (bc.player.getStatus<PS::STRENGTH>() * .5);
         const bool couldHaveSpikers = bc.encounter == MonsterEncounter::THREE_SHAPES || bc.encounter == MonsterEncounter::FOUR_SHAPES;
         double energyPenalty = bc.energyWasted * -0.2 * (couldHaveSpikers ? 0 : 1);
         double drawBonus = bc.cardsDrawn * 0.03;
-        double aliveScore = bc.monsters.monstersAlive*-1;
+        double aliveScore = bc.monsters.monstersAlive * -1;
 
-        return (1-getNonMinionMonsterCurHpRatio(bc))*10 + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * .2);
+        return (1 - getNonMinionMonsterCurHpRatio(bc)) * 10 + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * .2);
     }
 }
 

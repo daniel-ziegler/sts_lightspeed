@@ -13,6 +13,7 @@
 #include <iostream>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "sim/search/SimpleAgent.h"
 
@@ -63,6 +64,7 @@ namespace sts::search {
 
         std::vector<Node*> searchStack;
         std::vector<Action> actionStack;
+        std::unordered_set<Node*> onPathSet;   // nodes on the current descent path (cycle guard)
         
         SimpleAgent rolloutAgent;
 
