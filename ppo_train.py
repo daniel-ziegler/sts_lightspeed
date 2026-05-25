@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass, fields
 from typing import List, NamedTuple, Optional, get_type_hints, Union
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 import threading
 from collections import Counter
 import json
@@ -54,6 +54,45 @@ class Stats:
         return (self.sum_squared / self.count) - (mean_val ** 2)
 
 
+class RunningMoments:
+    """EWMA estimate of the mean and std of a stream of values.
+
+    Advantage normalization divides by the std; with a small or heavy-tailed batch that
+    per-batch std is noisy and the normalization scale jumps between iterations. Tracking
+    the mean and E[x^2] with an exponential moving average keeps the scale stable. The
+    decay is applied per item (a batch of N items retains (1-decay)^N of the prior
+    estimate), so the amount of smoothing is invariant to batch size. decay=1.0 recovers
+    pure per-batch normalization.
+    """
+
+    def __init__(self, decay: float, eps: float = 1e-8):
+        assert 0.0 < decay <= 1.0, f"adv_norm_decay must be in (0, 1], got {decay}"
+        self.decay = decay
+        self.eps = eps
+        self.mean = 0.0
+        self.second_moment = 0.0  # EWMA of E[x^2]
+        self.initialized = False
+
+    def update(self, values: np.ndarray):
+        batch_mean = float(values.mean())
+        batch_second = float(np.mean(values ** 2))
+        if not self.initialized:
+            self.mean = batch_mean
+            self.second_moment = batch_second
+            self.initialized = True
+            return
+        # Per-item decay, so smoothing is invariant to batch size: a batch of N items
+        # retains (1-decay)^N of the previous estimate. Large batches mostly trust
+        # themselves; small/noisy batches lean on accumulated history.
+        retain = (1.0 - self.decay) ** values.size
+        self.mean = retain * self.mean + (1.0 - retain) * batch_mean
+        self.second_moment = retain * self.second_moment + (1.0 - retain) * batch_second
+
+    @property
+    def std(self) -> float:
+        return float(np.sqrt(max(self.second_moment - self.mean ** 2, self.eps)))
+
+
 @dataclass
 class PPOConfig:
     """PPO training hyperparameters."""
@@ -79,6 +118,7 @@ class PPOConfig:
     # GAE parameters
     gamma: float = 1.00
     gae_lambda: float = 0.97
+    adv_norm_decay: float = 5e-4  # per-item EWMA decay for advantage mean/std (batch retains (1-decay)^N; 1.0 = current batch only)
     
     # Training settings
     num_iterations: int = 1000
@@ -164,9 +204,11 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -
                 future = battle_executor.submit(agent.playout_battle, gc)
                 
                 try:
-                    # Wait for completion with timeout
+                    # Wait for completion with timeout. future.result raises
+                    # concurrent.futures.TimeoutError, which is a distinct class from the
+                    # builtin TimeoutError before Python 3.11 -- catch the right one.
                     future.result(timeout=30.0)
-                except TimeoutError:
+                except FuturesTimeoutError:
                     log.warning(f"Battle simulation timed out for seed {seed}. Background thread will continue running.")
                     # End the episode. The outcome will be UNDECIDED.
                     break
@@ -322,7 +364,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     return trajectories
 
 
-def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, debug_traj: bool = False) -> tuple[List[PPOExperience], List[float], List[float]]:
+def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv_norm: RunningMoments, debug_traj: bool = False) -> tuple[List[PPOExperience], List[float], List[float]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
     all_advantages = []
@@ -409,20 +451,22 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, deb
             
             print("=" * 80)
         
-        # Normalize advantages
-        if len(advantages) > 1:
-            adv_mean = advantages.mean()
-            adv_std = advantages.std()
-            if adv_std > 1e-8:
-                advantages = (advantages - adv_mean) / adv_std
-            else:
-                advantages = advantages - adv_mean
-        
-        # Store experiences, advantages, and returns
+        # Store experiences and raw (un-normalized) GAE advantages/returns.
         all_experiences.extend(traj.experiences)
         all_advantages.extend(advantages.tolist())
         all_returns.extend(returns.tolist())
-    
+
+    # Normalize advantages across the whole batch (never per-trajectory -- that would erase
+    # the relative scale between good and bad games, which is most of the signal under sparse
+    # win/floor rewards). The mean/std come from an EWMA across iterations so the scale stays
+    # stable when a batch is small or heavy-tailed. Returns are left raw -- they are the
+    # value-function targets.
+    advantages_arr = np.asarray(all_advantages, dtype=np.float64)
+    if advantages_arr.size > 0:
+        adv_norm.update(advantages_arr)
+        advantages_arr = (advantages_arr - adv_norm.mean) / adv_norm.std
+    all_advantages = advantages_arr.tolist()
+
     return all_experiences, all_advantages, all_returns
 
 
@@ -523,7 +567,8 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
         for collated_batch in dataloader:
             # Move to device
             collated_batch = move_to_device(collated_batch, device)
-            
+            batch_size = len(collated_batch['chosen_idx'])
+
             # Forward pass
             if config.separate_networks:
                 # Get policy logits from policy network
@@ -555,7 +600,6 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             action_log_probs = F.log_softmax(new_logits, dim=-1)
             
             # Get log probs for chosen actions
-            batch_size = len(collated_batch['chosen_idx'])
             batch_indices_tensor = torch.arange(batch_size, device=device)
             new_log_probs = action_log_probs[batch_indices_tensor, chosen_indices]
             
@@ -622,7 +666,8 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             # Backward pass - same logic for both separate and single networks
             total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
             total_loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(optimizer.param_groups[0]['params'], config.max_grad_norm)
+            all_params = [p for group in optimizer.param_groups for p in group['params']]
+            grad_norm = torch.nn.utils.clip_grad_norm_(all_params, config.max_grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             
@@ -817,8 +862,11 @@ def main():
         # Create combined network wrapper
         combined_net = SeparateValuePolicy(policy_net, value_net)
         
-        # Create single optimizer using combined parameters from both networks
-        optimizer = torch.optim.AdamW(combined_net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
+        # Separate networks: policy params at policy_lr, value params at value_lr.
+        optimizer = torch.optim.AdamW([
+            {'params': list(policy_net.parameters()), 'lr': config.policy_lr},
+            {'params': list(value_net.parameters()), 'lr': config.value_lr},
+        ], weight_decay=config.weight_decay)
         
         # Load optimizer state if resuming
         if config.resume_from_step > 0:
@@ -854,8 +902,17 @@ def main():
             net = load_network_backward_compatible(net, state)
             print(f"Loaded model from {args.init_path}")
         
-        # Create optimizer
-        optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr, weight_decay=config.weight_decay)
+        # Shared trunk + policy head train at policy_lr; the value head trains at value_lr.
+        value_modules = [net.value_head_norm, net.value_head]
+        if net.H.num_value_layers > 0:
+            value_modules.append(net.value_layers)
+        value_params = [p for m in value_modules for p in m.parameters()]
+        value_param_ids = {id(p) for p in value_params}
+        policy_params = [p for p in net.parameters() if id(p) not in value_param_ids]
+        optimizer = torch.optim.AdamW([
+            {'params': policy_params, 'lr': config.policy_lr},
+            {'params': value_params, 'lr': config.value_lr},
+        ], weight_decay=config.weight_decay)
         
         # Load optimizer state if resuming
         if config.resume_from_step > 0:
@@ -887,7 +944,10 @@ def main():
         print(f"Resuming PPO training from iteration {config.resume_from_step} with {config.num_games_per_step} games per batch")
     else:
         print(f"Starting PPO training with {config.num_games_per_step} games per batch")
-    
+
+    # Persistent advantage normalizer (EWMA of mean/std across iterations).
+    adv_norm = RunningMoments(config.adv_norm_decay)
+
     try:
         for iteration in range(config.resume_from_step, config.num_iterations):
             print(f"\nIteration {iteration + 1}/{config.num_iterations}")
@@ -911,7 +971,7 @@ def main():
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
             
             # Prepare training data (with debug output for first trajectory)
-            experiences, advantages, returns = compute_advantages(trajectories, config, debug_traj=True)
+            experiences, advantages, returns = compute_advantages(trajectories, config, adv_norm, debug_traj=True)
             
             if not experiences:
                 print("No experiences to train on, skipping iteration")
