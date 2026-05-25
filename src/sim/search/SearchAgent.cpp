@@ -79,6 +79,7 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
         searcher.explorationParameter = explorationParameter;
         searcher.chanceWideningC = chanceWideningC;
         searcher.chanceWideningAlpha = chanceWideningAlpha;
+        searcher.evalWeights = evalWeights;
         searcher.search(simulationCount);
         simulationCountTotal += searcher.root.simulationCount;
 

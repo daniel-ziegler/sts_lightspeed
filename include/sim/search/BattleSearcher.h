@@ -21,6 +21,18 @@ namespace sts::search {
 
     typedef std::function<double (const BattleContext&)> EvalFnc;
 
+    // Tunable weights for evaluateEndState (the value backed up by the search).
+    struct EvalWeights {
+        double winBonus = 100.0;
+        double potionWeight = 10.0;
+        double victoryTurnPenalty = 0.01;
+        double monsterDamageWeight = 10.0;
+        double aliveWeight = 1.0;
+        double energyWasteWeight = 0.2;
+        double drawWeight = 0.03;
+        double turnSurvivalWeight = 0.2;
+    };
+
     // to find a solution to a battle with tree pruning
     struct BattleSearcher {
         class Edge;
@@ -53,6 +65,7 @@ namespace sts::search {
         std::unordered_map<size_t, std::vector<Node*>> stateToNode;
 
         EvalFnc evalFnc;
+        EvalWeights evalWeights;
         double explorationParameter = 3*sqrt(2);
 
         // Double Progressive Widening for chance nodes: after n visits a chance node may
@@ -68,7 +81,7 @@ namespace sts::search {
         
         SimpleAgent rolloutAgent;
 
-        explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=&evaluateEndState);
+        explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=nullptr);
         ~BattleSearcher();
 
         // public methods
@@ -94,7 +107,7 @@ namespace sts::search {
         void enumeratePotionActions(Node &node, const BattleContext &bc);
         void enumerateCardSelectActions(Node &node, const BattleContext &bc);
         Edge* selectChanceOutcome(Node &chance);
-        static double evaluateEndState(const BattleContext &bc);
+        double evaluateEndState(const BattleContext &bc) const;
 
         void printSearchTree(std::ostream &os, int levels);
         void printSearchStack(std::ostream &os, bool skipLast=false);

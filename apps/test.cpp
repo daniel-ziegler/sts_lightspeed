@@ -451,9 +451,10 @@ struct EvalStatesInfo {
     const std::vector<GameStateRecord> *records = nullptr;
     std::size_t next = 0;
 
-    double explorationParameter = 0;
-    double chanceWideningC = 0;
-    double chanceWideningAlpha = 0;
+    double explorationParameter = 3 * std::sqrt(2.0);
+    double chanceWideningC = 1.0;
+    double chanceWideningAlpha = 0.5;
+    search::EvalWeights evalWeights;
     int simBudget = 0;
 
     double scoreSum = 0;
@@ -482,6 +483,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         agent.explorationParameter = info->explorationParameter;
         agent.chanceWideningC = info->chanceWideningC;
         agent.chanceWideningAlpha = info->chanceWideningAlpha;
+        agent.evalWeights = info->evalWeights;
         agent.verbosityLevel = 0;
         agent.rng = std::default_random_engine(gc.seed);
 
@@ -502,23 +504,41 @@ static void evalStatesRunner(EvalStatesInfo *info) {
     }
 }
 
+// eval_states <threadCount> <stateFile> <simBudget> <stateLimit> [param=value ...]
+// params: exploration, wideningC, wideningAlpha, winBonus, potionWeight, victoryTurnPenalty,
+//         monsterDamage, aliveWeight, energyWaste, drawWeight, turnSurvival (unset -> default).
 static int evalStates(int argc, const char *argv[]) {
     const int threadCount = std::stoi(argv[2]);
     const std::string stateFile = argv[3];
-    const double exploration = std::stod(argv[4]);
-    const double wideningC = std::stod(argv[5]);
-    const double wideningAlpha = std::stod(argv[6]);
-    const int simBudget = std::stoi(argv[7]);
-    const int stateLimit = std::stoi(argv[8]);
-
-    const std::vector<GameStateRecord> records = loadRecords(stateFile, stateLimit);
+    const int simBudget = std::stoi(argv[4]);
+    const int stateLimit = std::stoi(argv[5]);
 
     EvalStatesInfo info;
-    info.records = &records;
-    info.explorationParameter = exploration;
-    info.chanceWideningC = wideningC;
-    info.chanceWideningAlpha = wideningAlpha;
     info.simBudget = simBudget;
+    for (int i = 6; i < argc; ++i) {
+        const std::string arg = argv[i];
+        const auto eq = arg.find('=');
+        if (eq == std::string::npos) {
+            throw std::runtime_error("eval_states: expected key=value, got: " + arg);
+        }
+        const std::string key = arg.substr(0, eq);
+        const double val = std::stod(arg.substr(eq + 1));
+        if (key == "exploration") info.explorationParameter = val;
+        else if (key == "wideningC") info.chanceWideningC = val;
+        else if (key == "wideningAlpha") info.chanceWideningAlpha = val;
+        else if (key == "winBonus") info.evalWeights.winBonus = val;
+        else if (key == "potionWeight") info.evalWeights.potionWeight = val;
+        else if (key == "victoryTurnPenalty") info.evalWeights.victoryTurnPenalty = val;
+        else if (key == "monsterDamage") info.evalWeights.monsterDamageWeight = val;
+        else if (key == "aliveWeight") info.evalWeights.aliveWeight = val;
+        else if (key == "energyWaste") info.evalWeights.energyWasteWeight = val;
+        else if (key == "drawWeight") info.evalWeights.drawWeight = val;
+        else if (key == "turnSurvival") info.evalWeights.turnSurvivalWeight = val;
+        else throw std::runtime_error("eval_states: unknown param: " + key);
+    }
+
+    const std::vector<GameStateRecord> records = loadRecords(stateFile, stateLimit);
+    info.records = &records;
 
     std::vector<std::unique_ptr<std::thread>> threads;
     if (threadCount == 1) {
