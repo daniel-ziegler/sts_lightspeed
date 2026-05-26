@@ -8,14 +8,13 @@
 #include "game/GameContext.h"
 #include "sim/search/Action.h"
 #include "game/GameAction.h"
+#include "sim/search/BattleSearcher.h"
 
 #include <memory>
 #include <random>
 #include <cmath>
 
 namespace sts::search {
-
-    class BattleSearcher;
 
     struct SearchAgent {
         std::int64_t simulationCountTotal = 0;
@@ -39,6 +38,7 @@ namespace sts::search {
         double explorationParameter = 3 * std::sqrt(2.0);
         double chanceWideningC = 1.0;
         double chanceWideningAlpha = 0.5;
+        EvalWeights evalWeights;
 
         std::default_random_engine rng;
 

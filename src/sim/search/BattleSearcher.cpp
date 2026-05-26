@@ -674,18 +674,18 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
     return (double)curHpTotal / maxHpTotal;
 }
 
-double search::BattleSearcher::evaluateEndState(const BattleContext &bc) {
-    double potionScore = bc.potionCount * 10;
+double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
+    const double potionScore = bc.potionCount * evalWeights.potionWeight;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
-        return 100 + bc.player.curHp + potionScore - (bc.turn * 0.01);
+        return evalWeights.winBonus + bc.player.curHp + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
     } else {
         const bool couldHaveSpikers = bc.encounter == MonsterEncounter::THREE_SHAPES || bc.encounter == MonsterEncounter::FOUR_SHAPES;
-        double energyPenalty = bc.energyWasted * -0.2 * (couldHaveSpikers ? 0 : 1);
-        double drawBonus = bc.cardsDrawn * 0.03;
-        double aliveScore = bc.monsters.monstersAlive * -1;
+        const double energyPenalty = bc.energyWasted * -evalWeights.energyWasteWeight * (couldHaveSpikers ? 0 : 1);
+        const double drawBonus = bc.cardsDrawn * evalWeights.drawWeight;
+        const double aliveScore = bc.monsters.monstersAlive * -evalWeights.aliveWeight;
 
-        return (1 - getNonMinionMonsterCurHpRatio(bc)) * 10 + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * .2);
+        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight);
     }
 }
 
