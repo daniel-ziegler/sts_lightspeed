@@ -144,6 +144,7 @@ static int g_print_level = 0;
 static double g_explorationParameter = 3 * std::sqrt(2.0);
 static double g_chanceWideningC = 1.0;
 static double g_chanceWideningAlpha = 0.5;
+static search::EvalWeights g_evalWeights;
 
 void agentMtRunner(AgentMtInfo *info) {
     std::uint64_t seed;
@@ -163,6 +164,7 @@ void agentMtRunner(AgentMtInfo *info) {
         agent.explorationParameter = g_explorationParameter;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.evalWeights = g_evalWeights;
         agent.rng = std::default_random_engine(gc.seed);
 
         agent.printActions = g_print_level & 0x1;
@@ -653,15 +655,34 @@ int main(int argc, const char* argv[]) {
     } else if (command == "show_states") {
         return showStates(argc, argv);
     } else if (command == "winrate_mt") {
+        // winrate_mt <threadCount> <startSeed> <playoutCount> <simBudget> <ascension> [param=value ...]
+        // params: exploration, wideningC, wideningAlpha, winBonus, potionWeight, victoryTurnPenalty,
+        //         monsterDamage, aliveWeight, energyWaste, drawWeight, turnSurvival.
         const int threadCount = std::stoi(argv[2]);
         const std::uint64_t startSeed = std::stoull(argv[3]);
         const int playoutCount = std::stoi(argv[4]);
         g_simulationCount = std::stoi(argv[5]);
         g_searchAscension = std::stoi(argv[6]);
-        g_explorationParameter = std::stod(argv[7]);
-        g_chanceWideningC = std::stod(argv[8]);
-        g_chanceWideningAlpha = std::stod(argv[9]);
         g_print_level = 0;
+        for (int i = 7; i < argc; ++i) {
+            const std::string arg = argv[i];
+            const auto eq = arg.find('=');
+            if (eq == std::string::npos) throw std::runtime_error("winrate_mt: expected key=value, got: " + arg);
+            const std::string key = arg.substr(0, eq);
+            const double val = std::stod(arg.substr(eq + 1));
+            if (key == "exploration") g_explorationParameter = val;
+            else if (key == "wideningC") g_chanceWideningC = val;
+            else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
+            else if (key == "winBonus") g_evalWeights.winBonus = val;
+            else if (key == "potionWeight") g_evalWeights.potionWeight = val;
+            else if (key == "victoryTurnPenalty") g_evalWeights.victoryTurnPenalty = val;
+            else if (key == "monsterDamage") g_evalWeights.monsterDamageWeight = val;
+            else if (key == "aliveWeight") g_evalWeights.aliveWeight = val;
+            else if (key == "energyWaste") g_evalWeights.energyWasteWeight = val;
+            else if (key == "drawWeight") g_evalWeights.drawWeight = val;
+            else if (key == "turnSurvival") g_evalWeights.turnSurvivalWeight = val;
+            else throw std::runtime_error("winrate_mt: unknown param: " + key);
+        }
         agentMt(threadCount, startSeed, playoutCount);
     } else if (command == "playground") {
         std::vector<CardInstance> cards;
