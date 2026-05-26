@@ -456,8 +456,8 @@ def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv
                 print(f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
             
             print("-" * 140)
-            print(f"Final game outcome: {traj.experiences[-1].metrics.outcome}")
             final_metrics = traj.final_metrics
+            print(f"Final game outcome: {final_metrics.outcome}")
             final_state = f"{final_metrics.floor_num}: {final_metrics.cur_hp}/{final_metrics.max_hp}hp"
             print(f"Final reward: {traj.final_reward:.3f}, Final state: {final_state}")
             
