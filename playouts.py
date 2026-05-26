@@ -443,8 +443,8 @@ class Choice:
     fixed_actions_list: list[sts.GameAction]
 
     # Screen state information
-    screen_state: sts.ScreenState
-    select_screen_type: sts.CardSelectScreenType
+    screen_state: int  # snapshot int -- NOT gc.screen_state, which pybind returns as a live
+    select_screen_type: int  # alias to the C++ field (reads reflect later mutation). See construct_choice.
 
     def as_dict(self):
         # Extract card IDs and upgrades from the Card objects
@@ -465,8 +465,8 @@ class Choice:
             potions_offered=np.array(self.potions_offered, dtype=np.int32),
             fixed_actions=self.fixed_actions if self.fixed_actions else [],
             paths_offered=np.array(self.paths_offered, dtype=np.int32),
-            screen_state=int(self.screen_state),
-            select_screen_type=int(self.select_screen_type),
+            screen_state=self.screen_state,
+            select_screen_type=self.select_screen_type,
         )
 
 
@@ -873,7 +873,7 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
                   fixed_actions=fixed_actions, fixed_actions_list=fixed_actions_list, 
                   relics_offered=relics_offered, relic_actions=relic_actions,
                   potions_offered=potions_offered, potion_actions=potion_actions,
-                  screen_state=gc.screen_state, select_screen_type=gc.screen_state_info.select_screen_type)
+                  screen_state=int(gc.screen_state), select_screen_type=int(gc.screen_state_info.select_screen_type))
 
 def run_game(seed: int, net: Optional[NNService] = None, temperature: float = 1.0, verbose: bool = False, stats: ChoiceStats = None):
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
