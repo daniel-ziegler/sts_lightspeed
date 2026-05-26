@@ -70,6 +70,19 @@ pybind11::dict py::NNRepresentation::as_dict() const {
                         "mapY"_a=mapY);
 }
 
+// Bind a field as a read/write property whose getter returns BY VALUE (a snapshot),
+// rather than by reference. pybind11's def_readwrite uses return_value_policy::reference_internal,
+// which for bound enum types (py::enum_) returns a Python object aliasing the live C++ field, so a
+// stored Python read silently tracks later mutation. Returning by value copies the enum, avoiding
+// that aliasing bug. Use this for enum-typed fields; struct/class fields intentionally keep reference
+// semantics (live navigation) and scalars are already copied.
+template <class C, class T>
+void def_value(pybind11::class_<C> &cls, const char *name, T C::*m) {
+    cls.def_property(name,
+        [m](const C &o) { return o.*m; },              // by-value -> snapshot, no alias
+        [m](C &o, T v) { o.*m = v; });
+}
+
 PYBIND11_MODULE(slaythespire, m) {
     m.doc() = "pybind11 example plugin"; // optional module docstring
     m.def("play", &sts::py::play, "play Slay the Spire Console");
@@ -392,18 +405,14 @@ PYBIND11_MODULE(slaythespire, m) {
             return oss.str();
         }, "returns a string representation of the GameContext");
 
-    gameContext.def_readwrite("outcome", &GameContext::outcome)
+    gameContext
         .def_readwrite("act", &GameContext::act)
         .def_readwrite("floor_num", &GameContext::floorNum)
-        .def_readwrite("screen_state", &GameContext::screenState)
 
         .def_readwrite("seed", &GameContext::seed)
         .def_readwrite("map", &GameContext::map)
         .def_readwrite("cur_map_node_x", &GameContext::curMapNodeX)
         .def_readwrite("cur_map_node_y", &GameContext::curMapNodeY)
-        .def_readwrite("cur_room", &GameContext::curRoom)
-        .def_readwrite("cur_event", &GameContext::curEvent)
-        .def_readwrite("boss", &GameContext::boss)
 
         .def_readwrite("cur_hp", &GameContext::curHp)
         .def_readwrite("max_hp", &GameContext::maxHp)
@@ -439,6 +448,13 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("clear_deck", [](GameContext &gc) {
             gc.deck.cards.clear();
         }, "clear all cards from the deck");
+
+    // Enum-typed fields bound by value (snapshot) to avoid reference_internal aliasing.
+    def_value(gameContext, "outcome", &GameContext::outcome);
+    def_value(gameContext, "screen_state", &GameContext::screenState);
+    def_value(gameContext, "cur_room", &GameContext::curRoom);
+    def_value(gameContext, "cur_event", &GameContext::curEvent);
+    def_value(gameContext, "boss", &GameContext::boss);
 
     pybind11::class_<GameAction> gameAction(m, "GameAction");
     gameAction.def("getAllActionsInState", &GameAction::getAllActionsInState);
@@ -501,8 +517,6 @@ PYBIND11_MODULE(slaythespire, m) {
 
     pybind11::class_<ScreenStateInfo> screenStateInfo(m, "ScreenStateInfo");
         screenStateInfo
-        .def_readwrite("encounter", &ScreenStateInfo::encounter)
-        .def_readwrite("select_screen_type", &ScreenStateInfo::selectScreenType)
         .def_property_readonly("boss_relics", [](const ScreenStateInfo &s) {
             return std::vector<RelicId>(s.bossRelics, s.bossRelics+3);
         })
@@ -539,6 +553,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("powerCardDeckIdx", &ScreenStateInfo::powerCardDeckIdx)
         .def_readwrite("attackCardDeckIdx", &ScreenStateInfo::attackCardDeckIdx);
 
+    def_value(screenStateInfo, "encounter", &ScreenStateInfo::encounter);
+    def_value(screenStateInfo, "select_screen_type", &ScreenStateInfo::selectScreenType);
+
     pybind11::class_<Shop>(m, "Shop")
         .def_property_readonly("prices", [](const Shop& s) {
             return std::vector<int>(s.prices, s.prices + 13);
@@ -565,8 +582,8 @@ PYBIND11_MODULE(slaythespire, m) {
     pybind11::class_<RelicInstance> relic(m, "Relic");
     relic.def(pybind11::init<>())
         .def(pybind11::init<RelicId, int>())
-        .def_readwrite("id", &RelicInstance::id)
         .def_readwrite("data", &RelicInstance::data);
+    def_value(relic, "id", &RelicInstance::id);
 
     pybind11::class_<Map, std::shared_ptr<Map>> map(m, "SpireMap");
     map.def(pybind11::init<std::uint64_t, int,int,bool>());
@@ -646,8 +663,7 @@ PYBIND11_MODULE(slaythespire, m) {
     pybind11::class_<BattleContext> battleContext(m, "BattleContext");
     battleContext.def_readwrite("turn", &BattleContext::turn)
         .def_readwrite("potionCount", &BattleContext::potionCount)
-        .def_readwrite("input_state", &BattleContext::inputState)
-        .def_property_readonly("player", [](BattleContext &bc) -> Player& { 
+        .def_property_readonly("player", [](BattleContext &bc) -> Player& {
             return bc.player; 
         }, pybind11::return_value_policy::reference_internal)
         .def_property_readonly("monsters", [](BattleContext &bc) -> MonsterGroup& { 
@@ -662,6 +678,8 @@ PYBIND11_MODULE(slaythespire, m) {
             return oss.str();
         });
 
+    def_value(battleContext, "input_state", &BattleContext::inputState);
+
     // Player bindings
     pybind11::class_<Player> player(m, "Player");
     player.def_readwrite("energy", &Player::energy)
@@ -669,7 +687,6 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("maxHp", &Player::maxHp)
         .def_readwrite("block", &Player::block)
         .def_readwrite("energyPerTurn", &Player::energyPerTurn)
-        .def_readwrite("stance", &Player::stance)
         .def_readwrite("orbSlots", &Player::orbSlots)
         .def_readwrite("artifact", &Player::artifact)
         .def_readwrite("dexterity", &Player::dexterity)
@@ -704,13 +721,14 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("heal", &Player::heal)
         .def("increaseMaxHp", &Player::increaseMaxHp);
 
+    def_value(player, "stance", &Player::stance);
+
     // Monster bindings
     pybind11::class_<Monster> monster(m, "Monster");
     monster.def_readwrite("curHp", &Monster::curHp)
         .def_readwrite("maxHp", &Monster::maxHp)
         .def_readwrite("block", &Monster::block)
         .def_readwrite("halfDead", &Monster::halfDead)
-        .def_readwrite("id", &Monster::id)
         .def_readwrite("idx", &Monster::idx)
         .def_property("moveHistory", 
             [](Monster &m) { return std::array<int, 2>{static_cast<int>(m.moveHistory[0]), static_cast<int>(m.moveHistory[1])}; },
@@ -745,6 +763,8 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("isEscaping", &Monster::isEscaping)
         .def("addBlock", &Monster::addBlock)
         .def("heal", &Monster::heal);
+
+    def_value(monster, "id", &Monster::id);
 
     // MonsterGroup bindings
     pybind11::class_<MonsterGroup> monsterGroup(m, "MonsterGroup");
@@ -781,7 +801,6 @@ PYBIND11_MODULE(slaythespire, m) {
     cardInstance.def(pybind11::init<>())
         .def(pybind11::init<CardId, bool>(), pybind11::arg("id"), pybind11::arg("upgraded") = false)
         .def(pybind11::init<const Card&>())
-        .def_readwrite("id", &CardInstance::id)
         .def_readwrite("uniqueId", &CardInstance::uniqueId)
         .def_readwrite("upgraded", &CardInstance::upgraded)
         .def_readwrite("specialData", &CardInstance::specialData)
@@ -818,7 +837,9 @@ PYBIND11_MODULE(slaythespire, m) {
             return s + ">";
         });
 
-    // CardManager bindings  
+    def_value(cardInstance, "id", &CardInstance::id);
+
+    // CardManager bindings
     pybind11::class_<CardManager> cardManager(m, "CardManager");
     cardManager.def_readwrite("cardsInHand", &CardManager::cardsInHand)
         .def_property_readonly("hand", [](CardManager &cm) {
@@ -963,9 +984,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("PERCENT_DAMAGE", Neow::Drawback::PERCENT_DAMAGE)
         .value("LOSE_STARTER_RELIC", Neow::Drawback::LOSE_STARTER_RELIC);
 
-    pybind11::class_<Neow::Option>(m, "NeowOption")
-        .def_readwrite("r", &Neow::Option::r)
-        .def_readwrite("d", &Neow::Option::d);
+    pybind11::class_<Neow::Option> neowOption(m, "NeowOption");
+    def_value(neowOption, "r", &Neow::Option::r);
+    def_value(neowOption, "d", &Neow::Option::d);
 
     pybind11::enum_<CardSelectScreenType> cardSelectScreenType(m, "CardSelectScreenType", pybind11::metaclass(enum_metaclass));
     cardSelectScreenType.value("INVALID", CardSelectScreenType::INVALID)
