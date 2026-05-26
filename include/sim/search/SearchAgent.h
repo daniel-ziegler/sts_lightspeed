@@ -43,9 +43,9 @@ namespace sts::search {
         int stepsNoSolution = 5;
         int stepsWithSolution = 15;
 
-        double explorationParameter = 3 * std::sqrt(2.0);
-        double chanceWideningC = 1.0;
-        double chanceWideningAlpha = 0.5;
+        double explorationParameter = 9.9;   // tuned default
+        double chanceWideningC = 4.6;         // tuned default
+        double chanceWideningAlpha = 0.37;    // tuned default
         EvalWeights evalWeights;
 
         std::default_random_engine rng;

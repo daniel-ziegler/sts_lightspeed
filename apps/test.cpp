@@ -141,9 +141,9 @@ struct AgentMtInfo {
 static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
-static double g_explorationParameter = 3 * std::sqrt(2.0);
-static double g_chanceWideningC = 1.0;
-static double g_chanceWideningAlpha = 0.5;
+static double g_explorationParameter = 9.9;   // tuned default
+static double g_chanceWideningC = 4.6;         // tuned default
+static double g_chanceWideningAlpha = 0.37;    // tuned default
 static search::EvalWeights g_evalWeights;
 
 void agentMtRunner(AgentMtInfo *info) {
@@ -453,9 +453,9 @@ struct EvalStatesInfo {
     const std::vector<GameStateRecord> *records = nullptr;
     std::size_t next = 0;
 
-    double explorationParameter = 3 * std::sqrt(2.0);
-    double chanceWideningC = 1.0;
-    double chanceWideningAlpha = 0.5;
+    double explorationParameter = 9.9;   // tuned default
+    double chanceWideningC = 4.6;         // tuned default
+    double chanceWideningAlpha = 0.37;    // tuned default
     search::EvalWeights evalWeights;
     int simBudget = 0;
 

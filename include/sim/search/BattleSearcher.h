@@ -22,15 +22,16 @@ namespace sts::search {
     typedef std::function<double (const BattleContext&)> EvalFnc;
 
     // Tunable weights for evaluateEndState (the value backed up by the search).
+    // Defaults are the tuned config (Optuna, validated best on 2000 states @5000).
     struct EvalWeights {
-        double winBonus = 100.0;
-        double potionWeight = 10.0;
+        double winBonus = 53.0;
+        double potionWeight = 11.0;
         double victoryTurnPenalty = 0.01;
-        double monsterDamageWeight = 10.0;
-        double aliveWeight = 1.0;
-        double energyWasteWeight = 0.2;
+        double monsterDamageWeight = 37.0;
+        double aliveWeight = 3.4;
+        double energyWasteWeight = 1.75;
         double drawWeight = 0.03;
-        double turnSurvivalWeight = 0.2;
+        double turnSurvivalWeight = 1.5;
     };
 
     // to find a solution to a battle with tree pruning
@@ -66,12 +67,12 @@ namespace sts::search {
 
         EvalFnc evalFnc;
         EvalWeights evalWeights;
-        double explorationParameter = 3*sqrt(2);
+        double explorationParameter = 9.9;   // tuned default
 
         // Double Progressive Widening for chance nodes: after n visits a chance node may
         // hold at most ceil(chanceWideningC * (n+1)^chanceWideningAlpha) distinct outcomes.
-        double chanceWideningC = 1.0;
-        double chanceWideningAlpha = 0.5;
+        double chanceWideningC = 4.6;        // tuned default
+        double chanceWideningAlpha = 0.37;   // tuned default
 
         std::default_random_engine randGen;
 
