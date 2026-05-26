@@ -635,6 +635,8 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
     total_entropy = 0
     total_kl_div = 0
     total_grad_norm = 0
+    total_policy_grad_norm = 0
+    total_value_grad_norm = 0
     total_clipfrac = 0
     # Stats for explained variance calculation
     target_stats = Stats()
@@ -744,6 +746,13 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             # Backward pass - same logic for both separate and single networks
             total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
             total_loss.backward()
+            # Per-group grad norms (pre-clip): param_groups[0]=policy/trunk, [1]=value head.
+            # Value group's grad is pure value-loss; the policy group also carries value-loss
+            # gradient flowing through the shared trunk (single-net case).
+            pg0 = [p.grad.norm() for p in optimizer.param_groups[0]['params'] if p.grad is not None]
+            pg1 = [p.grad.norm() for p in optimizer.param_groups[1]['params'] if p.grad is not None]
+            policy_grad_norm = torch.norm(torch.stack(pg0)).item() if pg0 else 0.0
+            value_grad_norm = torch.norm(torch.stack(pg1)).item() if pg1 else 0.0
             all_params = [p for group in optimizer.param_groups for p in group['params']]
             grad_norm = torch.nn.utils.clip_grad_norm_(all_params, config.max_grad_norm)
             optimizer.step()
@@ -755,6 +764,8 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
             total_entropy += entropy.item()
             total_kl_div += kl_div.item()
             total_grad_norm += grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            total_policy_grad_norm += policy_grad_norm
+            total_value_grad_norm += value_grad_norm
             total_clipfrac += clipfrac.item()
             num_batches += 1
     
@@ -773,6 +784,8 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
         'entropy': total_entropy / num_batches if num_batches > 0 else 0,
         'kl_div': total_kl_div / num_batches if num_batches > 0 else 0,
         'grad_norm': total_grad_norm / num_batches if num_batches > 0 else 0,
+        'policy_grad_norm': total_policy_grad_norm / num_batches if num_batches > 0 else 0,
+        'value_grad_norm': total_value_grad_norm / num_batches if num_batches > 0 else 0,
         'clipfrac': total_clipfrac / num_batches if num_batches > 0 else 0,
         'explained_variance': explained_variance,
     }
@@ -1076,7 +1089,7 @@ def main():
                   f"Value loss: {losses.get('value_loss', 0):.4f}, "
                   f"Entropy: {losses.get('entropy', 0):.4f}")
             print(f"KL div: {losses.get('kl_div', 0):.6f}, "
-                  f"Grad norm: {losses.get('grad_norm', 0):.4f}, "
+                  f"Grad norm: {losses.get('grad_norm', 0):.4f} (policy {losses.get('policy_grad_norm', 0):.4f} / value {losses.get('value_grad_norm', 0):.4f}), "
                   f"Clip frac: {losses.get('clipfrac', 0):.3f}")
             print(f"Value explained variance: {losses.get('explained_variance', 0):.3f}")
             
@@ -1095,6 +1108,8 @@ def main():
                 'entropy': losses.get('entropy', 0),
                 'kl_div': losses.get('kl_div', 0),
                 'grad_norm': losses.get('grad_norm', 0),
+                'policy_grad_norm': losses.get('policy_grad_norm', 0),
+                'value_grad_norm': losses.get('value_grad_norm', 0),
                 'clipfrac': losses.get('clipfrac', 0),
                 'explained_variance': losses.get('explained_variance', 0)
             }
