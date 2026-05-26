@@ -16,12 +16,20 @@
 
 namespace sts::search {
 
+    // Post-battle snapshot for studying which per-battle features predict full-game wins.
+    struct BattleSnapshot {
+        int floor, act, curHp, maxHp, potionCount, deckSize, encounter;
+    };
+
     struct SearchAgent {
         std::int64_t simulationCountTotal = 0;
         std::vector<int> gameActionHistory;
 
         bool recordActions = false;
         std::vector<int> battleStartIndices;
+
+        bool logBattleOutcomes = false;
+        std::vector<BattleSnapshot> battleLog;
 
         int stepCount = 0;
         bool paused = false;

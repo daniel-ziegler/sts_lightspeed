@@ -46,9 +46,15 @@ void search::SearchAgent::playout(GameContext &gc) {
 
             bc = BattleContext();
             bc.init(gc);
+            const auto battleEncounter = bc.encounter;
 
             playoutBattle(bc);
             bc.exitBattle(gc);
+
+            if (logBattleOutcomes) {
+                battleLog.push_back({gc.floorNum, gc.act, gc.curHp, gc.maxHp, gc.potionCount,
+                                     static_cast<int>(gc.deck.size()), static_cast<int>(battleEncounter)});
+            }
             continue;
         }
 

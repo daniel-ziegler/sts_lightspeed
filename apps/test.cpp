@@ -581,6 +581,108 @@ static int showStates(int argc, const char *argv[]) {
     return 0;
 }
 
+// Parse one "key=value" arg into the global search-knob / eval-weight config.
+static void applyGlobalParam(const std::string &arg) {
+    const auto eq = arg.find('=');
+    if (eq == std::string::npos) throw std::runtime_error("expected key=value, got: " + arg);
+    const std::string key = arg.substr(0, eq);
+    const double val = std::stod(arg.substr(eq + 1));
+    if (key == "exploration") g_explorationParameter = val;
+    else if (key == "wideningC") g_chanceWideningC = val;
+    else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
+    else if (key == "winBonus") g_evalWeights.winBonus = val;
+    else if (key == "potionWeight") g_evalWeights.potionWeight = val;
+    else if (key == "victoryTurnPenalty") g_evalWeights.victoryTurnPenalty = val;
+    else if (key == "monsterDamage") g_evalWeights.monsterDamageWeight = val;
+    else if (key == "aliveWeight") g_evalWeights.aliveWeight = val;
+    else if (key == "energyWaste") g_evalWeights.energyWasteWeight = val;
+    else if (key == "drawWeight") g_evalWeights.drawWeight = val;
+    else if (key == "turnSurvival") g_evalWeights.turnSurvivalWeight = val;
+    else throw std::runtime_error("unknown param: " + key);
+}
+
+struct DumpInfo {
+    std::mutex m;
+    std::uint64_t curSeed = 0, seedEnd = 0;
+    int simBudget = 0, ascension = 0;
+    std::ofstream *out = nullptr;
+    int gamesDone = 0;
+};
+
+static void dumpBattleOutcomesRunner(DumpInfo *info) {
+    while (true) {
+        std::uint64_t seed;
+        {
+            std::scoped_lock lock(info->m);
+            if (info->curSeed >= info->seedEnd) break;
+            seed = info->curSeed++;
+        }
+        GameContext gc(CharacterClass::IRONCLAD, seed, info->ascension);
+        search::SearchAgent agent;
+        agent.simulationCountBase = info->simBudget;
+        agent.explorationParameter = g_explorationParameter;
+        agent.chanceWideningC = g_chanceWideningC;
+        agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.evalWeights = g_evalWeights;
+        agent.logBattleOutcomes = true;
+        agent.verbosityLevel = 0;
+        agent.rng = std::default_random_engine(gc.seed);
+
+        agent.playout(gc);
+
+        const int won = (gc.outcome == sts::GameOutcome::PLAYER_VICTORY) ? 1 : 0;
+        const int finalFloor = gc.floorNum;
+        std::ostringstream line;
+        for (std::size_t b = 0; b < agent.battleLog.size(); ++b) {
+            const auto &s = agent.battleLog[b];
+            line << seed << ',' << b << ',' << s.floor << ',' << s.act << ',' << s.curHp << ','
+                 << s.maxHp << ',' << s.potionCount << ',' << s.deckSize << ',' << s.encounter << ','
+                 << won << ',' << finalFloor << '\n';
+        }
+        {
+            std::scoped_lock lock(info->m);
+            (*info->out) << line.str();
+            ++info->gamesDone;
+        }
+    }
+}
+
+// dump_battle_outcomes <threads> <startSeed> <ngames> <simBudget> <ascension> <outFile> [param=value ...]
+// Per battle in each full game: post-battle features + whether the game was eventually won.
+static int dumpBattleOutcomes(int argc, const char *argv[]) {
+    const int threadCount = std::stoi(argv[2]);
+    const std::uint64_t startSeed = std::stoull(argv[3]);
+    const int gameCount = std::stoi(argv[4]);
+    const int simBudget = std::stoi(argv[5]);
+    const int ascension = std::stoi(argv[6]);
+    const std::string outFile = argv[7];
+    for (int i = 8; i < argc; ++i) {
+        applyGlobalParam(argv[i]);
+    }
+
+    std::ofstream out(outFile);
+    if (!out) throw std::runtime_error("dump_battle_outcomes: cannot open " + outFile);
+    out << "seed,battle_idx,floor,act,curHp,maxHp,potions,deckSize,encounter,game_won,final_floor\n";
+
+    DumpInfo info;
+    info.curSeed = startSeed;
+    info.seedEnd = startSeed + gameCount;
+    info.simBudget = simBudget;
+    info.ascension = ascension;
+    info.out = &out;
+
+    std::vector<std::unique_ptr<std::thread>> threads;
+    if (threadCount == 1) {
+        dumpBattleOutcomesRunner(&info);
+    } else {
+        for (int t = 0; t < threadCount; ++t) threads.emplace_back(new std::thread(dumpBattleOutcomesRunner, &info));
+        for (auto &th : threads) th->join();
+    }
+    out.flush();
+    std::cout << "dump_battle_outcomes: " << info.gamesDone << " games written to " << outFile << std::endl;
+    return 0;
+}
+
 int main(int argc, const char* argv[]) {
 
     if (argc < 2) {
@@ -654,6 +756,8 @@ int main(int argc, const char* argv[]) {
         return evalStates(argc, argv);
     } else if (command == "show_states") {
         return showStates(argc, argv);
+    } else if (command == "dump_battle_outcomes") {
+        return dumpBattleOutcomes(argc, argv);
     } else if (command == "winrate_mt") {
         // winrate_mt <threadCount> <startSeed> <playoutCount> <simBudget> <ascension> [param=value ...]
         // params: exploration, wideningC, wideningAlpha, winBonus, potionWeight, victoryTurnPenalty,
@@ -665,23 +769,7 @@ int main(int argc, const char* argv[]) {
         g_searchAscension = std::stoi(argv[6]);
         g_print_level = 0;
         for (int i = 7; i < argc; ++i) {
-            const std::string arg = argv[i];
-            const auto eq = arg.find('=');
-            if (eq == std::string::npos) throw std::runtime_error("winrate_mt: expected key=value, got: " + arg);
-            const std::string key = arg.substr(0, eq);
-            const double val = std::stod(arg.substr(eq + 1));
-            if (key == "exploration") g_explorationParameter = val;
-            else if (key == "wideningC") g_chanceWideningC = val;
-            else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
-            else if (key == "winBonus") g_evalWeights.winBonus = val;
-            else if (key == "potionWeight") g_evalWeights.potionWeight = val;
-            else if (key == "victoryTurnPenalty") g_evalWeights.victoryTurnPenalty = val;
-            else if (key == "monsterDamage") g_evalWeights.monsterDamageWeight = val;
-            else if (key == "aliveWeight") g_evalWeights.aliveWeight = val;
-            else if (key == "energyWaste") g_evalWeights.energyWasteWeight = val;
-            else if (key == "drawWeight") g_evalWeights.drawWeight = val;
-            else if (key == "turnSurvival") g_evalWeights.turnSurvivalWeight = val;
-            else throw std::runtime_error("winrate_mt: unknown param: " + key);
+            applyGlobalParam(argv[i]);
         }
         agentMt(threadCount, startSeed, playoutCount);
     } else if (command == "playground") {
