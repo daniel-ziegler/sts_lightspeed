@@ -11,11 +11,17 @@ gated by the straggler tail. Measured (2026-05-26):
 
 | box | games/iter, sim | iter time | exp/hr | CPU util | GPU util |
 |-----|-----------------|-----------|--------|----------|----------|
-| local 3060, 16c | 64, 1000 | ~193 s | ~84 k | ~58% (load 9.4/16) | ~1% |
-| lambda A100, 30c | 128, 1500 | ~191 s | ~172 k | ~40–60% (load ~11–18/30) | ~61%* |
+| local 3060, 16c | 64, 1000 | ~193 s | ~84 k | ~58% (load 9.4/16) | ~11–25% collect, 100% train spikes |
+| lambda A100, 30c | 128, 1500 | ~191 s | ~172 k | ~40–60% (load ~11–18/30) | ~9% (idle) |
 
-The workload is **CPU-MCTS-bound**; the GPU is nearly idle (tiny NN). The ~40–60% CPU
-utilization is the episode-length tail (most workers idle while the slowest games finish).
+GPU util re-sampled 2026-05-26 (8 samples/box over ~16 s): the **A100 sits at a steady ~9%**
+during collection (collection ≈ 85% of each iter; the one-off 61% seen earlier was a brief
+train-phase blip), and the local 3060 bounces ~11–25% during collect with occasional 100% spikes
+in the train step. So averaged, the A100 is **~idle** — the box's value is its **30 cores, not the
+GPU**; a cheap high-core CPU instance would match the training throughput.
+
+The workload is **CPU-MCTS-bound**. The ~40–60% CPU utilization is the episode-length tail
+(most workers idle while the slowest games finish).
 Bumping `num_games` only *amortizes* the tail (smaller fraction with more waves); it doesn't
 remove it and it couples batch size to throughput.
 
