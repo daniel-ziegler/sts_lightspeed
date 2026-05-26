@@ -102,6 +102,8 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("exploration_parameter", &search::SearchAgent::explorationParameter, "MCTS UCB exploration constant used per battle")
         .def_readwrite("chance_widening_c", &search::SearchAgent::chanceWideningC, "double progressive widening C for chance nodes")
         .def_readwrite("chance_widening_alpha", &search::SearchAgent::chanceWideningAlpha, "double progressive widening alpha for chance nodes")
+        .def_readwrite("record_actions", &search::SearchAgent::recordActions, "record taken actions into game_action_history")
+        .def_readwrite("game_action_history", &search::SearchAgent::gameActionHistory, "bits of actions taken (in-battle search::Actions via playout_battle)")
         .def("pick_gameaction", &search::SearchAgent::pickOutOfCombatAction)
         .def("playout_battle", [](search::SearchAgent &agent, GameContext &gc) {
             pybind11::gil_scoped_release release;
