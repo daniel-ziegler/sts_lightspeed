@@ -387,7 +387,9 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x, pos_mask):
         xn = self.norm1(x)
-        xatt, _ = self.attn(xn, xn, xn, attn_mask=None, key_padding_mask=pos_mask)
+        # need_weights=False lets MultiheadAttention dispatch to the fused
+        # scaled_dot_product_attention kernel (faster; numerically equivalent output).
+        xatt, _ = self.attn(xn, xn, xn, attn_mask=None, key_padding_mask=pos_mask, need_weights=False)
         x1 = x + xatt
         x2 = x1 + self.mlp(self.norm2(x1))
         return x2

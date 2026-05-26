@@ -6,7 +6,7 @@ import random
 import argparse
 import logging
 from dataclasses import dataclass, fields
-from typing import List, NamedTuple, Optional, get_type_hints, Union
+from typing import List, NamedTuple, Optional, Tuple, get_type_hints, Union
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 import threading
@@ -136,6 +136,18 @@ class PPOConfig:
     mcts_widening_c: float = 1.0            # tuned ~3.1
     mcts_widening_alpha: float = 0.5        # tuned ~0.97
 
+    # Reward shaping (potential-based). We extend the existing telescoping potential
+    # Phi(s) with shape(s) = shaping_hp_coef*(cur_hp/max_hp) + shaping_upg_coef*num_upgraded.
+    # shape is added to NON-terminal potentials only and un-credited (set to 0) at the terminal,
+    # so with gamma=1 the undiscounted return telescopes to base_return - (shape(s0) - offset),
+    # a per-game constant (s0 is always full-HP/0-upgrades) -> the optimal policy is unchanged.
+    # shaping_offset subtracts a constant from the non-terminal potential; it cancels in every
+    # per-step delta (policy-neutral) and only shrinks the single terminal clawback (= offset -
+    # shape(s_last)). Set it to ~E[shape at last decision] to center that clawback near zero.
+    shaping_hp_coef: float = 0.0
+    shaping_upg_coef: float = 0.0
+    shaping_offset: float = 0.0
+
     # Training settings
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
@@ -157,6 +169,7 @@ class GameMetrics:
     cur_hp: int
     max_hp: int
     perfected_strike_count: int
+    num_upgraded: int  # count of upgraded cards in deck (for reward shaping)
     outcome: sts.GameOutcome
 
 class PPOExperience(NamedTuple):
@@ -203,6 +216,40 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
+def compute_shaped_rewards(
+    step_metrics: List[GameMetrics],
+    final_metrics: GameMetrics,
+    reward_fn,
+    hp_coef: float,
+    upg_coef: float,
+    offset: float,
+) -> Tuple[List[float], float]:
+    """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
+
+    base(s)  = reward_fn(s) (floor progress + victory), defined for every state incl. terminal.
+    shape(s) = hp_coef*(cur_hp/max_hp) + upg_coef*num_upgraded - offset, added to NON-terminal
+               states only; the terminal shaping is un-credited (set to 0).
+
+    With gamma=1 the per-step deltas telescope to
+        sum(rewards) = base(terminal) - base(s0) - (shape_raw(s0) - offset),
+    i.e. shaping changes the return only by a per-game constant (s0 is always full-HP/0-upgrades),
+    so the optimal policy is unchanged. The offset cancels in every interior delta and only
+    shrinks the single terminal clawback (= base_delta_T - shape_raw(s_last) + offset).
+
+    Returns (rewards, terminal_base_value).
+    """
+    base_vals = [reward_fn(m) for m in step_metrics] + [reward_fn(final_metrics)]
+
+    def _shape(m: GameMetrics) -> float:
+        hp_frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
+        return hp_coef * hp_frac + upg_coef * m.num_upgraded - offset
+
+    shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
+    total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
+    rewards = [total_vals[i + 1] - total_vals[i] for i in range(len(step_metrics))]
+    return rewards, base_vals[-1]
+
+
 def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, config: PPOConfig) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
@@ -216,8 +263,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
     agent.chance_widening_alpha = config.mcts_widening_alpha
     experiences = []
     values = []  # Collect values separately
-    reward_fn_vals = []
-    
+
     while gc.outcome == sts.GameOutcome.UNDECIDED:
         try:
             if gc.screen_state == sts.ScreenState.BATTLE:
@@ -284,10 +330,10 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
                             cur_hp=gc.cur_hp,
                             max_hp=gc.max_hp,
                             perfected_strike_count=perfected_strike_count,
+                            num_upgraded=sum(1 for card in gc.deck if card.upgraded),
                             outcome=gc.outcome,
                         )
-                        reward_fn_vals.append(reward_fn(metrics))
-                        
+
                         # Store experience data before action execution
                         exp_data = {
                             'choice': choice,
@@ -330,19 +376,15 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
         cur_hp=gc.cur_hp,
         max_hp=gc.max_hp,
         perfected_strike_count=sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE),
+        num_upgraded=sum(1 for card in gc.deck if card.upgraded),
         outcome=gc.outcome,
     )
     
-    # Compute shaped rewards with centralized delta calculation
-    rewards = []
-    
-    # Compute all reward values once
-    all_reward_values = reward_fn_vals + [reward_fn(final_metrics)]
-    
-    # Reward shaping: each step gets delta from current state to next state
-    for i in range(len(experiences)):
-        reward_delta = all_reward_values[i+1] - all_reward_values[i]
-        rewards.append(reward_delta)
+    # Per-step rewards = deltas of the (base + potential-based shaping) potential.
+    rewards, final_base_reward = compute_shaped_rewards(
+        [e.metrics for e in experiences], final_metrics, reward_fn,
+        config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
+    )
     
     # Add terminal state value (0.0) for GAE bootstrap
     values.append(0.0)
@@ -353,7 +395,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
         experiences=experiences,
         rewards=rewards,
         values=values,
-        final_reward=all_reward_values[-1],
+        final_reward=final_base_reward,
         final_metrics=final_metrics,
         final_deck=list(gc.deck),
         final_relics=list(gc.relics)
