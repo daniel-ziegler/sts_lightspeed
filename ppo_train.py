@@ -129,7 +129,13 @@ class PPOConfig:
     gamma: float = 1.00
     gae_lambda: float = 0.97
     adv_norm_decay: float = 5e-4  # per-item EWMA decay for advantage mean/std (batch retains (1-decay)^N; 1.0 = current batch only)
-    
+
+    # MCTS battle search (per-episode agent knobs)
+    mcts_simulations: int = 1000
+    mcts_exploration: float = 3 * 2 ** 0.5  # ~4.2426 engine default; tuned ~6.5
+    mcts_widening_c: float = 1.0            # tuned ~3.1
+    mcts_widening_alpha: float = 0.5        # tuned ~0.97
+
     # Training settings
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
@@ -197,14 +203,17 @@ def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     return -float(metrics.perfected_strike_count)
 
 
-def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor) -> PPOTrajectory:
+def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, config: PPOConfig) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
     
     agent = sts.Agent()
-    agent.simulation_count_base = 1000
+    agent.simulation_count_base = config.mcts_simulations
     agent.verbosity_level = 0  # silence per-action battle prints (keep ppo_train's own stdout)
+    agent.exploration_parameter = config.mcts_exploration
+    agent.chance_widening_c = config.mcts_widening_c
+    agent.chance_widening_alpha = config.mcts_widening_alpha
     experiences = []
     values = []  # Collect values separately
     reward_fn_vals = []
@@ -360,7 +369,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         # Create a shared executor for battle simulations
         with ThreadPoolExecutor(max_workers=1) as battle_executor:
             for i in tqdm(range(config.num_games_per_step), desc="Collecting experience"):
-                trajectory = run_ppo_episode(start_seed + i, service, reward_fn, battle_executor)
+                trajectory = run_ppo_episode(start_seed + i, service, reward_fn, battle_executor, config)
                 trajectories.append(trajectory)
     else:
         # Multi-threaded execution
@@ -368,7 +377,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         with ThreadPoolExecutor(max_workers=config.num_workers) as battle_executor:
             with ThreadPoolExecutor(max_workers=config.num_workers) as main_executor:
                 futures = [
-                    main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, battle_executor)
+                    main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, battle_executor, config)
                     for i in range(config.num_games_per_step)
                 ]
                 

@@ -86,6 +86,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("boss_simulation_multiplier", &search::SearchAgent::bossSimulationMultiplier, "bonus multiplier to the simulation count for boss fights")
         .def_readwrite("pause_on_card_reward", &search::SearchAgent::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
         .def_readwrite("verbosity_level", &search::SearchAgent::verbosityLevel, "verbosity level: 0=quiet, 1=concise, 2=full")
+        .def_readwrite("exploration_parameter", &search::SearchAgent::explorationParameter, "MCTS UCB exploration constant used per battle")
+        .def_readwrite("chance_widening_c", &search::SearchAgent::chanceWideningC, "double progressive widening C for chance nodes")
+        .def_readwrite("chance_widening_alpha", &search::SearchAgent::chanceWideningAlpha, "double progressive widening alpha for chance nodes")
         .def("pick_gameaction", &search::SearchAgent::pickOutOfCombatAction)
         .def("playout_battle", [](search::SearchAgent &agent, GameContext &gc) {
             pybind11::gil_scoped_release release;
