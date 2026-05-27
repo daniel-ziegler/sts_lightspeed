@@ -386,7 +386,7 @@ bool search::BattleSearcher::isTerminalState(const BattleContext &bc) const { //
     return bc.outcome != Outcome::UNDECIDED;
 }
 
-double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &parent, int edgeIdx) {
+double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &parent, int edgeIdx, double logParentVisits) {
 
     const auto &edge = parent.edges[edgeIdx];
 
@@ -400,7 +400,7 @@ double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &
     // sharing the two diverge, and using edge visits keeps UCB well-formed (Childs et al. 2008).
     const double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
     const double explorationValue = explorationParameter *
-            std::sqrt(std::log(parent.simulationCount + 1) / (edge.visitCount + 1));
+            std::sqrt(logParentVisits / (edge.visitCount + 1));
 
     return qualityValue + explorationValue;
 }
@@ -410,12 +410,15 @@ int search::BattleSearcher::selectBestEdgeToSearch(const search::BattleSearcher:
         return 0;
     }
 
+    // log(parent visits) is the same for every edge, so compute it once for the whole comparison.
+    const double logParentVisits = std::log(cur.simulationCount + 1);
+
     auto bestEdge = 0;
-    auto bestEdgeValue = evaluateEdge(cur, bestEdge);
+    auto bestEdgeValue = evaluateEdge(cur, bestEdge, logParentVisits);
 
     //std::cout << "  edges: " << bestEdgeValue;
     for (int i = 1; i < cur.edges.size(); ++i) {
-        const auto value = evaluateEdge(cur, i);
+        const auto value = evaluateEdge(cur, i, logParentVisits);
         //std::cout << ", " << value;
         if (value > bestEdgeValue) {
             bestEdge = i;

@@ -107,7 +107,7 @@ namespace sts::search {
         // Graph search deduplication
         Node* getOrCreateNode(BattleContext &&state);
 
-        double evaluateEdge(const Node &parent, int edgeIdx);
+        double evaluateEdge(const Node &parent, int edgeIdx, double logParentVisits);
         int selectBestEdgeToSearch(const Node &cur);
 
         void rolloutToEnd(BattleContext &state, std::vector<Action> &actionStack);
