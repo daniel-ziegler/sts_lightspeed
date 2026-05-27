@@ -22,6 +22,8 @@ def eval_ev(net, loader, ymean, ystd):
 
 def run(cfg, tr, va, te, ymean, ystd, log):
     torch.manual_seed(0)
+    if cfg.get('train_subset'):  # for the overfit-capacity check
+        tr = tr.sample(min(cfg['train_subset'], len(tr)), random_state=0).reset_index(drop=True)
     H = ModelHP(use_value_head=True, dim=cfg['dim'], n_layers=cfg['n_layers'],
                 num_value_layers=cfg.get('num_value_layers', 0), value_fork_layer=0)
     net = NN(H).to(DEVICE)
@@ -30,7 +32,10 @@ def run(cfg, tr, va, te, ymean, ystd, log):
                     collate_fn=value_collate, drop_last=True, num_workers=4, persistent_workers=True)
     vl = DataLoader(SlayDataset(va), batch_size=256, collate_fn=value_collate, num_workers=2, persistent_workers=True)
     tel = DataLoader(SlayDataset(te), batch_size=256, collate_fn=value_collate, num_workers=2, persistent_workers=True)
-    best_val, best_test, best_ep, since = -1e9, None, -1, 0
+    # fixed train subsample to measure TRAIN EV (overfit check: does train EV -> ~1.0?)
+    tr_eval = tr.sample(min(3000, len(tr)), random_state=1).reset_index(drop=True)
+    trel = DataLoader(SlayDataset(tr_eval), batch_size=256, collate_fn=value_collate, num_workers=2, persistent_workers=True)
+    best_val, best_test, best_ep, since, best_train = -1e9, None, -1, 0, None
     for ep in range(cfg['epochs']):
         net.train()
         for b in tl:
@@ -39,15 +44,15 @@ def run(cfg, tr, va, te, ymean, ystd, log):
             loss = F.mse_loss(v, tgt)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0); opt.step()
-        ve = eval_ev(net, vl, ymean, ystd); tee = eval_ev(net, tel, ymean, ystd)
+        tre = eval_ev(net, trel, ymean, ystd); ve = eval_ev(net, vl, ymean, ystd); tee = eval_ev(net, tel, ymean, ystd)
         if ve > best_val:
-            best_val, best_test, best_ep, since = ve, tee, ep, 0
+            best_val, best_test, best_ep, best_train, since = ve, tee, ep, tre, 0
         else:
             since += 1
-        log(f"    ep{ep:02d} val={ve:.4f} test={tee:.4f}  (best val {best_val:.4f}@{best_ep} -> test {best_test:.4f})")
+        log(f"    ep{ep:02d} train={tre:.4f} val={ve:.4f} test={tee:.4f}  (best val {best_val:.4f}@{best_ep})")
         if since >= cfg.get('patience', 5):
             break
-    return best_val, best_test, best_ep
+    return best_val, best_test, best_ep, best_train, tre  # final train EV = overfit level
 
 
 def main():
@@ -70,6 +75,8 @@ def main():
 
     base = dict(dim=256, n_layers=4, lr=3e-4, wd=1e-4, batch_size=128, epochs=25, patience=5)
     configs = [
+        # CAPACITY CHECK: small subset, no weight decay, no early stop -> train EV should -> ~1.0
+        dict(base, name='overfit_small', wd=0.0, epochs=60, patience=999, train_subset=4000),
         dict(base, name='nlayers0_linear', n_layers=0),
         dict(base, name='tiny_d64_L1', dim=64, n_layers=1, batch_size=256),
         dict(base, name='tiny_d64_L2', dim=64, n_layers=2, batch_size=256),
@@ -84,17 +91,18 @@ def main():
         for i, cfg in enumerate(configs):
             t0 = time.time(); log(f"[{i+1}/{len(configs)}] {cfg['name']}: {cfg}")
             try:
-                bv, bt, be = run(cfg, tr, va, te, ymean, ystd, log)
+                bv, bt, be, btr, final_tr = run(cfg, tr, va, te, ymean, ystd, log)
             except Exception as e:
                 log(f"  CONFIG FAILED: {e}"); continue
-            rec = dict(cfg, best_val=bv, best_test=bt, best_ep=be, secs=round(time.time()-t0, 1))
+            rec = dict(cfg, best_val=bv, best_test=bt, best_ep=be, train_at_best=btr,
+                       final_train_ev=final_tr, secs=round(time.time()-t0, 1))
             results.append(rec); f.write(json.dumps(rec) + '\n'); f.flush()
-            log(f"  -> test EV={bt:.4f} (val {bv:.4f}) @ep{be}  ({rec['secs']}s)\n")
+            log(f"  -> test EV={bt:.4f} (val {bv:.4f}, train@best {btr:.4f}, final train {final_tr:.4f}) @ep{be}  ({rec['secs']}s)\n")
     results.sort(key=lambda r: -(r['best_test'] if r['best_test'] is not None else -9))
-    log("=== RANKED by held-out TEST EV ===")
+    log("=== RANKED by held-out TEST EV (train EV shows capacity/overfit) ===")
     log(f"saved-value baseline (test, semi-in-sample): {base_test:.4f}")
     for r in results:
-        log(f"  {r['best_test']:.4f}  {r['name']}")
+        log(f"  test {r['best_test']:.4f}  | final-train {r['final_train_ev']:.4f}  {r['name']}")
 
 
 if __name__ == '__main__':
