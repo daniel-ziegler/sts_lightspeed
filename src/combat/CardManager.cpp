@@ -582,7 +582,7 @@ std::set<CardInstance> unordered(const std::vector<CardInstance> &v) {
 bool CardManager::operator==(const CardManager &rhs) const {
     return nextUniqueCardId == rhs.nextUniqueCardId &&
            cardsInHand == rhs.cardsInHand &&
-           hand == rhs.hand &&  // todo unordered
+           std::equal(hand.begin(), hand.begin() + cardsInHand, rhs.hand.begin()) &&  // slots past cardsInHand are stale
            limbo == rhs.limbo &&
            stasisCards == rhs.stasisCards &&
            // TODO make unordered
