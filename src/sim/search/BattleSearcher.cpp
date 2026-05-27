@@ -135,6 +135,35 @@ search::BattleSearcher::~BattleSearcher() {
     allNodes.clear();
 }
 
+void search::BattleSearcher::setRoot(const BattleContext &bc) {
+    *rootState = bc;
+    // Reseed exactly as the constructor does, so each decision's rollouts are independent of the
+    // previous decision's -- matching the old behavior of constructing a fresh searcher per move.
+    randGen.seed(bc.seed + bc.floorNum);
+    rolloutAgent = SimpleAgent(true, bc.seed + bc.floorNum);
+}
+
+// Claims a node from the pool: recycles allNodes[poolUsed] (resetting its bookkeeping but keeping
+// its allocated state/edges storage) or grows the pool. Node addresses are stable because allNodes
+// holds unique_ptrs, so edges may keep raw pointers across reallocations of the outer vector.
+search::BattleSearcher::Node* search::BattleSearcher::allocNode() {
+    if (poolUsed < allNodes.size()) {
+        Node* n = allNodes[poolUsed++].get();
+        n->edges.clear();
+        n->simulationCount = 0;
+        n->evaluationSum = 0;
+        n->isRandomNode = false;
+        n->parent = nullptr;
+        n->outcomesGenerated = 0;
+        n->randomnessBase = 0;
+        n->stochasticAction = Action{};
+        return n;
+    }
+    allNodes.push_back(std::make_unique<Node>());
+    ++poolUsed;
+    return allNodes.back().get();
+}
+
 // Moves `state` into the node only when a new node is created; on a match `state` is left
 // intact, so callers may still read it.
 search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleContext &&state) {
@@ -149,8 +178,7 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
         }
     }
 
-    allNodes.push_back(std::make_unique<Node>());
-    Node* newNode = allNodes.back().get();
+    Node* newNode = allocNode();
     newNode->state = std::move(state);
     bucket.push_back(newNode);
     return newNode;
@@ -159,10 +187,16 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
 bool search::BattleSearcher::resetForSearch() {
     g_debug_scum_search = this;
 
-    // Fresh search: reset the node pool and root (root.edges hold raw pointers into the pool).
-    allNodes.clear();
+    // Recycle the pool rather than freeing it: reclaim every node for reuse and drop the dedup map.
+    poolUsed = 0;
     stateToNode.clear();
-    root = Node();
+    root.edges.clear();
+    root.simulationCount = 0;
+    root.evaluationSum = 0;
+    root.isRandomNode = false;
+    root.parent = nullptr;
+    root.outcomesGenerated = 0;
+    root.randomnessBase = 0;
     root.state = *rootState;
 
     if (isTerminalState(root.state)) {
@@ -296,8 +330,7 @@ void search::BattleSearcher::step() {
         if (rngChanged) {
             // Stochastic action: create a chance node that sources its pre-action state
             // from `cur` and resolves outcomes via Random(randomnessBase + N).
-            allNodes.push_back(std::make_unique<Node>());
-            Node* chance = allNodes.back().get();
+            Node* chance = allocNode();
             chance->isRandomNode = true;
             chance->stochasticAction = edge.action;
             chance->parent = cur;

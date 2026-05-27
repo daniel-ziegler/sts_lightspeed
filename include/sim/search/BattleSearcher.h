@@ -56,13 +56,16 @@ namespace sts::search {
             std::int32_t visitCount = 0;        // times this edge was traversed (UCB / DPW reselection)
         };
 
-        std::unique_ptr<const BattleContext> rootState;
+        std::unique_ptr<BattleContext> rootState;
         Node root;
 
         // Graph search: node pool and state deduplication.
         // stateToNode buckets by search-hash; collisions are resolved by equalForSearch,
         // so distinct states that happen to share a hash are never merged.
+        // The pool persists across a battle's decisions: each search reuses allNodes[0..poolUsed)
+        // and only grows the vector when it needs more, so nodes aren't freed and reallocated per move.
         std::vector<std::unique_ptr<Node>> allNodes;  // Pool of all created nodes
+        std::size_t poolUsed = 0;                     // nodes claimed by the current search
         std::unordered_map<size_t, std::vector<Node*>> stateToNode;
 
         EvalFnc evalFnc;
@@ -86,6 +89,7 @@ namespace sts::search {
         ~BattleSearcher();
 
         // public methods
+        void setRoot(const BattleContext &bc);      // point the searcher at a new root state and reseed its rng, reusing the node pool
         void search(int64_t simulations);
         void searchForMicros(int64_t maxMicros);   // run steps until the wall-clock budget (microseconds) is spent
         void step();
@@ -96,6 +100,8 @@ namespace sts::search {
         bool resetForSearch();   // reset node pool/root for a fresh search; returns false if the root is already terminal
         void updateFromPlayout(const std::vector<Node*> &stack, const std::vector<Action> &actionStack, const BattleContext &endState);
         [[nodiscard]] bool isTerminalState(const BattleContext &bc) const;
+
+        Node* allocNode();   // claim a node from the pool (recycling a reset one, or growing the pool)
 
         // Graph search deduplication
         Node* getOrCreateNode(BattleContext &&state);

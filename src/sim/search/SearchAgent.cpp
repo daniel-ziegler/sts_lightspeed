@@ -77,14 +77,18 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
 }
 
 void search::SearchAgent::playoutBattle(BattleContext &bc) {
+    // One searcher for the whole battle: setRoot re-points it at each decision's state (and reseeds),
+    // reusing its node pool across moves instead of rebuilding and freeing the tree every decision.
+    search::BattleSearcher searcher(bc);
+    searcher.explorationParameter = explorationParameter;
+    searcher.chanceWideningC = chanceWideningC;
+    searcher.chanceWideningAlpha = chanceWideningAlpha;
+    searcher.evalWeights = evalWeights;
+
     while (bc.outcome == Outcome::UNDECIDED) {
         const double bossMultiplier = isBossEncounter(bc.encounter) ? bossSimulationMultiplier : 1.0;
 
-        search::BattleSearcher searcher(bc);
-        searcher.explorationParameter = explorationParameter;
-        searcher.chanceWideningC = chanceWideningC;
-        searcher.chanceWideningAlpha = chanceWideningAlpha;
-        searcher.evalWeights = evalWeights;
+        searcher.setRoot(bc);
         if (searchTimeMicros > 0) {
             searcher.searchForMicros(static_cast<std::int64_t>(bossMultiplier * searchTimeMicros));
         } else {
