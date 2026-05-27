@@ -146,6 +146,8 @@ class PPOConfig:
     # shape(s_last)). Set it to ~E[shape at last decision] to center that clawback near zero.
     shaping_hp_coef: float = 0.0
     shaping_upg_coef: float = 0.0
+    shaping_relic_coef: float = 0.0   # per relic held
+    shaping_maxhp_coef: float = 0.0   # per max-HP point
     shaping_offset: float = 0.0
 
     # Training settings
@@ -170,6 +172,7 @@ class GameMetrics:
     max_hp: int
     perfected_strike_count: int
     num_upgraded: int  # count of upgraded cards in deck (for reward shaping)
+    num_relics: int    # count of relics held (for reward shaping)
     outcome: sts.GameOutcome
 
 class PPOExperience(NamedTuple):
@@ -223,18 +226,21 @@ def compute_shaped_rewards(
     hp_coef: float,
     upg_coef: float,
     offset: float,
+    relic_coef: float = 0.0,
+    maxhp_coef: float = 0.0,
 ) -> Tuple[List[float], float]:
     """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
 
     base(s)  = reward_fn(s) (floor progress + victory), defined for every state incl. terminal.
-    shape(s) = hp_coef*(cur_hp/max_hp) + upg_coef*num_upgraded - offset, added to NON-terminal
-               states only; the terminal shaping is un-credited (set to 0).
+    shape(s) = hp_coef*(cur_hp/max_hp) + upg_coef*num_upgraded + relic_coef*num_relics
+               + maxhp_coef*max_hp - offset, added to NON-terminal states only; the terminal
+               shaping is un-credited (set to 0).
 
     With gamma=1 the per-step deltas telescope to
         sum(rewards) = base(terminal) - base(s0) - (shape_raw(s0) - offset),
-    i.e. shaping changes the return only by a per-game constant (s0 is always full-HP/0-upgrades),
-    so the optimal policy is unchanged. The offset cancels in every interior delta and only
-    shrinks the single terminal clawback (= base_delta_T - shape_raw(s_last) + offset).
+    i.e. shaping changes the return only by a per-game constant (s0 is fixed: full-HP, 0 upgrades,
+    1 relic, starting max_hp), so the optimal policy is unchanged. The offset cancels in every
+    interior delta and only shrinks the single terminal clawback (= base_delta_T - shape_raw(s_last) + offset).
 
     Returns (rewards, terminal_base_value).
     """
@@ -242,7 +248,8 @@ def compute_shaped_rewards(
 
     def _shape(m: GameMetrics) -> float:
         hp_frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
-        return hp_coef * hp_frac + upg_coef * m.num_upgraded - offset
+        return (hp_coef * hp_frac + upg_coef * m.num_upgraded
+                + relic_coef * m.num_relics + maxhp_coef * m.max_hp - offset)
 
     shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
     total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
@@ -331,6 +338,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
                             max_hp=gc.max_hp,
                             perfected_strike_count=perfected_strike_count,
                             num_upgraded=sum(1 for card in gc.deck if card.upgraded),
+                            num_relics=len(gc.relics),
                             outcome=gc.outcome,
                         )
 
@@ -377,6 +385,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
         max_hp=gc.max_hp,
         perfected_strike_count=sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE),
         num_upgraded=sum(1 for card in gc.deck if card.upgraded),
+        num_relics=len(gc.relics),
         outcome=gc.outcome,
     )
     
@@ -384,6 +393,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
     rewards, final_base_reward = compute_shaped_rewards(
         [e.metrics for e in experiences], final_metrics, reward_fn,
         config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
+        relic_coef=config.shaping_relic_coef, maxhp_coef=config.shaping_maxhp_coef,
     )
     
     # Add terminal state value (0.0) for GAE bootstrap

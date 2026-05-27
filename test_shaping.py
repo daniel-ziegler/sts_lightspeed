@@ -14,9 +14,9 @@ import slaythespire as sts
 
 UND = sts.GameOutcome.UNDECIDED
 
-def M(floor, hp, mx, nup):
+def M(floor, hp, mx, nup, nrel=1):
     return GameMetrics(floor_num=floor, cur_hp=hp, max_hp=mx,
-                       perfected_strike_count=0, num_upgraded=nup, outcome=UND)
+                       perfected_strike_count=0, num_upgraded=nup, num_relics=nrel, outcome=UND)
 
 # simple, outcome-independent base reward for the math checks
 base = lambda m: 0.01 * m.floor_num
@@ -72,9 +72,15 @@ if not approx(r[0], HC * (60/80 - 1.0)): fail("HP-drop interior credit wrong")
 # upgrade +3 rewarded by UC*3
 r, _ = compute_shaped_rewards([M(1, 80, 80, 0), M(1, 80, 80, 3)], M(1, 80, 80, 3), lambda m: 0.0, 0, UC, 0)
 if not approx(r[0], UC * 3): fail("upgrade interior credit wrong")
+# relic +1 rewarded by relic_coef
+r, _ = compute_shaped_rewards([M(1, 80, 80, 0, 1), M(1, 80, 80, 0, 2)], M(1, 80, 80, 0, 2), lambda m: 0.0, 0, 0, 0, relic_coef=0.06)
+if not approx(r[0], 0.06): fail("relic interior credit wrong")
+# max_hp +5 rewarded by maxhp_coef*5
+r, _ = compute_shaped_rewards([M(1, 80, 80, 0), M(1, 80, 85, 0)], M(1, 80, 85, 0), lambda m: 0.0, 0, 0, 0, maxhp_coef=0.005)
+if not approx(r[0], 0.005 * 5): fail("max_hp interior credit wrong")
 
 # sanity: with the real progress reward + a victory, default path still works
-win = GameMetrics(50, 70, 80, 0, 9, sts.GameOutcome.PLAYER_VICTORY)
+win = GameMetrics(50, 70, 80, 0, 9, 5, sts.GameOutcome.PLAYER_VICTORY)
 r, fb = compute_shaped_rewards(traj_a, win, compute_progress_reward, HC, UC, OFF)
 print(f"real-reward smoke: terminal_base={fb:.3f} sum={sum(r):.4f} term_step={r[-1]:.4f}")
 
