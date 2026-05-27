@@ -19,106 +19,105 @@ std::int64_t simulationIdx = 0; // for debugging
 namespace sts::search {
     thread_local search::BattleSearcher *g_debug_scum_search;
 
-    // FNV-1a hash constants for 64-bit
-    constexpr std::uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-    constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
+    // Arbitrary nonzero seed for the state hash accumulator.
+    constexpr std::uint64_t HASH_SEED = 14695981039346656037ULL;
 
-    // Hash a value into accumulator using FNV-1a (better distribution than simple XOR)
-    inline void hash_combine_fnv(std::uint64_t& hash, std::uint64_t value) {
-        // Split value into bytes for better mixing
-        for (int i = 0; i < 8; ++i) {
-            hash ^= (value & 0xFF);
-            hash *= FNV_PRIME;
-            value >>= 8;
-        }
+    // Mix one whole word into the accumulator (MurmurHash3 x64 body, one 64-bit lane). This
+    // touches the value in a handful of ops, with strong avalanche. The hash is used only to bucket
+    // nodes in stateToNode -- collisions are resolved exactly by equalForSearch -- so a different
+    // hash value changes only the bucketing performance, never the node graph or the search result.
+    inline void hash_combine(std::uint64_t& hash, std::uint64_t value) {
+        constexpr std::uint64_t c1 = 0x87c37b91114253d5ULL;
+        constexpr std::uint64_t c2 = 0x4cf5ad432745937fULL;
+        value *= c1;
+        value = (value << 31) | (value >> 33);
+        value *= c2;
+        hash ^= value;
+        hash = (hash << 27) | (hash >> 37);
+        hash = hash * 5 + 0x52dce729ULL;
     }
 
-    inline void hash_combine_fnv(std::uint64_t& hash, std::uint32_t value) {
-        for (int i = 0; i < 4; ++i) {
-            hash ^= (value & 0xFF);
-            hash *= FNV_PRIME;
-            value >>= 8;
-        }
+    inline void hash_combine(std::uint64_t& hash, std::uint32_t value) {
+        hash_combine(hash, static_cast<std::uint64_t>(value));
     }
 
-    inline void hash_combine_fnv(std::uint64_t& hash, int value) {
-        hash_combine_fnv(hash, static_cast<std::uint32_t>(value));
+    inline void hash_combine(std::uint64_t& hash, int value) {
+        hash_combine(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(value)));
     }
 
-    inline void hash_combine_fnv(std::uint64_t& hash, bool value) {
-        hash ^= (value ? 1 : 0);
-        hash *= FNV_PRIME;
+    inline void hash_combine(std::uint64_t& hash, bool value) {
+        hash_combine(hash, static_cast<std::uint64_t>(value ? 1u : 0u));
     }
 
     // Hash BattleContext state for graph search deduplication
     // Only hashes observable game state, not internal RNG or debug counters
     std::size_t hashBattleState(const BattleContext& bc) {
-        std::uint64_t hash = FNV_OFFSET_BASIS;
+        std::uint64_t hash = HASH_SEED;
 
         // Hash turn and outcome
-        hash_combine_fnv(hash, bc.turn);
-        hash_combine_fnv(hash, static_cast<int>(bc.outcome));
-        hash_combine_fnv(hash, static_cast<int>(bc.inputState));
+        hash_combine(hash, bc.turn);
+        hash_combine(hash, static_cast<int>(bc.outcome));
+        hash_combine(hash, static_cast<int>(bc.inputState));
 
         // Hash player state
         const auto& p = bc.player;
-        hash_combine_fnv(hash, p.curHp);
-        hash_combine_fnv(hash, p.maxHp);
-        hash_combine_fnv(hash, p.block);
-        hash_combine_fnv(hash, p.energy);
-        hash_combine_fnv(hash, p.cardsPlayedThisTurn);
-        hash_combine_fnv(hash, p.statusBits0);
-        hash_combine_fnv(hash, p.statusBits1);
-        hash_combine_fnv(hash, p.strength);
-        hash_combine_fnv(hash, p.dexterity);
+        hash_combine(hash, p.curHp);
+        hash_combine(hash, p.maxHp);
+        hash_combine(hash, p.block);
+        hash_combine(hash, p.energy);
+        hash_combine(hash, p.cardsPlayedThisTurn);
+        hash_combine(hash, p.statusBits0);
+        hash_combine(hash, p.statusBits1);
+        hash_combine(hash, p.strength);
+        hash_combine(hash, p.dexterity);
 
         // Hash monsters
         for (int i = 0; i < bc.monsters.monsterCount; ++i) {
             const auto& m = bc.monsters.arr[i];
-            hash_combine_fnv(hash, static_cast<int>(m.id));
-            hash_combine_fnv(hash, m.curHp);
-            hash_combine_fnv(hash, m.maxHp);
-            hash_combine_fnv(hash, m.block);
-            hash_combine_fnv(hash, m.statusBits);
-            hash_combine_fnv(hash, static_cast<int>(m.moveHistory[0]));
+            hash_combine(hash, static_cast<int>(m.id));
+            hash_combine(hash, m.curHp);
+            hash_combine(hash, m.maxHp);
+            hash_combine(hash, m.block);
+            hash_combine(hash, m.statusBits);
+            hash_combine(hash, static_cast<int>(m.moveHistory[0]));
         }
 
         // Hash cards in hand (INCLUDING POSITION to prevent invalid deduplication)
-        hash_combine_fnv(hash, bc.cards.cardsInHand);
+        hash_combine(hash, bc.cards.cardsInHand);
         for (int i = 0; i < bc.cards.cardsInHand; ++i) {
             const auto& c = bc.cards.hand[i];
-            hash_combine_fnv(hash, i); // Hash position to preserve ordering
-            hash_combine_fnv(hash, static_cast<int>(c.id));
-            hash_combine_fnv(hash, c.cost);
-            hash_combine_fnv(hash, c.costForTurn);
-            hash_combine_fnv(hash, c.upgraded);
+            hash_combine(hash, i); // Hash position to preserve ordering
+            hash_combine(hash, static_cast<int>(c.id));
+            hash_combine(hash, c.cost);
+            hash_combine(hash, c.costForTurn);
+            hash_combine(hash, c.upgraded);
         }
 
         // Hash draw pile with position (order is significant for future draws)
-        hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile.size()));
+        hash_combine(hash, static_cast<int>(bc.cards.drawPile.size()));
         for (int i = 0; i < static_cast<int>(bc.cards.drawPile.size()); ++i) {
-            hash_combine_fnv(hash, i);
-            hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile[i].id));
+            hash_combine(hash, i);
+            hash_combine(hash, static_cast<int>(bc.cards.drawPile[i].id));
         }
 
         // Hash discard pile (including position for ordering)
-        hash_combine_fnv(hash, static_cast<int>(bc.cards.discardPile.size()));
+        hash_combine(hash, static_cast<int>(bc.cards.discardPile.size()));
         int discardIdx = 0;
         for (const auto& c : bc.cards.discardPile) {
-            hash_combine_fnv(hash, discardIdx++); // Position in discard
-            hash_combine_fnv(hash, static_cast<int>(c.id));
+            hash_combine(hash, discardIdx++); // Position in discard
+            hash_combine(hash, static_cast<int>(c.id));
         }
 
         // Hash exhaust pile contents (iteration order is order-sensitive via the accumulator)
-        hash_combine_fnv(hash, static_cast<int>(bc.cards.exhaustPile.size()));
+        hash_combine(hash, static_cast<int>(bc.cards.exhaustPile.size()));
         for (const auto& c : bc.cards.exhaustPile) {
-            hash_combine_fnv(hash, static_cast<int>(c.id));
+            hash_combine(hash, static_cast<int>(c.id));
         }
 
         // Hash potions
-        hash_combine_fnv(hash, bc.potionCount);
+        hash_combine(hash, bc.potionCount);
         for (int i = 0; i < bc.potionCount; ++i) {
-            hash_combine_fnv(hash, static_cast<int>(bc.potions[i]));
+            hash_combine(hash, static_cast<int>(bc.potions[i]));
         }
 
         return hash;
