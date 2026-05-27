@@ -84,6 +84,7 @@ namespace sts::search {
         std::unordered_set<Node*> onPathSet;   // nodes on the current descent path (cycle guard)
         
         SimpleAgent rolloutAgent;
+        BattleContext rolloutScratch;   // reused playout buffer: copy-assigning into it keeps the card-pile vector capacity, avoiding a fresh allocation per rollout
 
         explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=nullptr);
         ~BattleSearcher();

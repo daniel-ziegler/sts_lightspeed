@@ -265,7 +265,7 @@ void search::BattleSearcher::step() {
 
             if (onPathSet.count(child) != 0) {
                 // Outcome reproduces a state already on the path -> cycle. Roll out instead.
-                BattleContext rollout = child->state;
+                BattleContext &rollout = (rolloutScratch = child->state);
                 rolloutToEnd(rollout, actionStack);
                 updateFromPlayout(searchStack, actionStack, rollout);
                 return;
@@ -275,7 +275,7 @@ void search::BattleSearcher::step() {
             onPathSet.insert(child);
 
             if (child->simulationCount == 0) {
-                BattleContext rollout = child->state;
+                BattleContext &rollout = (rolloutScratch = child->state);
                 rolloutToEnd(rollout, actionStack);
                 updateFromPlayout(searchStack, actionStack, rollout);
                 return;
@@ -307,7 +307,7 @@ void search::BattleSearcher::step() {
             // Already expanded: descend (transposition or revisit).
             if (onPathSet.count(edge.node) != 0) {
                 // Descending would revisit an on-path node -> cycle. Roll out instead.
-                BattleContext rollout = edge.node->state;
+                BattleContext &rollout = (rolloutScratch = edge.node->state);
                 rolloutToEnd(rollout, actionStack);
                 updateFromPlayout(searchStack, actionStack, rollout);
                 return;
@@ -351,7 +351,7 @@ void search::BattleSearcher::step() {
         if (onPathSet.count(child) != 0) {
             // Existing on-path node (a brand-new node is never on the path) -> next intact.
             // Deterministic action cycled back to an on-path node. Roll out instead.
-            BattleContext rollout = next;  // next == child->state
+            BattleContext &rollout = (rolloutScratch = next);  // next == child->state
             rolloutToEnd(rollout, actionStack);
             updateFromPlayout(searchStack, actionStack, rollout);
             return;
@@ -363,7 +363,7 @@ void search::BattleSearcher::step() {
         if (child->simulationCount == 0) {
             // Brand-new node (only new nodes have simulationCount 0 here) -> next was moved into
             // child->state, which now holds exactly what next did (rng included).
-            BattleContext rollout = child->state;
+            BattleContext &rollout = (rolloutScratch = child->state);
             rolloutToEnd(rollout, actionStack);
             updateFromPlayout(searchStack, actionStack, rollout);
             return;
