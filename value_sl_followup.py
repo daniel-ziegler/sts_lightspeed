@@ -77,6 +77,9 @@ def main():
     configs = [
         # CAPACITY CHECK: small subset, no weight decay, no early stop -> train EV should -> ~1.0
         dict(base, name='overfit_small', wd=0.0, epochs=60, patience=999, train_subset=4000),
+        # underfitting control: full data, base arch, ZERO weight decay (is even 1e-4 suppressing the fit?)
+        dict(base, name='base_wd0', wd=0.0),
+        dict(base, name='base_wd0_long', wd=0.0, epochs=40, patience=12),  # let train EV climb
         dict(base, name='nlayers0_linear', n_layers=0),
         dict(base, name='tiny_d64_L1', dim=64, n_layers=1, batch_size=256),
         dict(base, name='tiny_d64_L2', dim=64, n_layers=2, batch_size=256),
