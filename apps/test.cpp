@@ -144,6 +144,7 @@ static int g_print_level = 0;
 static double g_explorationParameter = 9.9;   // tuned default
 static double g_chanceWideningC = 4.6;         // tuned default
 static double g_chanceWideningAlpha = 0.37;    // tuned default
+static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
 static search::EvalWeights g_evalWeights;
 
 void agentMtRunner(AgentMtInfo *info) {
@@ -164,6 +165,7 @@ void agentMtRunner(AgentMtInfo *info) {
         agent.explorationParameter = g_explorationParameter;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.searchTimeMicros = g_searchTimeMicros;
         agent.evalWeights = g_evalWeights;
         agent.rng = std::default_random_engine(gc.seed);
 
@@ -456,6 +458,7 @@ struct EvalStatesInfo {
     double explorationParameter = 9.9;   // tuned default
     double chanceWideningC = 4.6;         // tuned default
     double chanceWideningAlpha = 0.37;    // tuned default
+    std::int64_t searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
     search::EvalWeights evalWeights;
     int simBudget = 0;
 
@@ -485,6 +488,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         agent.explorationParameter = info->explorationParameter;
         agent.chanceWideningC = info->chanceWideningC;
         agent.chanceWideningAlpha = info->chanceWideningAlpha;
+        agent.searchTimeMicros = info->searchTimeMicros;
         agent.evalWeights = info->evalWeights;
         agent.verbosityLevel = 0;
         agent.rng = std::default_random_engine(gc.seed);
@@ -507,8 +511,9 @@ static void evalStatesRunner(EvalStatesInfo *info) {
 }
 
 // eval_states <threadCount> <stateFile> <simBudget> <stateLimit> [param=value ...]
-// params: exploration, wideningC, wideningAlpha, winBonus, potionWeight, victoryTurnPenalty,
+// params: exploration, wideningC, wideningAlpha, time, winBonus, potionWeight, victoryTurnPenalty,
 //         monsterDamage, aliveWeight, energyWaste, drawWeight, turnSurvival (unset -> default).
+//   time=<us>: search by a per-decision wall-clock budget (microseconds) instead of <simBudget> rollouts.
 static int evalStates(int argc, const char *argv[]) {
     const int threadCount = std::stoi(argv[2]);
     const std::string stateFile = argv[3];
@@ -528,6 +533,7 @@ static int evalStates(int argc, const char *argv[]) {
         if (key == "exploration") info.explorationParameter = val;
         else if (key == "wideningC") info.chanceWideningC = val;
         else if (key == "wideningAlpha") info.chanceWideningAlpha = val;
+        else if (key == "time") info.searchTimeMicros = static_cast<std::int64_t>(val);
         else if (key == "winBonus") info.evalWeights.winBonus = val;
         else if (key == "potionWeight") info.evalWeights.potionWeight = val;
         else if (key == "victoryTurnPenalty") info.evalWeights.victoryTurnPenalty = val;
@@ -590,6 +596,7 @@ static void applyGlobalParam(const std::string &arg) {
     if (key == "exploration") g_explorationParameter = val;
     else if (key == "wideningC") g_chanceWideningC = val;
     else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
+    else if (key == "time") g_searchTimeMicros = static_cast<std::int64_t>(val);
     else if (key == "winBonus") g_evalWeights.winBonus = val;
     else if (key == "potionWeight") g_evalWeights.potionWeight = val;
     else if (key == "victoryTurnPenalty") g_evalWeights.victoryTurnPenalty = val;
@@ -623,6 +630,7 @@ static void dumpBattleOutcomesRunner(DumpInfo *info) {
         agent.explorationParameter = g_explorationParameter;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.searchTimeMicros = g_searchTimeMicros;
         agent.evalWeights = g_evalWeights;
         agent.logBattleOutcomes = true;
         agent.verbosityLevel = 0;

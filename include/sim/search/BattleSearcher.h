@@ -87,11 +87,13 @@ namespace sts::search {
 
         // public methods
         void search(int64_t simulations);
+        void searchForMicros(int64_t maxMicros);   // run steps until the wall-clock budget (microseconds) is spent
         void step();
         Action getBestAction() const;
         const std::vector<Edge>& getRootEdges() const { return root.edges; }
 
         // private helpers
+        bool resetForSearch();   // reset node pool/root for a fresh search; returns false if the root is already terminal
         void updateFromPlayout(const std::vector<Node*> &stack, const std::vector<Action> &actionStack, const BattleContext &endState);
         [[nodiscard]] bool isTerminalState(const BattleContext &bc) const;
 

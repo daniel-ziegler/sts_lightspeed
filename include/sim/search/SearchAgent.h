@@ -40,6 +40,7 @@ namespace sts::search {
 
         int simulationCountBase = 50000;
         double bossSimulationMultiplier = 3;
+        std::int64_t searchTimeMicros = 0;  // >0: search by wall-clock budget (us) instead of rollout count
         int stepsNoSolution = 5;
         int stepsWithSolution = 15;
 

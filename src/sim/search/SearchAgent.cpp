@@ -78,15 +78,18 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
 
 void search::SearchAgent::playoutBattle(BattleContext &bc) {
     while (bc.outcome == Outcome::UNDECIDED) {
-        const std::int64_t simulationCount = isBossEncounter(bc.encounter) ?
-                                             (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
+        const double bossMultiplier = isBossEncounter(bc.encounter) ? bossSimulationMultiplier : 1.0;
 
         search::BattleSearcher searcher(bc);
         searcher.explorationParameter = explorationParameter;
         searcher.chanceWideningC = chanceWideningC;
         searcher.chanceWideningAlpha = chanceWideningAlpha;
         searcher.evalWeights = evalWeights;
-        searcher.search(simulationCount);
+        if (searchTimeMicros > 0) {
+            searcher.searchForMicros(static_cast<std::int64_t>(bossMultiplier * searchTimeMicros));
+        } else {
+            searcher.search(static_cast<std::int64_t>(bossMultiplier * simulationCountBase));
+        }
         simulationCountTotal += searcher.root.simulationCount;
 
         const auto &rootNode = searcher.root;

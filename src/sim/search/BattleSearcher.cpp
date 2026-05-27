@@ -6,6 +6,7 @@
 #include "sim/search/ExpertKnowledge.h"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 #include <string>
 #include <memory>
@@ -154,7 +155,7 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(const Batt
     return newNode;
 }
 
-void search::BattleSearcher::search(int64_t simulations) {
+bool search::BattleSearcher::resetForSearch() {
     g_debug_scum_search = this;
 
     // Fresh search: reset the node pool and root (root.edges hold raw pointers into the pool).
@@ -166,11 +167,37 @@ void search::BattleSearcher::search(int64_t simulations) {
     if (isTerminalState(root.state)) {
         root.evaluationSum = evaluateEndState(root.state);
         root.simulationCount = 1;
+        return false;
+    }
+    return true;
+}
+
+void search::BattleSearcher::search(int64_t simulations) {
+    if (!resetForSearch()) {
         return;
     }
 
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
+    }
+}
+
+void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
+    if (!resetForSearch()) {
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(maxMicros);
+
+    // Amortize the clock read over a small batch of steps. A single step (one tree descent plus a
+    // rollout to a terminal state) ranges from well under a microsecond to tens of microseconds, so
+    // a batch this size keeps both the now() overhead and the overshoot past the deadline negligible
+    // relative to any usable time budget. The leading check makes a zero/expired budget a no-op.
+    constexpr int stepsPerTimeCheck = 16;
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (int i = 0; i < stepsPerTimeCheck; ++i) {
+            step();
+        }
     }
 }
 
