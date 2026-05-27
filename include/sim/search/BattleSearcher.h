@@ -98,7 +98,7 @@ namespace sts::search {
         [[nodiscard]] bool isTerminalState(const BattleContext &bc) const;
 
         // Graph search deduplication
-        Node* getOrCreateNode(const BattleContext &state);
+        Node* getOrCreateNode(BattleContext &&state);
 
         double evaluateEdge(const Node &parent, int edgeIdx);
         int selectBestEdgeToSearch(const Node &cur);

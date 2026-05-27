@@ -135,7 +135,9 @@ search::BattleSearcher::~BattleSearcher() {
     allNodes.clear();
 }
 
-search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(const BattleContext &state) {
+// Moves `state` into the node only when a new node is created; on a match `state` is left
+// intact, so callers may still read it.
+search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleContext &&state) {
     const size_t hash = search::hashBattleState(state);
 
     // Resolve hash collisions exactly: only reuse a node whose stored state is
@@ -149,7 +151,7 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(const Batt
 
     allNodes.push_back(std::make_unique<Node>());
     Node* newNode = allNodes.back().get();
-    newNode->state = state;
+    newNode->state = std::move(state);
     bucket.push_back(newNode);
     return newNode;
 }
@@ -307,11 +309,14 @@ void search::BattleSearcher::step() {
             continue;  // outcome resolved at the top of the loop next iteration
         }
 
-        // Deterministic action: deduplicate into a decision node.
-        Node* child = getOrCreateNode(next);
+        // Deterministic action: deduplicate into a decision node. Move `next` in: it is consumed
+        // only if a new node is created (see getOrCreateNode), so the two reads of `next` below are
+        // safe -- each is reached only when the node already existed and `next` was left intact.
+        Node* child = getOrCreateNode(std::move(next));
         edge.node = child;
 
         if (onPathSet.count(child) != 0) {
+            // Existing on-path node (a brand-new node is never on the path) -> next intact.
             // Deterministic action cycled back to an on-path node. Roll out instead.
             BattleContext rollout = next;  // next == child->state
             rolloutToEnd(rollout, actionStack);
@@ -323,7 +328,9 @@ void search::BattleSearcher::step() {
         onPathSet.insert(child);
 
         if (child->simulationCount == 0) {
-            BattleContext rollout = next;  // next == child->state
+            // Brand-new node (only new nodes have simulationCount 0 here) -> next was moved into
+            // child->state, which now holds exactly what next did (rng included).
+            BattleContext rollout = child->state;
             rolloutToEnd(rollout, actionStack);
             updateFromPlayout(searchStack, actionStack, rollout);
             return;
@@ -433,7 +440,7 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         out.rng = Random(chance.randomnessBase + N);
         chance.stochasticAction.execute(out);
 
-        Node* child = getOrCreateNode(out);
+        Node* child = getOrCreateNode(std::move(out));  // out unused afterward; safe to move
         for (auto &e : chance.edges) {
             if (e.node == child) {
                 return &e;  // resampled an outcome we already have

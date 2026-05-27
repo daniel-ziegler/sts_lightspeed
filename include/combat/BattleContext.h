@@ -94,6 +94,9 @@ namespace sts {
 
         BattleContext() = default;
         BattleContext(const BattleContext &rhs) = default;
+        BattleContext(BattleContext &&rhs) = default;
+        BattleContext &operator=(const BattleContext &rhs) = default;
+        BattleContext &operator=(BattleContext &&rhs) = default;
 
 // ****************************************
 
