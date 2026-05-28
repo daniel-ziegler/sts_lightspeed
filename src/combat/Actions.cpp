@@ -564,16 +564,17 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
 
 void _ViolenceAction::operator()(BattleContext &bc) const {
     // todo a faster algorithm for inserting into the attack list
-    fixed_list<int,CardManager::MAX_GROUP_SIZE> attackIdxList;
-    for (int i = 0; i < bc.cards.drawPile.size(); ++i) {
+    std::vector<int> attackIdxList;
+    attackIdxList.reserve(bc.cards.drawPile.size());
+    for (int i = 0; i < (int)bc.cards.drawPile.size(); ++i) {
         const auto &c = bc.cards.drawPile[i];
         if (c.getType() == CardType::ATTACK) {
 
             if (attackIdxList.empty()) {
                 attackIdxList.push_back(i);
             } else {
-                const auto randomIdx = bc.rng.random(attackIdxList.size() - 1);
-                attackIdxList.insert(randomIdx, i);
+                const auto randomIdx = bc.rng.random((int)attackIdxList.size() - 1);
+                attackIdxList.insert(attackIdxList.begin() + randomIdx, i);
             }
         }
     }
@@ -586,7 +587,7 @@ void _ViolenceAction::operator()(BattleContext &bc) const {
     // hack to do this faster: the attackList is just pushed forward by i so we skip removing from bottom
     int i = 0;
     for (; i < count; ++i) {
-        if (attackIdxList.size()-i <= 0) {
+        if ((int)attackIdxList.size() <= i) {
             return;
         }
 
