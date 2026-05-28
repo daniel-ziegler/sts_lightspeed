@@ -371,39 +371,35 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
         return Action(ActionType::END_TURN);
     }
 
+    // One pass over the hand: skip unplayable cards, categorize the rest.
     fixed_list<int,10> playableCardsIdxs;
-    for (int i = 0; i < bc.cards.cardsInHand; ++i) {
-        const auto &c = bc.cards.hand[i];
-        if (c.canUseOnAnyTarget(bc)) {
-            playableCardsIdxs.push_back(i);
-        }
-    }
-
-    if (playableCardsIdxs.empty()) {
-        return Action(ActionType::END_TURN);
-    }
-
-    fixed_list<int,10> zeroCost;
     fixed_list<int,10> zeroCostAttacks;
     fixed_list<int,10> zeroCostNonAttacks;
     fixed_list<int,10> nonZeroCostCards;
     fixed_list<int,10> aoeCards;
 
-    for (auto handIdx : playableCardsIdxs) {
-        const auto &c = bc.cards.hand[handIdx];
+    for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+        const auto &c = bc.cards.hand[i];
+        if (!c.canUseOnAnyTarget(bc)) {
+            continue;
+        }
+        playableCardsIdxs.push_back(i);
         if (isAoeCard.test(static_cast<int>(c.getId()))) {
-            aoeCards.push_back(handIdx);
+            aoeCards.push_back(i);
         }
         if (c.cost == 0 || c.costForTurn == 0) {
-            zeroCost.push_back(handIdx);
             if (c.getType() == CardType::ATTACK) {
-                zeroCostAttacks.push_back(handIdx);
+                zeroCostAttacks.push_back(i);
             } else {
-                zeroCostNonAttacks.push_back(handIdx);
+                zeroCostNonAttacks.push_back(i);
             }
         } else {
-            nonZeroCostCards.push_back(handIdx);
+            nonZeroCostCards.push_back(i);
         }
+    }
+
+    if (playableCardsIdxs.empty()) {
+        return Action(ActionType::END_TURN);
     }
 
     const int incomingDamage = getIncomingDamage(bc);
