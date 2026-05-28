@@ -259,6 +259,14 @@ def compute_shaped_rewards(
 
 def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, config: PPOConfig) -> PPOTrajectory:
     """Run a complete game episode and collect experience for PPO training."""
+    # PPO_LOG_SEEDS=1 prints per-episode seed bookends to isolate which seed crashes
+    # the C++ engine (stack-smashing aborts the process; the last >>> line names the culprit).
+    _log_seeds = os.environ.get('PPO_LOG_SEEDS') == '1'
+    # PPO_LOG_STEPS=1 prints per-game-step info before each C++ call so the last log line
+    # before a fatal crash names the screen/action that triggered it.
+    _log_steps = os.environ.get('PPO_LOG_STEPS') == '1'
+    if _log_seeds:
+        print(f"  >>> start seed {seed}", flush=True)
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
     rng = random.Random(seed)
     
@@ -273,7 +281,11 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
 
     while gc.outcome == sts.GameOutcome.UNDECIDED:
         try:
+            if _log_steps:
+                print(f"  [seed {seed}] floor={gc.floor_num} hp={gc.cur_hp}/{gc.max_hp} screen={gc.screen_state}", flush=True)
             if gc.screen_state == sts.ScreenState.BATTLE:
+                if _log_steps:
+                    print(f"  [seed {seed}] BATTLE playout start floor={gc.floor_num}", flush=True)
                 # Use MCTS agent for battles in background thread
                 future = battle_executor.submit(agent.playout_battle, gc)
                 
@@ -351,8 +363,10 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
                             'action_str': action_desc,
                             'choice_type': int(choice_type),
                         }
-                        
+
                         assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                        if _log_steps:
+                            print(f"  [seed {seed}] EXEC (model) floor={gc.floor_num} action={action_desc}", flush=True)
                         action.execute(gc)
                         
                         exp = PPOExperience(
@@ -366,12 +380,20 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
                         experiences.append(exp)
                         values.append(exp_data['value'])  # Store value separately
                     else:
+                        if _log_steps:
+                            print(f"  [seed {seed}] PICK (single-choice) floor={gc.floor_num}", flush=True)
                         action = agent.pick_gameaction(gc)
                         assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                        if _log_steps:
+                            print(f"  [seed {seed}] EXEC (single) floor={gc.floor_num} action={action.getDesc(gc)}", flush=True)
                         action.execute(gc)
                 else:
+                    if _log_steps:
+                        print(f"  [seed {seed}] PICK (no-choice) floor={gc.floor_num}", flush=True)
                     action = agent.pick_gameaction(gc)
                     assert action.isValidAction(gc), f"Invalid action: {action.getDesc(gc)}"
+                    if _log_steps:
+                        print(f"  [seed {seed}] EXEC (no-choice) floor={gc.floor_num} action={action.getDesc(gc)}", flush=True)
                     action.execute(gc)
                 
         except Exception as e:
@@ -399,7 +421,9 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
     # Add terminal state value (0.0) for GAE bootstrap
     values.append(0.0)
     # Values were collected during the episode
-    
+
+    if _log_seeds:
+        print(f"  <<< done  seed {seed} floor={gc.floor_num} outcome={gc.outcome}", flush=True)
     return PPOTrajectory(
         seed=seed,
         experiences=experiences,
