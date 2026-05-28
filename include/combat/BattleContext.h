@@ -74,7 +74,7 @@ namespace sts {
         bool skipMonsterTurn = false;
         bool smokeBombUsed = false;
 
-        ActionQueue<50> actionQueue;
+        ActionQueue<64> actionQueue;   // headroom for actions that push N items rather than batching
         CardQueue cardQueue;
 
         int potionCount = 0;

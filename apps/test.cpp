@@ -781,9 +781,7 @@ int main(int argc, const char* argv[]) {
         }
         agentMt(threadCount, startSeed, playoutCount);
     } else if (command == "playground") {
-        std::vector<CardInstance> cards;
-        cards.push_back(CardInstance(CardId::DEFEND_RED));
-        Action a = Actions::MakeTempCardsInHand(cards);
+        Action a = Actions::MakeTempCardInHand(CardInstance(CardId::DEFEND_RED), 1);
         std::cout << a << '\n';
     }
 
