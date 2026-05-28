@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <array>
 #include <bitset>
@@ -1250,6 +1251,26 @@ void initMaps() {
     for (int i = 0; i < cardsPriorities.size(); ++i) {
         CardId c = cardsPriorities[i];
         cardPriorityMap[static_cast<int>(c)] = i + 1;
+    }
+
+    // STS_DUMP_CARDPLAY=path: dump the default cardPlayMap (after the priorities-array init, before
+    // any user override) so an external tuner can see the starting point.
+    if (const char *path = std::getenv("STS_DUMP_CARDPLAY")) {
+        std::ofstream f(path);
+        for (int i = 0; i < 372; ++i) {
+            f << i << " " << cardPlayMap[i] << "\n";
+        }
+    }
+
+    // STS_CARDPLAY_OVERRIDE=path: optional per-card cardPlayMap overrides. File format is
+    // whitespace-separated "<int_card_id> <int_priority>" pairs (lower priority = play first).
+    // Lines with unrecognized id (>=372) are ignored. Lets us autotune without recompiling.
+    if (const char *path = std::getenv("STS_CARDPLAY_OVERRIDE")) {
+        std::ifstream f(path);
+        int id, prio;
+        while (f >> id >> prio) {
+            if (id >= 0 && id < 372) cardPlayMap[id] = prio;
+        }
     }
 
     for (int i = 0; i < bossRelicPriorities.size(); ++i) {
