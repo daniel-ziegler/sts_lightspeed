@@ -62,7 +62,6 @@ namespace sts {
     X(MakeTempCardInHand, CardInstance,card, int,amount) \
     X(MakeTempCardInDrawPile, CardInstance,c, int,amount, bool,shuffleInto) \
     X(MakeTempCardInDiscard, CardInstance,c, int,amount) \
-    X(MakeTempCardsInHand, std::vector<CardInstance>,cards ) \
     X(DiscardNoTriggerCard) \
     X(ClearCardQueue) \
     X(DiscardAtEndOfTurn) \
@@ -180,48 +179,11 @@ struct Action {
         FOREACH_ACTIONTYPE(ACTIONTYPE_VARIANT)
     };
     
+    // All variants are trivially copyable (no std::vector etc.), so Action itself is trivially
+    // copyable: the implicit copy/move/dtor/assign are byte-wise and the std::array<Action,N>
+    // backing the queues copies via a single memcpy instead of N switch-dispatched ctors.
     Action() {}
-    
-    Action(const Action& rhs) {
-        type = rhs.type;
-        switch (type) {
-#define COPY(type, ...) case ActionType_##type: new(&variant_##type) _##type(rhs.variant_##type); break;
-            FOREACH_ACTIONTYPE(COPY)
-        case ActionType_INVALID:
-            break;
-        default:
-            assert(false);
-        }
-    }
-    Action(const Action&& rhs) {
-        type = rhs.type;
-        switch (type) {
-#define MOVE(type, ...) case ActionType_##type: new(&variant_##type) _##type(std::move(rhs.variant_##type)); break;
-            FOREACH_ACTIONTYPE(MOVE)
-        case ActionType_INVALID:
-            break;
-        default:
-            assert(false);
-        }
-    }
-    ~Action() {
-        switch (type) {
-#define DESTRUCT(type, ...) case ActionType_##type: variant_##type.~_##type(); break;
-            FOREACH_ACTIONTYPE(DESTRUCT)
-        case ActionType_INVALID:
-            break;
-        default:
-            assert(false);
-        }
-    }
-    Action& operator=(const Action& rhs) {
-        if (this != &rhs) {    
-            this->~Action();
-            new (this) Action(rhs);
-        }
-        return *this;
-    }
-    
+
     void operator()(BattleContext& bc) const;
     bool operator==(const Action& rhs) const;
 };

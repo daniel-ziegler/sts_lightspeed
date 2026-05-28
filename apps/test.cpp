@@ -141,9 +141,11 @@ struct AgentMtInfo {
 static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
-static double g_explorationParameter = 3 * std::sqrt(2.0);
-static double g_chanceWideningC = 1.0;
-static double g_chanceWideningAlpha = 0.5;
+static double g_explorationParameter = 9.9;   // tuned default
+static double g_chanceWideningC = 4.6;         // tuned default
+static double g_chanceWideningAlpha = 0.37;    // tuned default
+static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
+static search::EvalWeights g_evalWeights;
 
 void agentMtRunner(AgentMtInfo *info) {
     std::uint64_t seed;
@@ -163,6 +165,8 @@ void agentMtRunner(AgentMtInfo *info) {
         agent.explorationParameter = g_explorationParameter;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.searchTimeMicros = g_searchTimeMicros;
+        agent.evalWeights = g_evalWeights;
         agent.rng = std::default_random_engine(gc.seed);
 
         agent.printActions = g_print_level & 0x1;
@@ -451,9 +455,10 @@ struct EvalStatesInfo {
     const std::vector<GameStateRecord> *records = nullptr;
     std::size_t next = 0;
 
-    double explorationParameter = 3 * std::sqrt(2.0);
-    double chanceWideningC = 1.0;
-    double chanceWideningAlpha = 0.5;
+    double explorationParameter = 9.9;   // tuned default
+    double chanceWideningC = 4.6;         // tuned default
+    double chanceWideningAlpha = 0.37;    // tuned default
+    std::int64_t searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
     search::EvalWeights evalWeights;
     int simBudget = 0;
 
@@ -483,6 +488,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         agent.explorationParameter = info->explorationParameter;
         agent.chanceWideningC = info->chanceWideningC;
         agent.chanceWideningAlpha = info->chanceWideningAlpha;
+        agent.searchTimeMicros = info->searchTimeMicros;
         agent.evalWeights = info->evalWeights;
         agent.verbosityLevel = 0;
         agent.rng = std::default_random_engine(gc.seed);
@@ -505,8 +511,9 @@ static void evalStatesRunner(EvalStatesInfo *info) {
 }
 
 // eval_states <threadCount> <stateFile> <simBudget> <stateLimit> [param=value ...]
-// params: exploration, wideningC, wideningAlpha, winBonus, potionWeight, victoryTurnPenalty,
+// params: exploration, wideningC, wideningAlpha, time, winBonus, potionWeight, victoryTurnPenalty,
 //         monsterDamage, aliveWeight, energyWaste, drawWeight, turnSurvival (unset -> default).
+//   time=<us>: search by a per-decision wall-clock budget (microseconds) instead of <simBudget> rollouts.
 static int evalStates(int argc, const char *argv[]) {
     const int threadCount = std::stoi(argv[2]);
     const std::string stateFile = argv[3];
@@ -526,6 +533,7 @@ static int evalStates(int argc, const char *argv[]) {
         if (key == "exploration") info.explorationParameter = val;
         else if (key == "wideningC") info.chanceWideningC = val;
         else if (key == "wideningAlpha") info.chanceWideningAlpha = val;
+        else if (key == "time") info.searchTimeMicros = static_cast<std::int64_t>(val);
         else if (key == "winBonus") info.evalWeights.winBonus = val;
         else if (key == "potionWeight") info.evalWeights.potionWeight = val;
         else if (key == "victoryTurnPenalty") info.evalWeights.victoryTurnPenalty = val;
@@ -576,6 +584,110 @@ static int showStates(int argc, const char *argv[]) {
         std::cout << "  relics " << gc.relics << "\n";
         std::cout << "  deck " << gc.deck << "\n";
     }
+    return 0;
+}
+
+// Parse one "key=value" arg into the global search-knob / eval-weight config.
+static void applyGlobalParam(const std::string &arg) {
+    const auto eq = arg.find('=');
+    if (eq == std::string::npos) throw std::runtime_error("expected key=value, got: " + arg);
+    const std::string key = arg.substr(0, eq);
+    const double val = std::stod(arg.substr(eq + 1));
+    if (key == "exploration") g_explorationParameter = val;
+    else if (key == "wideningC") g_chanceWideningC = val;
+    else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
+    else if (key == "time") g_searchTimeMicros = static_cast<std::int64_t>(val);
+    else if (key == "winBonus") g_evalWeights.winBonus = val;
+    else if (key == "potionWeight") g_evalWeights.potionWeight = val;
+    else if (key == "victoryTurnPenalty") g_evalWeights.victoryTurnPenalty = val;
+    else if (key == "monsterDamage") g_evalWeights.monsterDamageWeight = val;
+    else if (key == "aliveWeight") g_evalWeights.aliveWeight = val;
+    else if (key == "energyWaste") g_evalWeights.energyWasteWeight = val;
+    else if (key == "drawWeight") g_evalWeights.drawWeight = val;
+    else if (key == "turnSurvival") g_evalWeights.turnSurvivalWeight = val;
+    else throw std::runtime_error("unknown param: " + key);
+}
+
+struct DumpInfo {
+    std::mutex m;
+    std::uint64_t curSeed = 0, seedEnd = 0;
+    int simBudget = 0, ascension = 0;
+    std::ofstream *out = nullptr;
+    int gamesDone = 0;
+};
+
+static void dumpBattleOutcomesRunner(DumpInfo *info) {
+    while (true) {
+        std::uint64_t seed;
+        {
+            std::scoped_lock lock(info->m);
+            if (info->curSeed >= info->seedEnd) break;
+            seed = info->curSeed++;
+        }
+        GameContext gc(CharacterClass::IRONCLAD, seed, info->ascension);
+        search::SearchAgent agent;
+        agent.simulationCountBase = info->simBudget;
+        agent.explorationParameter = g_explorationParameter;
+        agent.chanceWideningC = g_chanceWideningC;
+        agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.searchTimeMicros = g_searchTimeMicros;
+        agent.evalWeights = g_evalWeights;
+        agent.logBattleOutcomes = true;
+        agent.verbosityLevel = 0;
+        agent.rng = std::default_random_engine(gc.seed);
+
+        agent.playout(gc);
+
+        const int won = (gc.outcome == sts::GameOutcome::PLAYER_VICTORY) ? 1 : 0;
+        const int finalFloor = gc.floorNum;
+        std::ostringstream line;
+        for (std::size_t b = 0; b < agent.battleLog.size(); ++b) {
+            const auto &s = agent.battleLog[b];
+            line << seed << ',' << b << ',' << s.floor << ',' << s.act << ',' << s.curHp << ','
+                 << s.maxHp << ',' << s.potionCount << ',' << s.deckSize << ',' << s.encounter << ','
+                 << won << ',' << finalFloor << '\n';
+        }
+        {
+            std::scoped_lock lock(info->m);
+            (*info->out) << line.str();
+            ++info->gamesDone;
+        }
+    }
+}
+
+// dump_battle_outcomes <threads> <startSeed> <ngames> <simBudget> <ascension> <outFile> [param=value ...]
+// Per battle in each full game: post-battle features + whether the game was eventually won.
+static int dumpBattleOutcomes(int argc, const char *argv[]) {
+    const int threadCount = std::stoi(argv[2]);
+    const std::uint64_t startSeed = std::stoull(argv[3]);
+    const int gameCount = std::stoi(argv[4]);
+    const int simBudget = std::stoi(argv[5]);
+    const int ascension = std::stoi(argv[6]);
+    const std::string outFile = argv[7];
+    for (int i = 8; i < argc; ++i) {
+        applyGlobalParam(argv[i]);
+    }
+
+    std::ofstream out(outFile);
+    if (!out) throw std::runtime_error("dump_battle_outcomes: cannot open " + outFile);
+    out << "seed,battle_idx,floor,act,curHp,maxHp,potions,deckSize,encounter,game_won,final_floor\n";
+
+    DumpInfo info;
+    info.curSeed = startSeed;
+    info.seedEnd = startSeed + gameCount;
+    info.simBudget = simBudget;
+    info.ascension = ascension;
+    info.out = &out;
+
+    std::vector<std::unique_ptr<std::thread>> threads;
+    if (threadCount == 1) {
+        dumpBattleOutcomesRunner(&info);
+    } else {
+        for (int t = 0; t < threadCount; ++t) threads.emplace_back(new std::thread(dumpBattleOutcomesRunner, &info));
+        for (auto &th : threads) th->join();
+    }
+    out.flush();
+    std::cout << "dump_battle_outcomes: " << info.gamesDone << " games written to " << outFile << std::endl;
     return 0;
 }
 
@@ -652,21 +764,24 @@ int main(int argc, const char* argv[]) {
         return evalStates(argc, argv);
     } else if (command == "show_states") {
         return showStates(argc, argv);
+    } else if (command == "dump_battle_outcomes") {
+        return dumpBattleOutcomes(argc, argv);
     } else if (command == "winrate_mt") {
+        // winrate_mt <threadCount> <startSeed> <playoutCount> <simBudget> <ascension> [param=value ...]
+        // params: exploration, wideningC, wideningAlpha, winBonus, potionWeight, victoryTurnPenalty,
+        //         monsterDamage, aliveWeight, energyWaste, drawWeight, turnSurvival.
         const int threadCount = std::stoi(argv[2]);
         const std::uint64_t startSeed = std::stoull(argv[3]);
         const int playoutCount = std::stoi(argv[4]);
         g_simulationCount = std::stoi(argv[5]);
         g_searchAscension = std::stoi(argv[6]);
-        g_explorationParameter = std::stod(argv[7]);
-        g_chanceWideningC = std::stod(argv[8]);
-        g_chanceWideningAlpha = std::stod(argv[9]);
         g_print_level = 0;
+        for (int i = 7; i < argc; ++i) {
+            applyGlobalParam(argv[i]);
+        }
         agentMt(threadCount, startSeed, playoutCount);
     } else if (command == "playground") {
-        std::vector<CardInstance> cards;
-        cards.push_back(CardInstance(CardId::DEFEND_RED));
-        Action a = Actions::MakeTempCardsInHand(cards);
+        Action a = Actions::MakeTempCardInHand(CardInstance(CardId::DEFEND_RED), 1);
         std::cout << a << '\n';
     }
 

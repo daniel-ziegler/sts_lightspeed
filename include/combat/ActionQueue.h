@@ -40,6 +40,25 @@ namespace sts {
         }
 #else
         std::array<Action, capacity> arr;
+
+        // Copy only the `size` live entries -- the rest of arr is stale and never read, and
+        // default-copying all `capacity` slots runs Action's non-trivial copy ctor every time
+        // (this queue is ~2.4 KB and gets copied on every BattleContext copy).
+        ActionQueue() = default;
+        ActionQueue(const ActionQueue &rhs) : front(0), back(rhs.size), size(rhs.size) {
+            for (int i = 0; i < rhs.size; ++i) {
+                arr[i] = rhs.arr[(rhs.front + i) % capacity];
+            }
+        }
+        ActionQueue &operator=(const ActionQueue &rhs) {
+            front = 0;
+            back = rhs.size;
+            size = rhs.size;
+            for (int i = 0; i < rhs.size; ++i) {
+                arr[i] = rhs.arr[(rhs.front + i) % capacity];
+            }
+            return *this;
+        }
 #endif
 
         void clear();

@@ -260,15 +260,6 @@ void _MakeTempCardInDiscard::operator()(BattleContext &bc) const {
     }
 }
 
-void _MakeTempCardsInHand::operator()(BattleContext &bc) const {
-    for (auto c : cards) {
-        c.uniqueId = bc.cards.nextUniqueCardId++;
-        bc.cards.notifyAddCardToCombat(c);
-        bc.moveToHandHelper(c);
-    }
-}
-
-
 void _DiscardNoTriggerCard::operator()(BattleContext &bc) const {
     const auto &c = bc.curCardQueueItem.card;
     bc.cards.notifyRemoveFromHand(c);
@@ -548,14 +539,12 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
         return;
     }
 
-    std::vector<CardInstance> cards;
-   for (int i = 0; i < effectAmount; ++i) {
-       const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
-       CardInstance c(cid, upgraded);
-       c.setCostForTurn(0);
-       cards.push_back(c);
-   }
-   bc.addToBot( Actions::MakeTempCardsInHand(cards) );
+    for (int i = 0; i < effectAmount; ++i) {
+        const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
+        CardInstance c(cid, upgraded);
+        c.setCostForTurn(0);
+        bc.addToBot( Actions::MakeTempCardInHand(c, 1) );
+    }
 
    if (useEnergy) {
        bc.player.useEnergy(bc.player.energy);

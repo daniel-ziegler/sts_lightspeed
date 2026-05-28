@@ -16,12 +16,20 @@
 
 namespace sts::search {
 
+    // Post-battle snapshot for studying which per-battle features predict full-game wins.
+    struct BattleSnapshot {
+        int floor, act, curHp, maxHp, potionCount, deckSize, encounter;
+    };
+
     struct SearchAgent {
         std::int64_t simulationCountTotal = 0;
         std::vector<int> gameActionHistory;
 
         bool recordActions = false;
         std::vector<int> battleStartIndices;
+
+        bool logBattleOutcomes = false;
+        std::vector<BattleSnapshot> battleLog;
 
         int stepCount = 0;
         bool paused = false;
@@ -32,12 +40,13 @@ namespace sts::search {
 
         int simulationCountBase = 50000;
         double bossSimulationMultiplier = 3;
+        std::int64_t searchTimeMicros = 0;  // >0: search by wall-clock budget (us) instead of rollout count
         int stepsNoSolution = 5;
         int stepsWithSolution = 15;
 
-        double explorationParameter = 3 * std::sqrt(2.0);
-        double chanceWideningC = 1.0;
-        double chanceWideningAlpha = 0.5;
+        double explorationParameter = 9.9;   // tuned default
+        double chanceWideningC = 4.6;         // tuned default
+        double chanceWideningAlpha = 0.37;    // tuned default
         EvalWeights evalWeights;
 
         std::default_random_engine rng;

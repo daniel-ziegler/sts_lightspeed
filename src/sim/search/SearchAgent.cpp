@@ -46,9 +46,15 @@ void search::SearchAgent::playout(GameContext &gc) {
 
             bc = BattleContext();
             bc.init(gc);
+            const auto battleEncounter = bc.encounter;
 
             playoutBattle(bc);
             bc.exitBattle(gc);
+
+            if (logBattleOutcomes) {
+                battleLog.push_back({gc.floorNum, gc.act, gc.curHp, gc.maxHp, gc.potionCount,
+                                     static_cast<int>(gc.deck.size()), static_cast<int>(battleEncounter)});
+            }
             continue;
         }
 
@@ -71,16 +77,23 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
 }
 
 void search::SearchAgent::playoutBattle(BattleContext &bc) {
-    while (bc.outcome == Outcome::UNDECIDED) {
-        const std::int64_t simulationCount = isBossEncounter(bc.encounter) ?
-                                             (bossSimulationMultiplier * simulationCountBase) : simulationCountBase;
+    // One searcher for the whole battle: setRoot re-points it at each decision's state (and reseeds),
+    // reusing its node pool across moves instead of rebuilding and freeing the tree every decision.
+    search::BattleSearcher searcher(bc);
+    searcher.explorationParameter = explorationParameter;
+    searcher.chanceWideningC = chanceWideningC;
+    searcher.chanceWideningAlpha = chanceWideningAlpha;
+    searcher.evalWeights = evalWeights;
 
-        search::BattleSearcher searcher(bc);
-        searcher.explorationParameter = explorationParameter;
-        searcher.chanceWideningC = chanceWideningC;
-        searcher.chanceWideningAlpha = chanceWideningAlpha;
-        searcher.evalWeights = evalWeights;
-        searcher.search(simulationCount);
+    while (bc.outcome == Outcome::UNDECIDED) {
+        const double bossMultiplier = isBossEncounter(bc.encounter) ? bossSimulationMultiplier : 1.0;
+
+        searcher.setRoot(bc);
+        if (searchTimeMicros > 0) {
+            searcher.searchForMicros(static_cast<std::int64_t>(bossMultiplier * searchTimeMicros));
+        } else {
+            searcher.search(static_cast<std::int64_t>(bossMultiplier * simulationCountBase));
+        }
         simulationCountTotal += searcher.root.simulationCount;
 
         const auto &rootNode = searcher.root;

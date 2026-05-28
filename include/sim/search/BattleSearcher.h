@@ -22,15 +22,16 @@ namespace sts::search {
     typedef std::function<double (const BattleContext&)> EvalFnc;
 
     // Tunable weights for evaluateEndState (the value backed up by the search).
+    // Defaults are the tuned config (Optuna, validated best on 2000 states @5000).
     struct EvalWeights {
-        double winBonus = 100.0;
-        double potionWeight = 10.0;
+        double winBonus = 53.0;
+        double potionWeight = 11.0;
         double victoryTurnPenalty = 0.01;
-        double monsterDamageWeight = 10.0;
-        double aliveWeight = 1.0;
-        double energyWasteWeight = 0.2;
+        double monsterDamageWeight = 37.0;
+        double aliveWeight = 3.4;
+        double energyWasteWeight = 1.75;
         double drawWeight = 0.03;
-        double turnSurvivalWeight = 0.2;
+        double turnSurvivalWeight = 1.5;
     };
 
     // to find a solution to a battle with tree pruning
@@ -55,23 +56,33 @@ namespace sts::search {
             std::int32_t visitCount = 0;        // times this edge was traversed (UCB / DPW reselection)
         };
 
-        std::unique_ptr<const BattleContext> rootState;
+        std::unique_ptr<BattleContext> rootState;
         Node root;
 
         // Graph search: node pool and state deduplication.
         // stateToNode buckets by search-hash; collisions are resolved by equalForSearch,
         // so distinct states that happen to share a hash are never merged.
+        // The pool persists across a battle's decisions: each search reuses allNodes[0..poolUsed)
+        // and only grows the vector when it needs more, so nodes aren't freed and reallocated per move.
         std::vector<std::unique_ptr<Node>> allNodes;  // Pool of all created nodes
-        std::unordered_map<size_t, std::vector<Node*>> stateToNode;
+        std::size_t poolUsed = 0;                     // nodes claimed by the current search
+
+        // Open-addressed dedup table. Backed by a single vector and cleared with one memset per
+        // search; replaces unordered_map<size_t, vector<Node*>> -- no per-bucket vector, no per-
+        // entry heap node. Sized once at construction to comfortably hold any reasonable search;
+        // hash collisions are resolved by linear probing + equalForSearch (the dedup invariant).
+        struct DedupSlot { std::size_t hash; Node* node; };  // node == nullptr means empty
+        std::vector<DedupSlot> stateToNode;
+        std::size_t stateToNodeMask = 0;              // stateToNode.size() - 1 (power-of-two size)
 
         EvalFnc evalFnc;
         EvalWeights evalWeights;
-        double explorationParameter = 3*sqrt(2);
+        double explorationParameter = 9.9;   // tuned default
 
         // Double Progressive Widening for chance nodes: after n visits a chance node may
         // hold at most ceil(chanceWideningC * (n+1)^chanceWideningAlpha) distinct outcomes.
-        double chanceWideningC = 1.0;
-        double chanceWideningAlpha = 0.5;
+        double chanceWideningC = 4.6;        // tuned default
+        double chanceWideningAlpha = 0.37;   // tuned default
 
         std::default_random_engine randGen;
 
@@ -80,24 +91,30 @@ namespace sts::search {
         std::unordered_set<Node*> onPathSet;   // nodes on the current descent path (cycle guard)
         
         SimpleAgent rolloutAgent;
+        BattleContext rolloutScratch;   // reused playout buffer: copy-assigning into it keeps the card-pile vector capacity, avoiding a fresh allocation per rollout
 
         explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=nullptr);
         ~BattleSearcher();
 
         // public methods
+        void setRoot(const BattleContext &bc);      // point the searcher at a new root state and reseed its rng, reusing the node pool
         void search(int64_t simulations);
+        void searchForMicros(int64_t maxMicros);   // run steps until the wall-clock budget (microseconds) is spent
         void step();
         Action getBestAction() const;
         const std::vector<Edge>& getRootEdges() const { return root.edges; }
 
         // private helpers
+        bool resetForSearch();   // reset node pool/root for a fresh search; returns false if the root is already terminal
         void updateFromPlayout(const std::vector<Node*> &stack, const std::vector<Action> &actionStack, const BattleContext &endState);
         [[nodiscard]] bool isTerminalState(const BattleContext &bc) const;
 
-        // Graph search deduplication
-        Node* getOrCreateNode(const BattleContext &state);
+        Node* allocNode();   // claim a node from the pool (recycling a reset one, or growing the pool)
 
-        double evaluateEdge(const Node &parent, int edgeIdx);
+        // Graph search deduplication
+        Node* getOrCreateNode(BattleContext &&state);
+
+        double evaluateEdge(const Node &parent, int edgeIdx, double logParentVisits);
         int selectBestEdgeToSearch(const Node &cur);
 
         void rolloutToEnd(BattleContext &state, std::vector<Action> &actionStack);

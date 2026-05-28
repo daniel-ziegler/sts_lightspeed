@@ -6,6 +6,8 @@
 #include "sim/search/ExpertKnowledge.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <utility>
 #include <string>
 #include <memory>
@@ -18,106 +20,105 @@ std::int64_t simulationIdx = 0; // for debugging
 namespace sts::search {
     thread_local search::BattleSearcher *g_debug_scum_search;
 
-    // FNV-1a hash constants for 64-bit
-    constexpr std::uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-    constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
+    // Arbitrary nonzero seed for the state hash accumulator.
+    constexpr std::uint64_t HASH_SEED = 14695981039346656037ULL;
 
-    // Hash a value into accumulator using FNV-1a (better distribution than simple XOR)
-    inline void hash_combine_fnv(std::uint64_t& hash, std::uint64_t value) {
-        // Split value into bytes for better mixing
-        for (int i = 0; i < 8; ++i) {
-            hash ^= (value & 0xFF);
-            hash *= FNV_PRIME;
-            value >>= 8;
-        }
+    // Mix one whole word into the accumulator (MurmurHash3 x64 body, one 64-bit lane). This
+    // touches the value in a handful of ops, with strong avalanche. The hash is used only to bucket
+    // nodes in stateToNode -- collisions are resolved exactly by equalForSearch -- so a different
+    // hash value changes only the bucketing performance, never the node graph or the search result.
+    inline void hash_combine(std::uint64_t& hash, std::uint64_t value) {
+        constexpr std::uint64_t c1 = 0x87c37b91114253d5ULL;
+        constexpr std::uint64_t c2 = 0x4cf5ad432745937fULL;
+        value *= c1;
+        value = (value << 31) | (value >> 33);
+        value *= c2;
+        hash ^= value;
+        hash = (hash << 27) | (hash >> 37);
+        hash = hash * 5 + 0x52dce729ULL;
     }
 
-    inline void hash_combine_fnv(std::uint64_t& hash, std::uint32_t value) {
-        for (int i = 0; i < 4; ++i) {
-            hash ^= (value & 0xFF);
-            hash *= FNV_PRIME;
-            value >>= 8;
-        }
+    inline void hash_combine(std::uint64_t& hash, std::uint32_t value) {
+        hash_combine(hash, static_cast<std::uint64_t>(value));
     }
 
-    inline void hash_combine_fnv(std::uint64_t& hash, int value) {
-        hash_combine_fnv(hash, static_cast<std::uint32_t>(value));
+    inline void hash_combine(std::uint64_t& hash, int value) {
+        hash_combine(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(value)));
     }
 
-    inline void hash_combine_fnv(std::uint64_t& hash, bool value) {
-        hash ^= (value ? 1 : 0);
-        hash *= FNV_PRIME;
+    inline void hash_combine(std::uint64_t& hash, bool value) {
+        hash_combine(hash, static_cast<std::uint64_t>(value ? 1u : 0u));
     }
 
     // Hash BattleContext state for graph search deduplication
     // Only hashes observable game state, not internal RNG or debug counters
     std::size_t hashBattleState(const BattleContext& bc) {
-        std::uint64_t hash = FNV_OFFSET_BASIS;
+        std::uint64_t hash = HASH_SEED;
 
         // Hash turn and outcome
-        hash_combine_fnv(hash, bc.turn);
-        hash_combine_fnv(hash, static_cast<int>(bc.outcome));
-        hash_combine_fnv(hash, static_cast<int>(bc.inputState));
+        hash_combine(hash, bc.turn);
+        hash_combine(hash, static_cast<int>(bc.outcome));
+        hash_combine(hash, static_cast<int>(bc.inputState));
 
         // Hash player state
         const auto& p = bc.player;
-        hash_combine_fnv(hash, p.curHp);
-        hash_combine_fnv(hash, p.maxHp);
-        hash_combine_fnv(hash, p.block);
-        hash_combine_fnv(hash, p.energy);
-        hash_combine_fnv(hash, p.cardsPlayedThisTurn);
-        hash_combine_fnv(hash, p.statusBits0);
-        hash_combine_fnv(hash, p.statusBits1);
-        hash_combine_fnv(hash, p.strength);
-        hash_combine_fnv(hash, p.dexterity);
+        hash_combine(hash, p.curHp);
+        hash_combine(hash, p.maxHp);
+        hash_combine(hash, p.block);
+        hash_combine(hash, p.energy);
+        hash_combine(hash, p.cardsPlayedThisTurn);
+        hash_combine(hash, p.statusBits0);
+        hash_combine(hash, p.statusBits1);
+        hash_combine(hash, p.strength);
+        hash_combine(hash, p.dexterity);
 
         // Hash monsters
         for (int i = 0; i < bc.monsters.monsterCount; ++i) {
             const auto& m = bc.monsters.arr[i];
-            hash_combine_fnv(hash, static_cast<int>(m.id));
-            hash_combine_fnv(hash, m.curHp);
-            hash_combine_fnv(hash, m.maxHp);
-            hash_combine_fnv(hash, m.block);
-            hash_combine_fnv(hash, m.statusBits);
-            hash_combine_fnv(hash, static_cast<int>(m.moveHistory[0]));
+            hash_combine(hash, static_cast<int>(m.id));
+            hash_combine(hash, m.curHp);
+            hash_combine(hash, m.maxHp);
+            hash_combine(hash, m.block);
+            hash_combine(hash, m.statusBits);
+            hash_combine(hash, static_cast<int>(m.moveHistory[0]));
         }
 
         // Hash cards in hand (INCLUDING POSITION to prevent invalid deduplication)
-        hash_combine_fnv(hash, bc.cards.cardsInHand);
+        hash_combine(hash, bc.cards.cardsInHand);
         for (int i = 0; i < bc.cards.cardsInHand; ++i) {
             const auto& c = bc.cards.hand[i];
-            hash_combine_fnv(hash, i); // Hash position to preserve ordering
-            hash_combine_fnv(hash, static_cast<int>(c.id));
-            hash_combine_fnv(hash, c.cost);
-            hash_combine_fnv(hash, c.costForTurn);
-            hash_combine_fnv(hash, c.upgraded);
+            hash_combine(hash, i); // Hash position to preserve ordering
+            hash_combine(hash, static_cast<int>(c.id));
+            hash_combine(hash, c.cost);
+            hash_combine(hash, c.costForTurn);
+            hash_combine(hash, c.upgraded);
         }
 
         // Hash draw pile with position (order is significant for future draws)
-        hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile.size()));
+        hash_combine(hash, static_cast<int>(bc.cards.drawPile.size()));
         for (int i = 0; i < static_cast<int>(bc.cards.drawPile.size()); ++i) {
-            hash_combine_fnv(hash, i);
-            hash_combine_fnv(hash, static_cast<int>(bc.cards.drawPile[i].id));
+            hash_combine(hash, i);
+            hash_combine(hash, static_cast<int>(bc.cards.drawPile[i].id));
         }
 
         // Hash discard pile (including position for ordering)
-        hash_combine_fnv(hash, static_cast<int>(bc.cards.discardPile.size()));
+        hash_combine(hash, static_cast<int>(bc.cards.discardPile.size()));
         int discardIdx = 0;
         for (const auto& c : bc.cards.discardPile) {
-            hash_combine_fnv(hash, discardIdx++); // Position in discard
-            hash_combine_fnv(hash, static_cast<int>(c.id));
+            hash_combine(hash, discardIdx++); // Position in discard
+            hash_combine(hash, static_cast<int>(c.id));
         }
 
         // Hash exhaust pile contents (iteration order is order-sensitive via the accumulator)
-        hash_combine_fnv(hash, static_cast<int>(bc.cards.exhaustPile.size()));
+        hash_combine(hash, static_cast<int>(bc.cards.exhaustPile.size()));
         for (const auto& c : bc.cards.exhaustPile) {
-            hash_combine_fnv(hash, static_cast<int>(c.id));
+            hash_combine(hash, static_cast<int>(c.id));
         }
 
         // Hash potions
-        hash_combine_fnv(hash, bc.potionCount);
+        hash_combine(hash, bc.potionCount);
         for (int i = 0; i < bc.potionCount; ++i) {
-            hash_combine_fnv(hash, static_cast<int>(bc.potions[i]));
+            hash_combine(hash, static_cast<int>(bc.potions[i]));
         }
 
         return hash;
@@ -128,49 +129,113 @@ namespace sts::search {
 
 search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc _evalFnc)
     : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum), rolloutAgent(true, bc.seed+bc.floorNum) {
+    // Open-addressed dedup table, sized once. 64k slots * 16B = 1 MB; comfortably holds any
+    // sensible simulationCountBase while keeping the load factor low so probe chains stay short.
+    constexpr std::size_t dedupSlots = std::size_t(1) << 16;
+    stateToNode.assign(dedupSlots, DedupSlot{0, nullptr});
+    stateToNodeMask = dedupSlots - 1;
 }
 
-search::BattleSearcher::~BattleSearcher() {
-    stateToNode.clear();
-    allNodes.clear();
+search::BattleSearcher::~BattleSearcher() = default;
+
+void search::BattleSearcher::setRoot(const BattleContext &bc) {
+    *rootState = bc;
+    // Reseed exactly as the constructor does, so each decision's rollouts are independent of the
+    // previous decision's -- matching the old behavior of constructing a fresh searcher per move.
+    randGen.seed(bc.seed + bc.floorNum);
+    rolloutAgent = SimpleAgent(true, bc.seed + bc.floorNum);
 }
 
-search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(const BattleContext &state) {
-    const size_t hash = search::hashBattleState(state);
+// Claims a node from the pool: recycles allNodes[poolUsed] (resetting its bookkeeping but keeping
+// its allocated state/edges storage) or grows the pool. Node addresses are stable because allNodes
+// holds unique_ptrs, so edges may keep raw pointers across reallocations of the outer vector.
+search::BattleSearcher::Node* search::BattleSearcher::allocNode() {
+    if (poolUsed < allNodes.size()) {
+        Node* n = allNodes[poolUsed++].get();
+        n->edges.clear();
+        n->simulationCount = 0;
+        n->evaluationSum = 0;
+        n->isRandomNode = false;
+        n->parent = nullptr;
+        n->outcomesGenerated = 0;
+        n->randomnessBase = 0;
+        n->stochasticAction = Action{};
+        return n;
+    }
+    allNodes.push_back(std::make_unique<Node>());
+    ++poolUsed;
+    return allNodes.back().get();
+}
 
-    // Resolve hash collisions exactly: only reuse a node whose stored state is
-    // search-equal. This is what makes transposition safe without a perfect hash.
-    auto &bucket = stateToNode[hash];
-    for (Node* candidate : bucket) {
-        if (candidate->state.equalForSearch(state)) {
-            return candidate;
+// Moves `state` into the node only when a new node is created; on a match `state` is left
+// intact, so callers may still read it.
+search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleContext &&state) {
+    const std::size_t hash = search::hashBattleState(state);
+
+    // Linear probe the open-addressed table; equalForSearch resolves hash collisions exactly.
+    std::size_t i = hash & stateToNodeMask;
+    while (stateToNode[i].node != nullptr) {
+        if (stateToNode[i].hash == hash && stateToNode[i].node->state.equalForSearch(state)) {
+            return stateToNode[i].node;
         }
+        i = (i + 1) & stateToNodeMask;
     }
 
-    allNodes.push_back(std::make_unique<Node>());
-    Node* newNode = allNodes.back().get();
-    newNode->state = state;
-    bucket.push_back(newNode);
+    Node* newNode = allocNode();
+    newNode->state = std::move(state);
+    stateToNode[i] = {hash, newNode};
     return newNode;
 }
 
-void search::BattleSearcher::search(int64_t simulations) {
+bool search::BattleSearcher::resetForSearch() {
     g_debug_scum_search = this;
 
-    // Fresh search: reset the node pool and root (root.edges hold raw pointers into the pool).
-    allNodes.clear();
-    stateToNode.clear();
-    root = Node();
+    // Recycle the pool rather than freeing it: reclaim every node for reuse and drop the dedup map.
+    poolUsed = 0;
+    std::memset(stateToNode.data(), 0, stateToNode.size() * sizeof(DedupSlot));
+    root.edges.clear();
+    root.simulationCount = 0;
+    root.evaluationSum = 0;
+    root.isRandomNode = false;
+    root.parent = nullptr;
+    root.outcomesGenerated = 0;
+    root.randomnessBase = 0;
     root.state = *rootState;
 
     if (isTerminalState(root.state)) {
         root.evaluationSum = evaluateEndState(root.state);
         root.simulationCount = 1;
+        return false;
+    }
+    return true;
+}
+
+void search::BattleSearcher::search(int64_t simulations) {
+    if (!resetForSearch()) {
         return;
     }
 
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
+    }
+}
+
+void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
+    if (!resetForSearch()) {
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(maxMicros);
+
+    // Amortize the clock read over a small batch of steps. A single step (one tree descent plus a
+    // rollout to a terminal state) ranges from well under a microsecond to tens of microseconds, so
+    // a batch this size keeps both the now() overhead and the overshoot past the deadline negligible
+    // relative to any usable time budget. The leading check makes a zero/expired budget a no-op.
+    constexpr int stepsPerTimeCheck = 16;
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (int i = 0; i < stepsPerTimeCheck; ++i) {
+            step();
+        }
     }
 }
 
@@ -203,7 +268,7 @@ void search::BattleSearcher::step() {
 
             if (onPathSet.count(child) != 0) {
                 // Outcome reproduces a state already on the path -> cycle. Roll out instead.
-                BattleContext rollout = child->state;
+                BattleContext &rollout = (rolloutScratch = child->state);
                 rolloutToEnd(rollout, actionStack);
                 updateFromPlayout(searchStack, actionStack, rollout);
                 return;
@@ -213,7 +278,7 @@ void search::BattleSearcher::step() {
             onPathSet.insert(child);
 
             if (child->simulationCount == 0) {
-                BattleContext rollout = child->state;
+                BattleContext &rollout = (rolloutScratch = child->state);
                 rolloutToEnd(rollout, actionStack);
                 updateFromPlayout(searchStack, actionStack, rollout);
                 return;
@@ -245,7 +310,7 @@ void search::BattleSearcher::step() {
             // Already expanded: descend (transposition or revisit).
             if (onPathSet.count(edge.node) != 0) {
                 // Descending would revisit an on-path node -> cycle. Roll out instead.
-                BattleContext rollout = edge.node->state;
+                BattleContext &rollout = (rolloutScratch = edge.node->state);
                 rolloutToEnd(rollout, actionStack);
                 updateFromPlayout(searchStack, actionStack, rollout);
                 return;
@@ -268,8 +333,7 @@ void search::BattleSearcher::step() {
         if (rngChanged) {
             // Stochastic action: create a chance node that sources its pre-action state
             // from `cur` and resolves outcomes via Random(randomnessBase + N).
-            allNodes.push_back(std::make_unique<Node>());
-            Node* chance = allNodes.back().get();
+            Node* chance = allocNode();
             chance->isRandomNode = true;
             chance->stochasticAction = edge.action;
             chance->parent = cur;
@@ -281,13 +345,16 @@ void search::BattleSearcher::step() {
             continue;  // outcome resolved at the top of the loop next iteration
         }
 
-        // Deterministic action: deduplicate into a decision node.
-        Node* child = getOrCreateNode(next);
+        // Deterministic action: deduplicate into a decision node. Move `next` in: it is consumed
+        // only if a new node is created (see getOrCreateNode), so the two reads of `next` below are
+        // safe -- each is reached only when the node already existed and `next` was left intact.
+        Node* child = getOrCreateNode(std::move(next));
         edge.node = child;
 
         if (onPathSet.count(child) != 0) {
+            // Existing on-path node (a brand-new node is never on the path) -> next intact.
             // Deterministic action cycled back to an on-path node. Roll out instead.
-            BattleContext rollout = next;  // next == child->state
+            BattleContext &rollout = (rolloutScratch = next);  // next == child->state
             rolloutToEnd(rollout, actionStack);
             updateFromPlayout(searchStack, actionStack, rollout);
             return;
@@ -297,7 +364,9 @@ void search::BattleSearcher::step() {
         onPathSet.insert(child);
 
         if (child->simulationCount == 0) {
-            BattleContext rollout = next;  // next == child->state
+            // Brand-new node (only new nodes have simulationCount 0 here) -> next was moved into
+            // child->state, which now holds exactly what next did (rng included).
+            BattleContext &rollout = (rolloutScratch = child->state);
             rolloutToEnd(rollout, actionStack);
             updateFromPlayout(searchStack, actionStack, rollout);
             return;
@@ -320,7 +389,7 @@ bool search::BattleSearcher::isTerminalState(const BattleContext &bc) const { //
     return bc.outcome != Outcome::UNDECIDED;
 }
 
-double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &parent, int edgeIdx) {
+double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &parent, int edgeIdx, double logParentVisits) {
 
     const auto &edge = parent.edges[edgeIdx];
 
@@ -334,7 +403,7 @@ double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &
     // sharing the two diverge, and using edge visits keeps UCB well-formed (Childs et al. 2008).
     const double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
     const double explorationValue = explorationParameter *
-            std::sqrt(std::log(parent.simulationCount + 1) / (edge.visitCount + 1));
+            std::sqrt(logParentVisits / (edge.visitCount + 1));
 
     return qualityValue + explorationValue;
 }
@@ -344,12 +413,15 @@ int search::BattleSearcher::selectBestEdgeToSearch(const search::BattleSearcher:
         return 0;
     }
 
+    // log(parent visits) is the same for every edge, so compute it once for the whole comparison.
+    const double logParentVisits = std::log(cur.simulationCount + 1);
+
     auto bestEdge = 0;
-    auto bestEdgeValue = evaluateEdge(cur, bestEdge);
+    auto bestEdgeValue = evaluateEdge(cur, bestEdge, logParentVisits);
 
     //std::cout << "  edges: " << bestEdgeValue;
     for (int i = 1; i < cur.edges.size(); ++i) {
-        const auto value = evaluateEdge(cur, i);
+        const auto value = evaluateEdge(cur, i, logParentVisits);
         //std::cout << ", " << value;
         if (value > bestEdgeValue) {
             bestEdge = i;
@@ -407,7 +479,7 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         out.rng = Random(chance.randomnessBase + N);
         chance.stochasticAction.execute(out);
 
-        Node* child = getOrCreateNode(out);
+        Node* child = getOrCreateNode(std::move(out));  // out unused afterward; safe to move
         for (auto &e : chance.edges) {
             if (e.node == child) {
                 return &e;  // resampled an outcome we already have
