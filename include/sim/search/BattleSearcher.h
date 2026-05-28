@@ -66,7 +66,14 @@ namespace sts::search {
         // and only grows the vector when it needs more, so nodes aren't freed and reallocated per move.
         std::vector<std::unique_ptr<Node>> allNodes;  // Pool of all created nodes
         std::size_t poolUsed = 0;                     // nodes claimed by the current search
-        std::unordered_map<size_t, std::vector<Node*>> stateToNode;
+
+        // Open-addressed dedup table. Backed by a single vector and cleared with one memset per
+        // search; replaces unordered_map<size_t, vector<Node*>> -- no per-bucket vector, no per-
+        // entry heap node. Sized once at construction to comfortably hold any reasonable search;
+        // hash collisions are resolved by linear probing + equalForSearch (the dedup invariant).
+        struct DedupSlot { std::size_t hash; Node* node; };  // node == nullptr means empty
+        std::vector<DedupSlot> stateToNode;
+        std::size_t stateToNodeMask = 0;              // stateToNode.size() - 1 (power-of-two size)
 
         EvalFnc evalFnc;
         EvalWeights evalWeights;

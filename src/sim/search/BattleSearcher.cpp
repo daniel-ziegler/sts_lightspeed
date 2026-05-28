@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <utility>
 #include <string>
 #include <memory>
@@ -128,12 +129,14 @@ namespace sts::search {
 
 search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc _evalFnc)
     : rootState(new BattleContext(bc)), evalFnc(std::move(_evalFnc)), randGen(bc.seed+bc.floorNum), rolloutAgent(true, bc.seed+bc.floorNum) {
+    // Open-addressed dedup table, sized once. 64k slots * 16B = 1 MB; comfortably holds any
+    // sensible simulationCountBase while keeping the load factor low so probe chains stay short.
+    constexpr std::size_t dedupSlots = std::size_t(1) << 16;
+    stateToNode.assign(dedupSlots, DedupSlot{0, nullptr});
+    stateToNodeMask = dedupSlots - 1;
 }
 
-search::BattleSearcher::~BattleSearcher() {
-    stateToNode.clear();
-    allNodes.clear();
-}
+search::BattleSearcher::~BattleSearcher() = default;
 
 void search::BattleSearcher::setRoot(const BattleContext &bc) {
     *rootState = bc;
@@ -167,20 +170,20 @@ search::BattleSearcher::Node* search::BattleSearcher::allocNode() {
 // Moves `state` into the node only when a new node is created; on a match `state` is left
 // intact, so callers may still read it.
 search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleContext &&state) {
-    const size_t hash = search::hashBattleState(state);
+    const std::size_t hash = search::hashBattleState(state);
 
-    // Resolve hash collisions exactly: only reuse a node whose stored state is
-    // search-equal. This is what makes transposition safe without a perfect hash.
-    auto &bucket = stateToNode[hash];
-    for (Node* candidate : bucket) {
-        if (candidate->state.equalForSearch(state)) {
-            return candidate;
+    // Linear probe the open-addressed table; equalForSearch resolves hash collisions exactly.
+    std::size_t i = hash & stateToNodeMask;
+    while (stateToNode[i].node != nullptr) {
+        if (stateToNode[i].hash == hash && stateToNode[i].node->state.equalForSearch(state)) {
+            return stateToNode[i].node;
         }
+        i = (i + 1) & stateToNodeMask;
     }
 
     Node* newNode = allocNode();
     newNode->state = std::move(state);
-    bucket.push_back(newNode);
+    stateToNode[i] = {hash, newNode};
     return newNode;
 }
 
@@ -189,7 +192,7 @@ bool search::BattleSearcher::resetForSearch() {
 
     // Recycle the pool rather than freeing it: reclaim every node for reuse and drop the dedup map.
     poolUsed = 0;
-    stateToNode.clear();
+    std::memset(stateToNode.data(), 0, stateToNode.size() * sizeof(DedupSlot));
     root.edges.clear();
     root.simulationCount = 0;
     root.evaluationSum = 0;
