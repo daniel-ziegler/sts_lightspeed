@@ -134,6 +134,9 @@ search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc 
     constexpr std::size_t dedupSlots = std::size_t(1) << 16;
     stateToNode.assign(dedupSlots, DedupSlot{0, nullptr});
     stateToNodeMask = dedupSlots - 1;
+    // Allocate the root + populate dedup state for one-off `BattleSearcher(bc); search(N);` callers
+    // (test.cpp, pybind). playoutBattle's reuse-across-decisions path overrides via rerootAt later.
+    resetForSearch();
 }
 
 search::BattleSearcher::~BattleSearcher() = default;
@@ -144,6 +147,17 @@ void search::BattleSearcher::setRoot(const BattleContext &bc) {
     // previous decision's -- matching the old behavior of constructing a fresh searcher per move.
     randGen.seed(bc.seed + bc.floorNum);
     rolloutAgent = SimpleAgent(true, bc.seed + bc.floorNum);
+    resetForSearch();
+}
+
+void search::BattleSearcher::rerootAt(Node* newRoot) {
+    // Tree reuse: leave the node pool + dedup table alone (the chosen subtree's cached visits and
+    // evals serve as a head start for the new search). Just redirect root and reseed rng so the
+    // new decision's rollouts behave the same as if we'd constructed a fresh searcher at this state.
+    root = newRoot;
+    *rootState = newRoot->state;
+    randGen.seed(rootState->seed + rootState->floorNum);
+    rolloutAgent = SimpleAgent(true, rootState->seed + rootState->floorNum);
 }
 
 // Claims a node from the pool: recycles allNodes[poolUsed] (resetting its bookkeeping but keeping
@@ -193,27 +207,21 @@ bool search::BattleSearcher::resetForSearch() {
     // Recycle the pool rather than freeing it: reclaim every node for reuse and drop the dedup map.
     poolUsed = 0;
     std::memset(stateToNode.data(), 0, stateToNode.size() * sizeof(DedupSlot));
-    root.edges.clear();
-    root.simulationCount = 0;
-    root.evaluationSum = 0;
-    root.isRandomNode = false;
-    root.parent = nullptr;
-    root.outcomesGenerated = 0;
-    root.randomnessBase = 0;
-    root.state = *rootState;
+    root = allocNode();
+    root->state = *rootState;
 
-    if (isTerminalState(root.state)) {
-        root.evaluationSum = evaluateEndState(root.state);
-        root.simulationCount = 1;
+    if (isTerminalState(root->state)) {
+        root->evaluationSum = evaluateEndState(root->state);
+        root->simulationCount = 1;
         return false;
     }
     return true;
 }
 
 void search::BattleSearcher::search(int64_t simulations) {
-    if (!resetForSearch()) {
-        return;
-    }
+    g_debug_scum_search = this;
+    // Root setup (setRoot/rerootAt) has run; if root is already terminal we have nothing to do.
+    if (isTerminalState(root->state)) return;
 
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
@@ -221,9 +229,8 @@ void search::BattleSearcher::search(int64_t simulations) {
 }
 
 void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
-    if (!resetForSearch()) {
-        return;
-    }
+    g_debug_scum_search = this;
+    if (isTerminalState(root->state)) return;
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(maxMicros);
 
@@ -241,7 +248,7 @@ void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
 
 void search::BattleSearcher::step() {
     searchStack.clear();
-    searchStack.push_back(&root);
+    searchStack.push_back(root);
     actionStack.clear();
 
     // Cycle guard: is `n` already on the descent path? Linear scan; depth is small in practice.
@@ -249,7 +256,7 @@ void search::BattleSearcher::step() {
         return std::find(searchStack.begin(), searchStack.end(), n) != searchStack.end();
     };
 
-    Node* cur = &root;
+    Node* cur = root;
     int depth = 0;
     while (true) {
         // turn / cardsPlayedThisTurn are NOT globally monotonic -- potion use and card-select
@@ -761,21 +768,21 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
 }
 
 search::Action search::BattleSearcher::getBestAction() const {
-    if (root.edges.empty()) {
+    if (root->edges.empty()) {
         throw std::runtime_error("BattleSearcher::getBestAction() called with no available actions");
     }
 
     int bestEdgeIdx = 0;
-    std::int32_t maxVisits = root.edges[0].visitCount;
+    std::int32_t maxVisits = root->edges[0].visitCount;
 
-    for (int i = 1; i < root.edges.size(); ++i) {
-        if (root.edges[i].visitCount > maxVisits) {
-            maxVisits = root.edges[i].visitCount;
+    for (int i = 1; i < root->edges.size(); ++i) {
+        if (root->edges[i].visitCount > maxVisits) {
+            maxVisits = root->edges[i].visitCount;
             bestEdgeIdx = i;
         }
     }
 
-    return root.edges[bestEdgeIdx].action;
+    return root->edges[bestEdgeIdx].action;
 }
 
 // (edge, state-to-describe-the-action-in). Reads stored node state directly -- no replay.
@@ -791,7 +798,7 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleSearcher &s, int laye
 
     std::vector<EdgeInfo> layerEdges;
     std::unordered_set<const search::BattleSearcher::Node*> seen;
-    std::vector<std::pair<const search::BattleSearcher::Node*, int>> stack { {&s.root, 1} };
+    std::vector<std::pair<const search::BattleSearcher::Node*, int>> stack { {s.root, 1} };
 
     while (!stack.empty()) {
         const auto [node, depth] = stack.back();
