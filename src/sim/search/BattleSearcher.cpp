@@ -243,8 +243,11 @@ void search::BattleSearcher::step() {
     searchStack.clear();
     searchStack.push_back(&root);
     actionStack.clear();
-    onPathSet.clear();
-    onPathSet.insert(&root);
+
+    // Cycle guard: is `n` already on the descent path? Linear scan; depth is small in practice.
+    auto onPath = [&](Node* n) {
+        return std::find(searchStack.begin(), searchStack.end(), n) != searchStack.end();
+    };
 
     Node* cur = &root;
     int depth = 0;
@@ -253,7 +256,7 @@ void search::BattleSearcher::step() {
         // actions advance neither -- so the transposition graph can genuinely cycle. The known
         // case is drinking Entropic Brew, which can re-roll itself: a stochastic action whose
         // outcome is gameplay-identical to the pre-action state (differing only in rng, which
-        // equalForSearch ignores), deduping the outcome back onto the path. The onPathSet guards
+        // equalForSearch ignores), deduping the outcome back onto the path. The onPath guards
         // below break such cycles by rolling out instead of descending into an on-path node; this
         // bound is only a backstop for any cycle they fail to catch.
         if (++depth > 5000) {
@@ -266,7 +269,7 @@ void search::BattleSearcher::step() {
             ++outcomeEdge->visitCount;
             Node* child = outcomeEdge->node;
 
-            if (onPathSet.count(child) != 0) {
+            if (onPath(child)) {
                 // Outcome reproduces a state already on the path -> cycle. Roll out instead.
                 BattleContext &rollout = (rolloutScratch = child->state);
                 rolloutToEnd(rollout, actionStack);
@@ -275,7 +278,6 @@ void search::BattleSearcher::step() {
             }
 
             searchStack.push_back(child);
-            onPathSet.insert(child);
 
             if (child->simulationCount == 0) {
                 BattleContext &rollout = (rolloutScratch = child->state);
@@ -308,7 +310,7 @@ void search::BattleSearcher::step() {
 
         if (edge.node != nullptr) {
             // Already expanded: descend (transposition or revisit).
-            if (onPathSet.count(edge.node) != 0) {
+            if (onPath(edge.node)) {
                 // Descending would revisit an on-path node -> cycle. Roll out instead.
                 BattleContext &rollout = (rolloutScratch = edge.node->state);
                 rolloutToEnd(rollout, actionStack);
@@ -318,7 +320,6 @@ void search::BattleSearcher::step() {
             actionStack.push_back(edge.action);
             cur = edge.node;
             searchStack.push_back(cur);
-            onPathSet.insert(cur);
             continue;
         }
 
@@ -341,7 +342,6 @@ void search::BattleSearcher::step() {
             edge.node = chance;
             cur = chance;
             searchStack.push_back(cur);
-            onPathSet.insert(cur);
             continue;  // outcome resolved at the top of the loop next iteration
         }
 
@@ -351,7 +351,7 @@ void search::BattleSearcher::step() {
         Node* child = getOrCreateNode(std::move(next));
         edge.node = child;
 
-        if (onPathSet.count(child) != 0) {
+        if (onPath(child)) {
             // Existing on-path node (a brand-new node is never on the path) -> next intact.
             // Deterministic action cycled back to an on-path node. Roll out instead.
             BattleContext &rollout = (rolloutScratch = next);  // next == child->state
@@ -361,7 +361,6 @@ void search::BattleSearcher::step() {
         }
 
         searchStack.push_back(child);
-        onPathSet.insert(child);
 
         if (child->simulationCount == 0) {
             // Brand-new node (only new nodes have simulationCount 0 here) -> next was moved into

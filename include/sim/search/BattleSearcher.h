@@ -86,9 +86,8 @@ namespace sts::search {
 
         std::default_random_engine randGen;
 
-        std::vector<Node*> searchStack;
+        std::vector<Node*> searchStack;        // descent path; doubles as the cycle-guard set (linear scan, depth is small)
         std::vector<Action> actionStack;
-        std::unordered_set<Node*> onPathSet;   // nodes on the current descent path (cycle guard)
         
         SimpleAgent rolloutAgent;
         BattleContext rolloutScratch;   // reused playout buffer: copy-assigning into it keeps the card-pile vector capacity, avoiding a fresh allocation per rollout
