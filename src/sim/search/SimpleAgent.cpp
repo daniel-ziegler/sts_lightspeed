@@ -17,14 +17,30 @@
 using namespace sts;
 
 // Rollout-policy knobs, read once from env so we can sweep without recompiling.
-// STS_BLOCK_OFFSET: in chooseBattleCardPlay's "we have enough block" check (default 4 = original).
+// STS_BLOCK_OFFSET: "we have enough block" check (default 4 = original).
 // STS_AOE_MIN: minimum alive monsters to prefer AoE over single-target attack (default 2).
+// STS_PRIO_MODE: category priority order in chooseBattleCardPlay (default 0):
+//   0 = zeroCostNonAttacks -> nonZero -> zeroCostAttacks  (original)
+//   1 = nonZero -> zeroCostNonAttacks -> zeroCostAttacks   (energy-first)
+//   2 = zeroCostNonAttacks -> zeroCostAttacks -> nonZero   (cheap-first)
+// STS_DEFENSIVE_HP: if 0 < curHp <= this, force defensive mode (skip block-sufficient short-circuit).
+//   Default 0 = disabled.
+// STS_TARGET_MODE: attack target selection (default 0):
+//   0 = lowest-HP monster (original); 1 = highest-HP; 2 = randomize.
 static int policyEnvInt(const char *name, int def) {
     if (const char *v = std::getenv(name)) return std::atoi(v);
     return def;
 }
-static const int rolloutBlockOffset = policyEnvInt("STS_BLOCK_OFFSET", 4);
-static const int rolloutAoeMin      = policyEnvInt("STS_AOE_MIN", 2);
+static const int rolloutBlockOffset   = policyEnvInt("STS_BLOCK_OFFSET", 4);
+static const int rolloutAoeMin        = policyEnvInt("STS_AOE_MIN", 2);
+static const int rolloutPrioMode      = policyEnvInt("STS_PRIO_MODE", 0);
+static const int rolloutDefensiveHp   = policyEnvInt("STS_DEFENSIVE_HP", 0);
+static const int rolloutTargetMode    = policyEnvInt("STS_TARGET_MODE", 0);
+// STS_RANDOM_POLICY=1: ignore all heuristics and just pick uniform-random over playable cards.
+// Baseline to gauge whether the structured policy is doing anything useful under MCTS averaging.
+static const int rolloutRandomPolicy  = policyEnvInt("STS_RANDOM_POLICY", 0);
+// STS_END_TURN_ALWAYS=1: degenerate baseline that always ends the turn (zero card plays per rollout).
+static const int rolloutEndTurnAlways = policyEnvInt("STS_END_TURN_ALWAYS", 0);
 
 static bool haveInitMaps = false;
 static int cardPriorityMap[372] {};
@@ -378,6 +394,9 @@ void search::SimpleAgent::playoutBattle(BattleContext &bc) {
 }
 
 sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc) {
+    if (rolloutEndTurnAlways) {
+        return Action(ActionType::END_TURN);
+    }
     if (!bc.isCardPlayAllowed() || bc.player.cardsPlayedThisTurn > 1000) {
         return Action(ActionType::END_TURN);
     }
@@ -413,8 +432,26 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
         return Action(ActionType::END_TURN);
     }
 
+    if (rolloutRandomPolicy) {
+        // Baseline: skip all heuristics, pick a uniform-random playable card + random target.
+        std::uniform_int_distribution<int> pickDist(0, playableCardsIdxs.size() - 1);
+        const int handIdx = playableCardsIdxs[pickDist(rng)];
+        const auto &c = bc.cards.hand[handIdx];
+        if (!c.requiresTarget()) {
+            return Action(ActionType::CARD, handIdx);
+        }
+        fixed_list<int,5> alive;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            if (bc.monsters.arr[i].isTargetable()) alive.push_back(i);
+        }
+        const int tgt = alive.empty() ? 0
+            : alive[std::uniform_int_distribution<int>(0, alive.size()-1)(rng)];
+        return Action(ActionType::CARD, handIdx, tgt);
+    }
+
     const int incomingDamage = getIncomingDamage(bc);
-    if (bc.player.block > (incomingDamage - bc.gameContext->act - rolloutBlockOffset)) {
+    const bool forceDefensive = rolloutDefensiveHp > 0 && bc.player.curHp <= rolloutDefensiveHp;
+    if (!forceDefensive && bc.player.block > (incomingDamage - bc.gameContext->act - rolloutBlockOffset)) {
         fixed_list<int,10> offensiveCards;
         for (auto handIdx : nonZeroCostCards) {
             const auto &c = bc.cards.hand[handIdx];
@@ -436,21 +473,33 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
         }
     }
 
-    int bestCardIdx = playableCardsIdxs.front();
-    if (!zeroCostNonAttacks.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, zeroCostNonAttacks, randomize, rng);
+    // Try the three categories in the configured priority order; AoE override only fires when
+    // the chosen card came from nonZeroCostCards (the original behavior).
+    const fixed_list<int,10> *priority[3] = {&zeroCostNonAttacks, &nonZeroCostCards, &zeroCostAttacks};
+    if (rolloutPrioMode == 1) {
+        priority[0] = &nonZeroCostCards;
+        priority[1] = &zeroCostNonAttacks;
+    } else if (rolloutPrioMode == 2) {
+        priority[1] = &zeroCostAttacks;
+        priority[2] = &nonZeroCostCards;
+    }
 
-    } else if (!nonZeroCostCards.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, nonZeroCostCards, randomize, rng);
-        if (!aoeCards.empty() && bc.monsters.monstersAlive >= rolloutAoeMin && bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
-            bestCardIdx = getBestCardToPlay(bc, aoeCards, randomize, rng);
+    int bestCardIdx = -1;
+    const fixed_list<int,10> *chosen = nullptr;
+    for (int p = 0; p < 3; ++p) {
+        if (!priority[p]->empty()) {
+            bestCardIdx = getBestCardToPlay(bc, *priority[p], randomize, rng);
+            chosen = priority[p];
+            break;
         }
-
-    } else if (!zeroCostAttacks.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, zeroCostAttacks, randomize, rng);
-
-    } else {
+    }
+    if (bestCardIdx < 0) {
         return Action(ActionType::END_TURN);
+    }
+    if (chosen == &nonZeroCostCards && !aoeCards.empty() &&
+        bc.monsters.monstersAlive >= rolloutAoeMin &&
+        bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
+        bestCardIdx = getBestCardToPlay(bc, aoeCards, randomize, rng);
     }
 
     const auto &c = bc.cards.hand[bestCardIdx];
@@ -459,10 +508,23 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
     }
 
     int targetIdx;
-    if (c.getType() == CardType::ATTACK) {
-         targetIdx = getLowHpMonster(bc, randomize, rng);
-    } else {
+    if (rolloutTargetMode == 1) {
         targetIdx = getHighHpMonster(bc, randomize, rng);
+    } else if (rolloutTargetMode == 2) {
+        // mode 2: randomize across alive monsters
+        fixed_list<int,5> alive;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            if (bc.monsters.arr[i].isTargetable()) alive.push_back(i);
+        }
+        if (alive.empty()) targetIdx = 0;
+        else {
+            std::uniform_int_distribution<int> dist(0, alive.size() - 1);
+            targetIdx = alive[dist(rng)];
+        }
+    } else {
+        targetIdx = (c.getType() == CardType::ATTACK)
+                ? getLowHpMonster(bc, randomize, rng)
+                : getHighHpMonster(bc, randomize, rng);
     }
     return Action(ActionType::CARD, bestCardIdx, targetIdx);
 }
