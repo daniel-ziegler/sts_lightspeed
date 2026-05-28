@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 #include <string>
@@ -438,8 +439,22 @@ int search::BattleSearcher::selectBestEdgeToSearch(const search::BattleSearcher:
     return bestEdge;
 }
 
+// STS_MAX_ROLLOUT_TURNS: if >0, cut the rollout short after that many turns from the start state
+// and let evaluateEndState's non-terminal branch heuristic the result. Default 0 = original
+// roll-to-terminal behavior.
+static int rolloutMaxTurnsEnv() {
+    static const int v = [](){
+        if (const char *s = std::getenv("STS_MAX_ROLLOUT_TURNS")) return std::atoi(s);
+        return 0;
+    }();
+    return v;
+}
+
 void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action> &actionStack) {
+    const int maxTurns = rolloutMaxTurnsEnv();
+    const int startTurn = bc.turn;
     while (!isTerminalState(bc)) {
+        if (maxTurns > 0 && bc.turn - startTurn >= maxTurns) break;
         ++simulationIdx;
         Action action;
         switch (bc.inputState) {
