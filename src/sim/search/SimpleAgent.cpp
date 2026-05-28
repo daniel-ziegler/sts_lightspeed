@@ -7,6 +7,7 @@
 #include "sim/PrintHelpers.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <array>
 #include <bitset>
@@ -14,6 +15,16 @@
 #include <mutex>
 
 using namespace sts;
+
+// Rollout-policy knobs, read once from env so we can sweep without recompiling.
+// STS_BLOCK_OFFSET: in chooseBattleCardPlay's "we have enough block" check (default 4 = original).
+// STS_AOE_MIN: minimum alive monsters to prefer AoE over single-target attack (default 2).
+static int policyEnvInt(const char *name, int def) {
+    if (const char *v = std::getenv(name)) return std::atoi(v);
+    return def;
+}
+static const int rolloutBlockOffset = policyEnvInt("STS_BLOCK_OFFSET", 4);
+static const int rolloutAoeMin      = policyEnvInt("STS_AOE_MIN", 2);
 
 static bool haveInitMaps = false;
 static int cardPriorityMap[372] {};
@@ -403,7 +414,7 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
     }
 
     const int incomingDamage = getIncomingDamage(bc);
-    if (bc.player.block > (incomingDamage - bc.gameContext->act - 4)) {
+    if (bc.player.block > (incomingDamage - bc.gameContext->act - rolloutBlockOffset)) {
         fixed_list<int,10> offensiveCards;
         for (auto handIdx : nonZeroCostCards) {
             const auto &c = bc.cards.hand[handIdx];
@@ -431,7 +442,7 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
 
     } else if (!nonZeroCostCards.empty()) {
         bestCardIdx = getBestCardToPlay(bc, nonZeroCostCards, randomize, rng);
-        if (!aoeCards.empty() && bc.monsters.monstersAlive > 1 && bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
+        if (!aoeCards.empty() && bc.monsters.monstersAlive >= rolloutAoeMin && bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
             bestCardIdx = getBestCardToPlay(bc, aoeCards, randomize, rng);
         }
 
