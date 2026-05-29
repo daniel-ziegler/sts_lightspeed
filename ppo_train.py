@@ -150,6 +150,10 @@ class PPOConfig:
     shaping_maxhp_coef: float = 0.0   # per max-HP point
     shaping_offset: float = 0.0
 
+    # Per-battle MCTS wall-clock budget (seconds). Sized for the default 1000 sims; raise it
+    # when running with many more simulations so long boss fights aren't cut off mid-search.
+    battle_timeout: float = 30.0
+
     # Training settings
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
@@ -293,7 +297,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
                     # Wait for completion with timeout. future.result raises
                     # concurrent.futures.TimeoutError, which is a distinct class from the
                     # builtin TimeoutError before Python 3.11 -- catch the right one.
-                    future.result(timeout=30.0)
+                    future.result(timeout=config.battle_timeout)
                 except FuturesTimeoutError:
                     log.warning(f"Battle simulation timed out for seed {seed}. Background thread will continue running.")
                     # End the episode. The outcome will be UNDECIDED.

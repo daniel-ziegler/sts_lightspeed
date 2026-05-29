@@ -1,0 +1,113 @@
+"""Eval the hero checkpoint on fresh seeds with high-MCTS-sim playout.
+
+Reuses run_ppo_episode for the rollout machinery; we don't need PPO training, just outcomes.
+Shaping coefs are zeroed (don't matter for outcome). Defaults match the user's spec:
+seeds 1_000_000..1_000_099 (well outside any training seed range), mcts_simulations=10000,
+4 collect workers.
+"""
+import argparse, csv, os, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import torch
+
+import slaythespire as sts
+from network import NN, ModelHP, load_network_backward_compatible
+from ppo_train import (
+    NNService, PPOConfig, run_ppo_episode, compute_progress_reward,
+)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--ckpt', required=True, help='path to e.g. runs/hero.pt.iter_130')
+    ap.add_argument('--n-games', type=int, default=100)
+    ap.add_argument('--seed-start', type=int, default=1_000_000)
+    ap.add_argument('--mcts-sims', type=int, default=10_000)
+    ap.add_argument('--num-workers', type=int, default=4)
+    ap.add_argument('--battle-timeout', type=float, default=300.0,
+                    help='per-battle MCTS wall-clock budget (s); raise for high sim counts')
+    ap.add_argument('--out-csv', default='runs/eval_hero.csv')
+    args = ap.parse_args()
+
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    torch.set_float32_matmul_precision('high')
+
+    print(f"loading {args.ckpt} ...", flush=True)
+    hp = ModelHP(use_value_head=True, dim=256, n_layers=4)
+    net = NN(hp).to(device)
+    state = torch.load(args.ckpt, map_location=device, weights_only=True)
+    net = load_network_backward_compatible(net, state)
+    net.eval()
+
+    # PPOConfig with eval knobs. Shaping coefs zero -> reward (and the rewards we ignore) match
+    # plain victory/progress signal. inf_batch_size defaults are fine.
+    config = PPOConfig(
+        mcts_simulations=args.mcts_sims,
+        mcts_exploration=6.57,
+        mcts_widening_c=3.14,
+        mcts_widening_alpha=0.97,
+        shaping_hp_coef=0.0, shaping_upg_coef=0.0,
+        shaping_offset=0.0, shaping_relic_coef=0.0, shaping_maxhp_coef=0.0,
+        num_workers=args.num_workers,
+        num_games_per_step=args.n_games,
+        battle_timeout=args.battle_timeout,
+    )
+    service = NNService(net, batch_size=config.inf_batch_size,
+                        batch_size_factor=config.inf_batch_size_factor,
+                        torch_compile_mode='no')
+    # update_weights one-shot in case service expects it
+    service.update_weights(net)
+
+    seeds = list(range(args.seed_start, args.seed_start + args.n_games))
+    rows = []
+    t0 = time.time()
+    print(f"running {len(seeds)} games | mcts_sims={args.mcts_sims} | workers={args.num_workers}",
+          flush=True)
+    # Battle executor is shared (matching ppo_train pattern: one battle thread per main worker)
+    with ThreadPoolExecutor(max_workers=args.num_workers) as battle_executor:
+        with ThreadPoolExecutor(max_workers=args.num_workers) as main_executor:
+            futs = {
+                main_executor.submit(run_ppo_episode, s, service,
+                                     compute_progress_reward, battle_executor, config): s
+                for s in seeds
+            }
+            for f in as_completed(futs):
+                s = futs[f]
+                try:
+                    traj = f.result()
+                    won = int(traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY)
+                    floor = int(traj.final_metrics.floor_num)
+                except Exception as e:
+                    print(f"  seed {s}: FAILED {e}", flush=True)
+                    won, floor = -1, -1
+                rows.append((s, won, floor))
+                n = len(rows)
+                wn = sum(1 for _, w, _ in rows if w == 1)
+                err = sum(1 for _, w, _ in rows if w == -1)
+                print(f"  {n:3d}/{len(seeds)}  seed={s} won={won} floor={floor} "
+                      f"running_win={wn/max(1,n-err):.3f} ({wn}/{n-err})  "
+                      f"elapsed={time.time()-t0:.0f}s",
+                      flush=True)
+
+    os.makedirs(os.path.dirname(args.out_csv) or '.', exist_ok=True)
+    with open(args.out_csv, 'w', newline='') as fout:
+        w = csv.writer(fout); w.writerow(['seed', 'won', 'floor']); w.writerows(rows)
+    rows_clean = [r for r in rows if r[1] != -1]
+    n = len(rows_clean)
+    wins = sum(r[1] for r in rows_clean)
+    win_rate = wins / max(1, n)
+    floors = [r[2] for r in rows_clean]
+    mean_floor = sum(floors) / max(1, n)
+    # Wilson-ish std for a binary proportion
+    import math
+    sd = math.sqrt(win_rate * (1 - win_rate) / max(1, n))
+    print()
+    print(f"=== EVAL RESULT ===")
+    print(f"  games:     {n} (failed: {len(rows)-n})")
+    print(f"  win_rate:  {win_rate:.4f} ± {sd:.4f}  ({wins}/{n})")
+    print(f"  avg_floor: {mean_floor:.2f}")
+    print(f"  out_csv:   {args.out_csv}")
+    print(f"  total:     {time.time()-t0:.0f}s")
+
+
+if __name__ == '__main__':
+    main()
