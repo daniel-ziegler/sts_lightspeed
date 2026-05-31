@@ -13,6 +13,12 @@ import threading
 from collections import Counter
 import json
 import os
+import gc
+
+# Run TorchInductor compilation in-process (no async compile-worker subprocess pool). That pool's
+# pipe-reader thread uses pickle and races with torch.save() at checkpoint time, intermittently
+# crashing with "cannot pickle 'torch._C.PyTorchFileWriter'". Must be set before importing torch.
+os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
 
 import numpy as np
 import pandas as pd
@@ -872,6 +878,24 @@ def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages
     }
 
 
+def robust_save(state_dict_fn, path, tries=4):
+    """torch.save(state_dict_fn(), path), retrying on transient teardown-time data races
+    (state_dict() / pickling racing with a lingering torch worker thread). state_dict_fn is a
+    callable (e.g. net.state_dict) so each attempt re-snapshots. Non-fatal: logs and returns
+    False if every attempt fails, since periodic .iter_N checkpoints already cover the run."""
+    for attempt in range(tries):
+        try:
+            torch.save(state_dict_fn(), path)
+            return True
+        except Exception as e:
+            log.warning(f"save to {path} failed (attempt {attempt + 1}/{tries}): "
+                        f"{type(e).__name__}: {e}")
+            gc.collect()
+            time.sleep(0.2)
+    log.error(f"giving up on {path} after {tries} attempts; periodic checkpoints remain")
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='PPO training for Slay the Spire')
     parser.add_argument('--init-path', type=str, default=None,
@@ -1230,16 +1254,22 @@ def main():
     finally:
         service.stop()
     
-    # Save final model
+    # Save final model. This runs at process teardown, where the just-finished training loop's
+    # last DataLoader iterator (and any lingering torch worker threads) may still be tearing down
+    # concurrently -- a data race with torch.save/state_dict() that intermittently corrupts the
+    # pickle ("cannot pickle PyTorchFileWriter", "'Tensor' object is not iterable"). gc.collect()
+    # forces that teardown to complete first; robust_save retries to absorb any residual race.
+    # (Periodic .iter_N checkpoints are written during the loop and are unaffected.)
+    gc.collect()
     if config.separate_networks:
         policy_net, value_net = nets
-        torch.save(policy_net.state_dict(), f"{args.save_path}.policy")
-        torch.save(value_net.state_dict(), f"{args.save_path}.value")
-        torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer")
+        robust_save(policy_net.state_dict, f"{args.save_path}.policy")
+        robust_save(value_net.state_dict, f"{args.save_path}.value")
+        robust_save(optimizer.state_dict, f"{args.save_path}.optimizer")
         print(f"Saved final separate networks to {args.save_path}.policy and {args.save_path}.value")
     else:
-        torch.save(nets.state_dict(), args.save_path)
-        torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer")
+        robust_save(nets.state_dict, args.save_path)
+        robust_save(optimizer.state_dict, f"{args.save_path}.optimizer")
         print(f"Saved final model to {args.save_path}")
 
 
