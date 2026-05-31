@@ -31,6 +31,7 @@ from network import NN, ModelHP, move_to_device, process_batch, choice_space, co
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
+    PPOAlgorithm,
 )
 import slaythespire as sts
 
@@ -674,11 +675,15 @@ def experiences_to_batches(experiences: List[Experience], advantages: List[float
     return batch_data
 
 
-def train_step(nets, optimizer, experiences: List[Experience], advantages: List[float], returns: List[float], config: TrainConfig, iteration: int = -1):
-    """Perform one PPO training step."""
+def train_step(nets, optimizer, experiences: List[Experience], advantages: List[float], returns: List[float], config: TrainConfig, algo=None, iteration: int = -1):
+    """Perform one training step. `algo` (an Algorithm) supplies the per-minibatch loss; defaults
+    to PPO for backward compatibility."""
     if not experiences:
         return {}
-    
+    if algo is None:
+        from algorithms import PPOAlgorithm
+        algo = PPOAlgorithm()
+
     if config.separate_networks:
         policy_net, value_net = nets
         device = policy_net.device
@@ -694,21 +699,19 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
     # Convert experiences to batches
     batch_data = experiences_to_batches(experiences, advantages, returns)
     
-    # Create custom collate function that handles PPO fields
+    # Create custom collate function that adds the per-step training fields
+    want_return = algo.needs_return_in_batch()
     def ppo_collate_fn(batch):
-        # Extract PPO-specific fields before calling main collate_fn
         old_log_probs = [x['old_log_prob'] for x in batch]
         advantage_vals = [x['advantage'] for x in batch]
-        return_vals = [x['return'] for x in batch]
-        
-        # Call the main collate function
+
         collated = collate_fn(batch)
-        
-        # Add PPO-specific fields
+
         collated['old_log_prob'] = torch.tensor(old_log_probs, dtype=torch.float32)
         collated['advantage'] = torch.tensor(advantage_vals, dtype=torch.float32)
-        collated['return'] = torch.tensor(return_vals, dtype=torch.float32)
-        
+        if want_return:  # value targets only for value-based algos (PPO)
+            collated['return'] = torch.tensor([x['return'] for x in batch], dtype=torch.float32)
+
         return collated
     
     # Create data loader with custom collate function
@@ -759,62 +762,44 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
                     new_logits = output
                     new_values = torch.zeros(batch_size, device=device)
             
-            # Get old log probs, advantages, target values from collated batch
-            old_log_probs = collated_batch['old_log_prob'].to(device)
-            batch_advantages = collated_batch['advantage'].to(device)
-            target_values = collated_batch['return'].to(device)
-            chosen_indices = collated_batch['chosen_idx'].to(device)
-            
-            # Policy surrogate / ratio / KL / clipfrac / entropy via the shared algorithm helpers.
-            old_log_probs = torch.clamp(old_log_probs, min=-20, max=20)
-            action_probs, action_log_probs, new_log_probs = policy_log_probs(new_logits, chosen_indices)
-            ratio = importance_ratio(new_log_probs, old_log_probs)
-            kl_div = approx_kl(old_log_probs, new_log_probs)
-            clipfrac = clip_fraction(ratio, config.clip_ratio)
-            policy_loss = clipped_surrogate(ratio, batch_advantages, config.clip_ratio)
+            # Per-minibatch loss from the algorithm strategy.
+            total_loss, aux = algo.compute_loss(collated_batch, (new_logits, new_values), config)
 
-            # Value loss
-            value_loss = F.mse_loss(new_values, target_values)
+            # Explained-variance accumulation (value-based algos provide ev_target/ev_pred).
+            if 'ev_target' in aux:
+                target_stats.add_samples(aux['ev_target'])
+                residual_stats.add_samples(aux['ev_target'] - aux['ev_pred'])
 
-            # Accumulate statistics for explained variance calculation
-            target_stats.add_samples(target_values)
-            residuals = target_values - new_values
-            residual_stats.add_samples(residuals)
+            # Check for NaN before stepping.
+            _pl, _en, _vl = aux['policy_loss'], aux['entropy'], aux.get('value_loss')
+            if torch.isnan(_pl) or torch.isnan(_en) or (_vl is not None and torch.isnan(_vl)):
+                print(f"NaN detected - policy: {_pl.item()}, "
+                      f"value: {_vl.item() if _vl is not None else 'n/a'}, entropy: {_en.item()}; skipping batch")
+                continue
 
-            # Entropy bonus over valid (non-inf) actions
-            entropy = masked_entropy(new_logits, action_probs, action_log_probs)
-
-            # Check for NaN before combining losses
-            if torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy):
-                print(f"NaN detected - policy: {policy_loss.item()}, value: {value_loss.item()}, entropy: {entropy.item()}")
-                print(f"Ratio stats - min: {ratio.min().item()}, max: {ratio.max().item()}, mean: {ratio.mean().item()}")
-                print(f"Advantages stats - min: {batch_advantages.min().item()}, max: {batch_advantages.max().item()}, mean: {batch_advantages.mean().item()}")
-                continue  # Skip this batch
-            
-            # Backward pass - same logic for both separate and single networks
-            total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+            # Backward + grad clip + step (shared across algorithms).
             total_loss.backward()
-            # Per-group grad norms (pre-clip): param_groups[0]=policy/trunk, [1]=value head.
-            # Value group's grad is pure value-loss; the policy group also carries value-loss
-            # gradient flowing through the shared trunk (single-net case).
+            # Per-group grad norms (pre-clip): param_groups[0]=policy/trunk, [1]=value head (PPO
+            # single-net). GRPO has no value head -> one param group, so guard the second.
             pg0 = [p.grad.norm() for p in optimizer.param_groups[0]['params'] if p.grad is not None]
-            pg1 = [p.grad.norm() for p in optimizer.param_groups[1]['params'] if p.grad is not None]
+            pg1 = ([p.grad.norm() for p in optimizer.param_groups[1]['params'] if p.grad is not None]
+                   if len(optimizer.param_groups) > 1 else [])
             policy_grad_norm = torch.norm(torch.stack(pg0)).item() if pg0 else 0.0
             value_grad_norm = torch.norm(torch.stack(pg1)).item() if pg1 else 0.0
             all_params = [p for group in optimizer.param_groups for p in group['params']]
             grad_norm = torch.nn.utils.clip_grad_norm_(all_params, config.max_grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-            
-            # Accumulate losses and metrics
-            total_policy_loss += policy_loss.item()
-            total_value_loss += value_loss.item()
-            total_entropy += entropy.item()
-            total_kl_div += kl_div.item()
+
+            # Accumulate losses and metrics.
+            total_policy_loss += _pl.item()
+            total_value_loss += _vl.item() if _vl is not None else 0.0
+            total_entropy += _en.item()
+            total_kl_div += aux['kl_div'].item()
             total_grad_norm += grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
             total_policy_grad_norm += policy_grad_norm
             total_value_grad_norm += value_grad_norm
-            total_clipfrac += clipfrac.item()
+            total_clipfrac += aux['clipfrac'].item()
             num_batches += 1
     
     # Calculate explained variance using Stats helper classes
@@ -991,6 +976,10 @@ def main():
         raise ValueError(f"Unknown reward function: {args.reward_function}")
     
     print(f"Using reward function: {args.reward_function}")
+
+    # Algorithm strategy (advantage estimation + per-batch loss). PPO for now.
+    algo = PPOAlgorithm()
+    print(f"Using algorithm: {algo.name}")
     
     # Create networks based on configuration
     if config.separate_networks:
@@ -1140,7 +1129,7 @@ def main():
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
             
             # Prepare training data (with debug output for first trajectory)
-            experiences, advantages, returns, ep_meta = compute_advantages(trajectories, config, adv_norm, debug_traj=True)
+            experiences, advantages, returns, ep_meta = algo.compute_advantages(trajectories, config, adv_norm, debug_traj=True)
 
             if not experiences:
                 print("No experiences to train on, skipping iteration")
@@ -1157,7 +1146,7 @@ def main():
             
             # Perform PPO training step
             train_start = time.time()
-            losses = train_step(nets, optimizer, experiences, advantages, returns, config)
+            losses = train_step(nets, optimizer, experiences, advantages, returns, config, algo=algo)
             train_time = time.time() - train_start
             
             print(f"Training completed in {train_time:.1f}s")

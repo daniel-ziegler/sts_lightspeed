@@ -8,6 +8,8 @@ into per-step advantages, and the per-batch loss.
 This module starts with the pure tensor helpers extracted verbatim from the original PPO loss
 so both algorithms compute the policy surrogate / ratio / entropy identically.
 """
+from abc import ABC, abstractmethod
+
 import torch
 import torch.nn.functional as F
 
@@ -69,3 +71,62 @@ def masked_entropy(new_logits, action_probs, action_log_probs):
     if batch_entropies:
         return torch.stack(batch_entropies).mean()
     return torch.tensor(0.0, device=new_logits.device)
+
+
+class Algorithm(ABC):
+    """Strategy that owns the parts that differ between RL algorithms. The trainer owns the rest
+    (collection, batching, the epoch/forward/backward/optimizer skeleton, checkpointing, stats)."""
+    name: str = "base"
+    requires_value_head: bool = True
+
+    def needs_return_in_batch(self) -> bool:
+        """Whether the collated batch must carry per-step value targets ('return')."""
+        return self.requires_value_head
+
+    @abstractmethod
+    def compute_advantages(self, trajectories, config, adv_norm, debug_traj=False):
+        """-> (experiences, advantages, value_targets_or_None, meta), parallel over the
+        concatenation of each trajectory's experiences."""
+
+    @abstractmethod
+    def compute_loss(self, batch, net_output, config):
+        """Per-minibatch loss. batch is the collated dict (tensors); net_output is (logits, values).
+        Returns (total_loss_tensor, aux) where aux holds scalar-tensor metrics
+        ('policy_loss','value_loss','entropy','kl_div','clipfrac') and, for value-based algos,
+        'ev_target'/'ev_pred' tensors for explained-variance accumulation."""
+
+
+class PPOAlgorithm(Algorithm):
+    """PPO with GAE and a value head: clipped surrogate + value MSE + entropy bonus."""
+    name = "ppo"
+    requires_value_head = True
+
+    def compute_advantages(self, trajectories, config, adv_norm, debug_traj=False):
+        # GAE lives in rl_train (operates on the trajectory/experience structures defined there);
+        # imported lazily so this module has no import-time dependency on rl_train.
+        from rl_train import compute_advantages as _gae
+        return _gae(trajectories, config, adv_norm, debug_traj=debug_traj)
+
+    def compute_loss(self, batch, net_output, config):
+        new_logits, new_values = net_output
+        device = new_logits.device
+        old_log_probs = torch.clamp(batch['old_log_prob'].to(device), min=-LOG_PROB_CLAMP, max=LOG_PROB_CLAMP)
+        advantages = batch['advantage'].to(device)
+        target_values = batch['return'].to(device)
+        chosen = batch['chosen_idx'].to(device)
+
+        action_probs, action_log_probs, new_log_probs = policy_log_probs(new_logits, chosen)
+        ratio = importance_ratio(new_log_probs, old_log_probs)
+        kl_div = approx_kl(old_log_probs, new_log_probs)
+        clipfrac = clip_fraction(ratio, config.clip_ratio)
+        policy_loss = clipped_surrogate(ratio, advantages, config.clip_ratio)
+        value_loss = F.mse_loss(new_values, target_values)
+        entropy = masked_entropy(new_logits, action_probs, action_log_probs)
+
+        total_loss = policy_loss + config.value_coef * value_loss - config.entropy_coef * entropy
+        aux = {
+            'policy_loss': policy_loss, 'value_loss': value_loss, 'entropy': entropy,
+            'kl_div': kl_div, 'clipfrac': clipfrac,
+            'ev_target': target_values, 'ev_pred': new_values,
+        }
+        return total_loss, aux
