@@ -258,6 +258,7 @@ void search::BattleSearcher::step() {
     };
 
     Node* cur = root;
+    Edge* stagedOutcomeEdge = nullptr;  // outcome 0 of a chance node created this iteration, already executed
     int depth = 0;
     while (true) {
         // turn / cardsPlayedThisTurn are NOT globally monotonic -- potion use and card-select
@@ -272,8 +273,14 @@ void search::BattleSearcher::step() {
         }
 
         if (cur->isRandomNode) {
-            // Chance node: resolve one outcome (sampled/selected), descend into it.
-            Edge* outcomeEdge = selectChanceOutcome(*cur);
+            // Chance node: resolve one outcome (staged at creation, or sampled/selected), descend into it.
+            Edge* outcomeEdge;
+            if (stagedOutcomeEdge != nullptr) {
+                outcomeEdge = stagedOutcomeEdge;
+                stagedOutcomeEdge = nullptr;
+            } else {
+                outcomeEdge = selectChanceOutcome(*cur);
+            }
             ++outcomeEdge->visitCount;
             Node* child = outcomeEdge->node;
 
@@ -331,31 +338,48 @@ void search::BattleSearcher::step() {
             continue;
         }
 
-        // First traversal of this action: execute on a copy of the current state.
+        // First traversal of this action: execute on a copy of the current state. The rng is
+        // pre-seeded to Random(base + 0) so that, if the action turns out to be stochastic,
+        // this execution is exactly chance outcome 0 and can be kept rather than redone.
         BattleContext next = cur->state;
-        const auto rngCounterBefore = next.rng.counter;
-        Random preActionRng = next.rng;
+        const Random preActionRng = next.rng;
+        Random baseGen = preActionRng;
+        const auto randomnessBase = static_cast<std::uint64_t>(baseGen.randomLong());
+        next.rng = Random(randomnessBase);
         edge.action.execute(next);
         actionStack.push_back(edge.action);
-        const bool rngChanged = next.rng.counter != rngCounterBefore;
+        const bool rngChanged = next.rng.counter != 0;
 
         if (rngChanged) {
             // Stochastic action: create a chance node that sources its pre-action state
-            // from `cur` and resolves outcomes via Random(randomnessBase + N).
+            // from `cur` and resolves outcomes via Random(randomnessBase + N). `next` already
+            // holds outcome 0; record it as the chance node's first edge and stage that edge
+            // for the descent at the top of the next loop iteration.
             Node* chance = allocNode();
             chance->isRandomNode = true;
             chance->stochasticAction = edge.action;
             chance->parent = cur;
-            chance->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
+            chance->randomnessBase = randomnessBase;
+            chance->outcomesGenerated = 1;
             edge.node = chance;
+
+            Edge outcomeEdge;
+            outcomeEdge.action = Action{};
+            outcomeEdge.node = getOrCreateNode(std::move(next));
+            outcomeEdge.rngAdvanceSteps = 0;
+            chance->edges.push_back(outcomeEdge);
+            stagedOutcomeEdge = &chance->edges.back();
+
             cur = chance;
             searchStack.push_back(cur);
-            continue;  // outcome resolved at the top of the loop next iteration
+            continue;  // staged outcome consumed at the top of the loop next iteration
         }
 
-        // Deterministic action: deduplicate into a decision node. Move `next` in: it is consumed
-        // only if a new node is created (see getOrCreateNode), so the two reads of `next` below are
-        // safe -- each is reached only when the node already existed and `next` was left intact.
+        // Deterministic action: the rng was never read, so undo the pre-seed, then deduplicate
+        // into a decision node. Move `next` in: it is consumed only if a new node is created
+        // (see getOrCreateNode), so the two reads of `next` below are safe -- each is reached
+        // only when the node already existed and `next` was left intact.
+        next.rng = preActionRng;
         Node* child = getOrCreateNode(std::move(next));
         edge.node = child;
 
