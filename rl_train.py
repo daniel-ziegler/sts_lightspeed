@@ -115,7 +115,13 @@ class RunningMoments:
 
 @dataclass
 class TrainConfig:
-    """PPO training hyperparameters."""
+    """Training hyperparameters (shared across algorithms)."""
+    # Algorithm selection
+    algo: str = "ppo"               # {ppo, grpo}
+    group_size: int = 8             # GRPO: trajectories per group (same map seed)
+    num_groups: int = 0             # GRPO: groups per iter (0 => num_games_per_step // group_size)
+    sampling_temperature: float = 1.0  # action-sampling softmax temperature during collection
+
     # Environment settings
     num_games_per_step: int = 256
     num_epochs: int = 4
@@ -348,11 +354,16 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                             # No separate value service needed with combined wrapper
                             value = 0.0
                         
-                        # Convert to probabilities and sample action
+                        # Convert to probabilities and sample action. sampling_temperature>1
+                        # widens the distribution (more diverse trajectories, e.g. for GRPO
+                        # groups); the stored log_prob is of the tempered behavior policy actually
+                        # sampled from. Default 1.0 is a no-op.
                         logits_tensor = torch.tensor(logits)
+                        if config.sampling_temperature != 1.0:
+                            logits_tensor = logits_tensor / config.sampling_temperature
                         log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
                         probs = np.exp(log_probs)
-                        
+
                         chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
                         log_prob = log_probs[chosen_idx]
                         
@@ -981,8 +992,11 @@ def main():
     
     print(f"Using reward function: {args.reward_function}")
 
-    # Algorithm strategy (advantage estimation + per-batch loss). PPO for now.
-    algo = PPOAlgorithm()
+    # Algorithm strategy (collection plan + advantage estimation + per-batch loss).
+    _ALGOS = {"ppo": PPOAlgorithm}
+    if config.algo not in _ALGOS:
+        raise ValueError(f"Unknown --algo {config.algo!r}; choose from {sorted(_ALGOS)}")
+    algo = _ALGOS[config.algo]()
     print(f"Using algorithm: {algo.name}")
     
     # Create networks based on configuration
@@ -1045,9 +1059,9 @@ def main():
         nets = (policy_net, value_net)
         print("Using separate policy and value networks with combined wrapper")
     else:
-        # Create single network with value head
+        # Create single network; value head only if the algorithm uses a critic (PPO yes, GRPO no)
         single_hp_kwargs = {k: v for k, v in model_hp_kwargs.items()}
-        single_hp_kwargs['use_value_head'] = True
+        single_hp_kwargs['use_value_head'] = algo.requires_value_head
         model_hp = ModelHP(**single_hp_kwargs)
         net = NN(model_hp).to(device)
         
@@ -1064,17 +1078,22 @@ def main():
             net = load_network_backward_compatible(net, state)
             print(f"Loaded model from {args.init_path}")
         
-        # Shared trunk + policy head train at policy_lr; the value head trains at value_lr.
-        value_modules = [net.value_head_norm, net.value_head]
-        if net.H.num_value_layers > 0:
-            value_modules.append(net.value_layers)
-        value_params = [p for m in value_modules for p in m.parameters()]
-        value_param_ids = {id(p) for p in value_params}
-        policy_params = [p for p in net.parameters() if id(p) not in value_param_ids]
-        optimizer = torch.optim.AdamW([
-            {'params': policy_params, 'lr': config.policy_lr},
-            {'params': value_params, 'lr': config.value_lr},
-        ], weight_decay=config.weight_decay)
+        if algo.requires_value_head:
+            # Shared trunk + policy head train at policy_lr; the value head trains at value_lr.
+            value_modules = [net.value_head_norm, net.value_head]
+            if net.H.num_value_layers > 0:
+                value_modules.append(net.value_layers)
+            value_params = [p for m in value_modules for p in m.parameters()]
+            value_param_ids = {id(p) for p in value_params}
+            policy_params = [p for p in net.parameters() if id(p) not in value_param_ids]
+            optimizer = torch.optim.AdamW([
+                {'params': policy_params, 'lr': config.policy_lr},
+                {'params': value_params, 'lr': config.value_lr},
+            ], weight_decay=config.weight_decay)
+        else:
+            # Critic-free (GRPO): a single param group at policy_lr (no value head to split out).
+            optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr,
+                                          weight_decay=config.weight_decay)
         
         # Load optimizer state if resuming
         if config.resume_from_step > 0:
@@ -1087,7 +1106,7 @@ def main():
                 print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
         
         orig_net = nets = service_net = net  # lol TODO
-        print("Using single network with value head")
+        print(f"Using single network (value_head={algo.requires_value_head})")
     
     service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=args.torch_compile)
 
