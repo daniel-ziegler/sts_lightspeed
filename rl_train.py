@@ -110,7 +110,7 @@ class RunningMoments:
 
 
 @dataclass
-class PPOConfig:
+class TrainConfig:
     """PPO training hyperparameters."""
     # Environment settings
     num_games_per_step: int = 256
@@ -186,7 +186,7 @@ class GameMetrics:
     num_relics: int    # count of relics held (for reward shaping)
     outcome: sts.GameOutcome
 
-class PPOExperience(NamedTuple):
+class Experience(NamedTuple):
     """Single step of experience from a game."""
     choice: Choice
     action_idx: int  # Needed for logprobs calculation in PPO training
@@ -196,10 +196,10 @@ class PPOExperience(NamedTuple):
     choice_type: int  # ActionType value of the chosen action (offline SL label)
 
 
-class PPOTrajectory(NamedTuple):
+class Trajectory(NamedTuple):
     """Complete game trajectory."""
     seed: int
-    experiences: List[PPOExperience]
+    experiences: List[Experience]
     rewards: List[float]  # Reward for each step
     values: List[float]   # Value prediction for each step
     final_reward: float
@@ -268,7 +268,7 @@ def compute_shaped_rewards(
     return rewards, base_vals[-1]
 
 
-def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, config: PPOConfig) -> PPOTrajectory:
+def run_episode(seed: int, service: NNService, reward_fn, battle_executor, config: TrainConfig) -> Trajectory:
     """Run a complete game episode and collect experience for PPO training."""
     # PPO_LOG_SEEDS=1 prints per-episode seed bookends to isolate which seed crashes
     # the C++ engine (stack-smashing aborts the process; the last >>> line names the culprit).
@@ -380,7 +380,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
                             print(f"  [seed {seed}] EXEC (model) floor={gc.floor_num} action={action_desc}", flush=True)
                         action.execute(gc)
                         
-                        exp = PPOExperience(
+                        exp = Experience(
                             choice=exp_data['choice'],
                             action_idx=exp_data['action_idx'],
                             log_prob=exp_data['log_prob'],
@@ -435,7 +435,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
 
     if _log_seeds:
         print(f"  <<< done  seed {seed} floor={gc.floor_num} outcome={gc.outcome}", flush=True)
-    return PPOTrajectory(
+    return Trajectory(
         seed=seed,
         experiences=experiences,
         rewards=rewards,
@@ -447,7 +447,7 @@ def run_ppo_episode(seed: int, service: NNService, reward_fn, battle_executor, c
     )
 
 
-def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_seed: int = 0) -> List[PPOTrajectory]:
+def collect_experience(config: TrainConfig, service: NNService, reward_fn, start_seed: int = 0) -> List[Trajectory]:
     """Collect experience from multiple game episodes."""
     trajectories = []
     
@@ -456,7 +456,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         # Create a shared executor for battle simulations
         with ThreadPoolExecutor(max_workers=1) as battle_executor:
             for i in tqdm(range(config.num_games_per_step), desc="Collecting experience"):
-                trajectory = run_ppo_episode(start_seed + i, service, reward_fn, battle_executor, config)
+                trajectory = run_episode(start_seed + i, service, reward_fn, battle_executor, config)
                 trajectories.append(trajectory)
     else:
         # Multi-threaded execution
@@ -464,7 +464,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
         with ThreadPoolExecutor(max_workers=config.num_workers) as battle_executor:
             with ThreadPoolExecutor(max_workers=config.num_workers) as main_executor:
                 futures = [
-                    main_executor.submit(run_ppo_episode, start_seed + i, service, reward_fn, battle_executor, config)
+                    main_executor.submit(run_episode, start_seed + i, service, reward_fn, battle_executor, config)
                     for i in range(config.num_games_per_step)
                 ]
                 
@@ -475,7 +475,7 @@ def collect_experience(config: PPOConfig, service: NNService, reward_fn, start_s
     return trajectories
 
 
-def compute_advantages(trajectories: List[PPOTrajectory], config: PPOConfig, adv_norm: RunningMoments, debug_traj: bool = False) -> tuple[List[PPOExperience], List[float], List[float], List[dict]]:
+def compute_advantages(trajectories: List[Trajectory], config: TrainConfig, adv_norm: RunningMoments, debug_traj: bool = False) -> tuple[List[Experience], List[float], List[float], List[dict]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
     all_advantages = []
@@ -612,7 +612,7 @@ def _serialize_choice(choice: Choice) -> dict:
     return flat
 
 
-def save_episodes(experiences: List[PPOExperience], advantages: List[float], returns: List[float], meta: List[dict], path: str):
+def save_episodes(experiences: List[Experience], advantages: List[float], returns: List[float], meta: List[dict], path: str):
     """Dump collected decisions to parquet in the SL schema train.py consumes
     (flattened choice + choice_type + chosen_idx + outcome/seed/final_floor/pstrike_count),
     plus PPO extras (reward, value, advantage, return, old_log_prob)."""
@@ -635,7 +635,7 @@ def save_episodes(experiences: List[PPOExperience], advantages: List[float], ret
     pd.DataFrame(rows).to_parquet(path, engine='pyarrow')
 
 
-def experiences_to_batches(experiences: List[PPOExperience], advantages: List[float], returns: List[float]) -> List[dict]:
+def experiences_to_batches(experiences: List[Experience], advantages: List[float], returns: List[float]) -> List[dict]:
     """Convert PPO experiences to training batches."""
     batch_data = []
     
@@ -671,7 +671,7 @@ def experiences_to_batches(experiences: List[PPOExperience], advantages: List[fl
     return batch_data
 
 
-def ppo_train_step(nets, optimizer, experiences: List[PPOExperience], advantages: List[float], returns: List[float], config: PPOConfig, iteration: int = -1):
+def train_step(nets, optimizer, experiences: List[Experience], advantages: List[float], returns: List[float], config: TrainConfig, iteration: int = -1):
     """Perform one PPO training step."""
     if not experiences:
         return {}
@@ -910,11 +910,11 @@ def main():
     parser.add_argument('--save-episodes', action='store_true',
                         help='Dump each iteration of collected decisions to {save_path}.episodes/iter_N.parquet (SL schema + PPO extras) for offline experiments')
     
-    # Automatically add all PPOConfig fields as command line arguments
-    config_defaults = PPOConfig()
-    type_hints = get_type_hints(PPOConfig)
+    # Automatically add all TrainConfig fields as command line arguments
+    config_defaults = TrainConfig()
+    type_hints = get_type_hints(TrainConfig)
     
-    for field in fields(PPOConfig):
+    for field in fields(TrainConfig):
         field_name = field.name.replace('_', '-')
         default_value = getattr(config_defaults, field.name)
         field_type = type_hints[field.name]
@@ -993,12 +993,12 @@ def main():
     torch.set_float32_matmul_precision('high')
     torch._dynamo.config.cache_size_limit = 24
     
-    # Create PPOConfig from parsed arguments
+    # Create TrainConfig from parsed arguments
     config_kwargs = {}
-    for field in fields(PPOConfig):
+    for field in fields(TrainConfig):
         field_name = field.name.replace('_', '-')
         config_kwargs[field.name] = getattr(args, field_name.replace('-', '_'))
-    config = PPOConfig(**config_kwargs)
+    config = TrainConfig(**config_kwargs)
 
     # Seed all RNGs for reproducibility when requested (network init, DataLoader shuffle,
     # numpy). Per-episode action sampling uses its own random.Random(seed) and is unaffected.
@@ -1196,7 +1196,7 @@ def main():
             
             # Perform PPO training step
             train_start = time.time()
-            losses = ppo_train_step(nets, optimizer, experiences, advantages, returns, config)
+            losses = train_step(nets, optimizer, experiences, advantages, returns, config)
             train_time = time.time() - train_start
             
             print(f"Training completed in {train_time:.1f}s")

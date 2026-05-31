@@ -9,7 +9,7 @@ Checks (the user's requirements):
   5. interior steps credit HP / upgrade changes as expected.
 """
 import sys
-from ppo_train import compute_shaped_rewards, GameMetrics, compute_progress_reward
+from rl_train import compute_shaped_rewards, GameMetrics, compute_progress_reward
 import slaythespire as sts
 
 UND = sts.GameOutcome.UNDECIDED

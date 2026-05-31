@@ -1,6 +1,6 @@
 """Eval the hero checkpoint on fresh seeds with high-MCTS-sim playout.
 
-Reuses run_ppo_episode for the rollout machinery; we don't need PPO training, just outcomes.
+Reuses run_episode for the rollout machinery; we don't need PPO training, just outcomes.
 Shaping coefs are zeroed (don't matter for outcome). Defaults match the user's spec:
 seeds 1_000_000..1_000_099 (well outside any training seed range), mcts_simulations=10000,
 4 collect workers.
@@ -11,8 +11,8 @@ import torch
 
 import slaythespire as sts
 from network import NN, ModelHP, load_network_backward_compatible
-from ppo_train import (
-    NNService, PPOConfig, run_ppo_episode, compute_progress_reward,
+from rl_train import (
+    NNService, TrainConfig, run_episode, compute_progress_reward,
 )
 
 
@@ -38,9 +38,9 @@ def main():
     net = load_network_backward_compatible(net, state)
     net.eval()
 
-    # PPOConfig with eval knobs. Shaping coefs zero -> reward (and the rewards we ignore) match
+    # TrainConfig with eval knobs. Shaping coefs zero -> reward (and the rewards we ignore) match
     # plain victory/progress signal. inf_batch_size defaults are fine.
-    config = PPOConfig(
+    config = TrainConfig(
         mcts_simulations=args.mcts_sims,
         mcts_exploration=6.57,
         mcts_widening_c=3.14,
@@ -78,11 +78,11 @@ def main():
     t0 = time.time()
     print(f"running {len(todo)} games (skipping {len(done)} already done) | "
           f"mcts_sims={args.mcts_sims} | workers={args.num_workers}", flush=True)
-    # Battle executor is shared (matching ppo_train pattern: one battle thread per main worker)
+    # Battle executor is shared (matching rl_train pattern: one battle thread per main worker)
     with ThreadPoolExecutor(max_workers=args.num_workers) as battle_executor:
         with ThreadPoolExecutor(max_workers=args.num_workers) as main_executor:
             futs = {
-                main_executor.submit(run_ppo_episode, s, service,
+                main_executor.submit(run_episode, s, service,
                                      compute_progress_reward, battle_executor, config): s
                 for s in todo
             }
