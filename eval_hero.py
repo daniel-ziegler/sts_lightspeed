@@ -58,17 +58,33 @@ def main():
     service.update_weights(net)
 
     seeds = list(range(args.seed_start, args.seed_start + args.n_games))
+
+    # Crash-resumable: results are appended to the CSV one row per completed game and flushed
+    # immediately, so a crash only loses in-flight games. On restart we skip seeds already present.
+    os.makedirs(os.path.dirname(args.out_csv) or '.', exist_ok=True)
     rows = []
+    done = set()
+    if os.path.exists(args.out_csv):
+        with open(args.out_csv, newline='') as fin:
+            for r in csv.DictReader(fin):
+                rows.append((int(r['seed']), int(r['won']), int(r['floor'])))
+                done.add(int(r['seed']))
+    todo = [s for s in seeds if s not in done]
+    fout = open(args.out_csv, 'a', newline='')
+    writer = csv.writer(fout)
+    if not done:
+        writer.writerow(['seed', 'won', 'floor']); fout.flush()
+
     t0 = time.time()
-    print(f"running {len(seeds)} games | mcts_sims={args.mcts_sims} | workers={args.num_workers}",
-          flush=True)
+    print(f"running {len(todo)} games (skipping {len(done)} already done) | "
+          f"mcts_sims={args.mcts_sims} | workers={args.num_workers}", flush=True)
     # Battle executor is shared (matching ppo_train pattern: one battle thread per main worker)
     with ThreadPoolExecutor(max_workers=args.num_workers) as battle_executor:
         with ThreadPoolExecutor(max_workers=args.num_workers) as main_executor:
             futs = {
                 main_executor.submit(run_ppo_episode, s, service,
                                      compute_progress_reward, battle_executor, config): s
-                for s in seeds
+                for s in todo
             }
             for f in as_completed(futs):
                 s = futs[f]
@@ -80,17 +96,16 @@ def main():
                     print(f"  seed {s}: FAILED {e}", flush=True)
                     won, floor = -1, -1
                 rows.append((s, won, floor))
+                writer.writerow((s, won, floor)); fout.flush()
                 n = len(rows)
                 wn = sum(1 for _, w, _ in rows if w == 1)
                 err = sum(1 for _, w, _ in rows if w == -1)
-                print(f"  {n:3d}/{len(seeds)}  seed={s} won={won} floor={floor} "
+                print(f"  {n:4d}/{len(seeds)}  seed={s} won={won} floor={floor} "
                       f"running_win={wn/max(1,n-err):.3f} ({wn}/{n-err})  "
                       f"elapsed={time.time()-t0:.0f}s",
                       flush=True)
+    fout.close()
 
-    os.makedirs(os.path.dirname(args.out_csv) or '.', exist_ok=True)
-    with open(args.out_csv, 'w', newline='') as fout:
-        w = csv.writer(fout); w.writerow(['seed', 'won', 'floor']); w.writerows(rows)
     rows_clean = [r for r in rows if r[1] != -1]
     n = len(rows_clean)
     wins = sum(r[1] for r in rows_clean)
