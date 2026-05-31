@@ -29,6 +29,9 @@ from tqdm.auto import tqdm
 
 from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
+from algorithms import (
+    policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
+)
 import slaythespire as sts
 
 # Set up logging
@@ -762,67 +765,25 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
             target_values = collated_batch['return'].to(device)
             chosen_indices = collated_batch['chosen_idx'].to(device)
             
-            # Compute new log probabilities with numerical stability
-            action_probs = F.softmax(new_logits, dim=-1)
-            action_log_probs = F.log_softmax(new_logits, dim=-1)
-            
-            # Get log probs for chosen actions
-            batch_indices_tensor = torch.arange(batch_size, device=device)
-            new_log_probs = action_log_probs[batch_indices_tensor, chosen_indices]
-            
-            # Clamp log probs for numerical stability
-            new_log_probs = torch.clamp(new_log_probs, min=-20, max=20)
+            # Policy surrogate / ratio / KL / clipfrac / entropy via the shared algorithm helpers.
             old_log_probs = torch.clamp(old_log_probs, min=-20, max=20)
-            
-            # Compute probability ratios
-            ratio = torch.exp(new_log_probs - old_log_probs)
-            ratio = torch.clamp(ratio, min=1e-8, max=1e8)  # Prevent extreme ratios
-            
-            # Compute approximate KL divergence
-            kl_div = (old_log_probs - new_log_probs).mean()
-            
-            # Compute clipping fraction
-            clipfrac = ((ratio - 1.0).abs() > config.clip_ratio).float().mean()
-            
-            # Clipped surrogate objective
-            surr1 = ratio * batch_advantages
-            surr2 = torch.clamp(ratio, 1 - config.clip_ratio, 1 + config.clip_ratio) * batch_advantages
-            policy_loss = -torch.min(surr1, surr2).mean()
-            
+            action_probs, action_log_probs, new_log_probs = policy_log_probs(new_logits, chosen_indices)
+            ratio = importance_ratio(new_log_probs, old_log_probs)
+            kl_div = approx_kl(old_log_probs, new_log_probs)
+            clipfrac = clip_fraction(ratio, config.clip_ratio)
+            policy_loss = clipped_surrogate(ratio, batch_advantages, config.clip_ratio)
+
             # Value loss
             value_loss = F.mse_loss(new_values, target_values)
-            
+
             # Accumulate statistics for explained variance calculation
             target_stats.add_samples(target_values)
             residuals = target_values - new_values
             residual_stats.add_samples(residuals)
-            
-            # Entropy bonus (with numerical stability for masked actions)
-            # Only compute entropy for valid actions (non-inf logits)
-            valid_mask = ~torch.isinf(new_logits)
-            
-            # For each sample, compute entropy only over valid actions
-            batch_entropies = []
-            for i in range(new_logits.shape[0]):
-                valid_actions = valid_mask[i]
-                if valid_actions.sum() > 1:  # Need at least 2 valid actions for meaningful entropy
-                    valid_probs = action_probs[i][valid_actions]
-                    valid_log_probs = action_log_probs[i][valid_actions]
-                    sample_entropy = -(valid_probs * valid_log_probs).sum()
-                    batch_entropies.append(sample_entropy)
-                else:
-                    # If only 0 or 1 valid actions, entropy is 0
-                    batch_entropies.append(torch.tensor(0.0, device=device))
-            
-            if batch_entropies:
-                entropy = torch.stack(batch_entropies).mean()
-            else:
-                entropy = torch.tensor(0.0, device=device)
-            
-            # Optional debug (uncomment for debugging)
-            # print(f"Valid actions per sample: {valid_mask.sum(dim=1).float().mean().item():.1f}")
-            # print(f"Computed entropy: {entropy.item():.6f}")
-            
+
+            # Entropy bonus over valid (non-inf) actions
+            entropy = masked_entropy(new_logits, action_probs, action_log_probs)
+
             # Check for NaN before combining losses
             if torch.isnan(policy_loss) or torch.isnan(value_loss) or torch.isnan(entropy):
                 print(f"NaN detected - policy: {policy_loss.item()}, value: {value_loss.item()}, entropy: {entropy.item()}")
