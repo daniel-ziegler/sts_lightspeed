@@ -795,7 +795,9 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     const double potionScore = bc.potionCount * evalWeights.potionWeight;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
-        return evalWeights.winBonus + bc.player.curHp + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
+        // search doesn't value preserving HP that the game is about to restore anyway.
+        return evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
     } else {
         const bool couldHaveSpikers = bc.encounter == MonsterEncounter::THREE_SHAPES || bc.encounter == MonsterEncounter::FOUR_SHAPES;
         const double energyPenalty = bc.energyWasted * -evalWeights.energyWasteWeight * (couldHaveSpikers ? 0 : 1);

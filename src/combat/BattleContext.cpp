@@ -5,6 +5,7 @@
 #include "combat/BattleContext.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "constants/Cards.h"
 #include "game/GameContext.h"
@@ -519,6 +520,17 @@ void BattleContext::exitBattle(GameContext &g) const {
 
     BattleContext::sum += g.curHp + g.maxHp + g.gold + g.act
             + g.ascension + g.floorNum + rng.counter;
+}
+
+int BattleContext::postBattleHealedHp() const {
+    if (!isBossEncounter(encounter) || player.hasRelic<RelicId::MARK_OF_THE_BLOOM>()) {
+        return player.curHp;
+    }
+    if (ascension >= 5) {
+        const int healAmount = static_cast<int>(std::round(static_cast<float>(player.maxHp - player.curHp) * 0.75f));
+        return std::min(player.curHp + healAmount, player.maxHp);
+    }
+    return player.maxHp;
 }
 
 void BattleContext::updateRelicsOnExit(GameContext &g) const {

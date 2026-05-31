@@ -496,7 +496,9 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         agent.playoutBattle(bc);
 
         const bool dead = (bc.outcome == sts::Outcome::PLAYER_LOSS);
-        const double score = dead ? -200.0 : (bc.player.curHp + 10.0 * bc.potionCount);
+        // postBattleHealedHp: boss victories are scored on post-act-transition-heal HP, matching
+        // what the player actually carries forward.
+        const double score = dead ? -200.0 : (bc.postBattleHealedHp() + 10.0 * bc.potionCount);
 
         {
             std::scoped_lock lock(info->m);
