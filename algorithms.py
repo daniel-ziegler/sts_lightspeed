@@ -151,3 +151,94 @@ class PPOAlgorithm(Algorithm):
             'ev_target': target_values, 'ev_pred': new_values,
         }
         return total_loss, aux
+
+
+class GRPOAlgorithm(Algorithm):
+    """Critic-free GRPO with a leave-one-out (RLOO) group baseline.
+
+    A group is `group_size` full games sharing one map seed (distinct sample seeds, so the
+    trajectories diverge). Each trajectory's advantage is its total return minus the mean return
+    of the *other* members of its group, broadcast to every step. No value function, no GAE, no
+    KL-to-reference; the clipped surrogate only bites when num_epochs > 1 (else ratio == 1)."""
+    name = "grpo"
+    requires_value_head = False
+
+    def _num_groups(self, config):
+        if config.num_groups > 0:
+            return config.num_groups
+        return max(1, config.num_games_per_step // config.group_size)
+
+    def collection_plan(self, config, iteration):
+        G = config.group_size
+        K = self._num_groups(config)
+        jobs = []
+        for g in range(K):
+            game_seed = iteration * 1_000_000 + g  # disjoint from PPO's iteration*1000 ranges
+            for m in range(G):
+                jobs.append(CollectionJob(game_seed=game_seed, sample_seed=game_seed * 64 + m,
+                                          group_id=g))
+        return jobs
+
+    def needs_return_in_batch(self):
+        return False
+
+    def compute_advantages(self, trajectories, config, adv_norm, debug_traj=False):
+        import slaythespire as sts
+        from collections import defaultdict
+
+        returns_by_idx = {}
+        groups = defaultdict(list)  # group_id -> [traj_idx]
+        for i, traj in enumerate(trajectories):
+            if not traj.experiences:
+                continue
+            returns_by_idx[i] = float(sum(traj.rewards))
+            groups[traj.group_id].append(i)
+
+        all_experiences, all_advantages, all_meta = [], [], []
+        group_stds = []
+        for gid, idxs in groups.items():
+            Rs = [returns_by_idx[i] for i in idxs]
+            n = len(idxs)
+            total = sum(Rs)
+            if n > 1:
+                mean = total / n
+                group_stds.append((sum((r - mean) ** 2 for r in Rs) / n) ** 0.5)
+            for i in idxs:
+                R_i = returns_by_idx[i]
+                # RLOO: advantage = return minus the leave-one-out mean of the rest of the group.
+                adv = (R_i - (total - R_i) / (n - 1)) if n > 1 else 0.0
+                traj = trajectories[i]
+                ns = len(traj.experiences)
+                all_experiences.extend(traj.experiences)
+                all_advantages.extend([adv] * ns)
+                won = 1 if traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0
+                all_meta.extend([
+                    {'seed': traj.seed, 'group_id': gid, 'outcome': won,
+                     'final_floor': traj.final_metrics.floor_num,
+                     'reward': float(traj.rewards[t]), 'value': 0.0}
+                    for t in range(ns)
+                ])
+
+        self.last_group_reward_std = (sum(group_stds) / len(group_stds)) if group_stds else 0.0
+        if debug_traj:
+            print(f"GRPO: {len(groups)} groups, mean within-group return std "
+                  f"{self.last_group_reward_std:.4f}, {len(all_experiences)} experiences")
+        return all_experiences, all_advantages, None, all_meta
+
+    def compute_loss(self, batch, net_output, config):
+        new_logits = net_output[0] if isinstance(net_output, tuple) else net_output
+        device = new_logits.device
+        old_log_probs = torch.clamp(batch['old_log_prob'].to(device), min=-LOG_PROB_CLAMP, max=LOG_PROB_CLAMP)
+        advantages = batch['advantage'].to(device)
+        chosen = batch['chosen_idx'].to(device)
+
+        action_probs, action_log_probs, new_log_probs = policy_log_probs(new_logits, chosen)
+        ratio = importance_ratio(new_log_probs, old_log_probs)
+        kl_div = approx_kl(old_log_probs, new_log_probs)
+        clipfrac = clip_fraction(ratio, config.clip_ratio)
+        policy_loss = clipped_surrogate(ratio, advantages, config.clip_ratio)
+        entropy = masked_entropy(new_logits, action_probs, action_log_probs)
+
+        total_loss = policy_loss - config.entropy_coef * entropy
+        aux = {'policy_loss': policy_loss, 'entropy': entropy, 'kl_div': kl_div, 'clipfrac': clipfrac}
+        return total_loss, aux

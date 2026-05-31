@@ -31,7 +31,7 @@ from network import NN, ModelHP, move_to_device, process_batch, choice_space, co
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
-    PPOAlgorithm,
+    PPOAlgorithm, GRPOAlgorithm,
 )
 import slaythespire as sts
 
@@ -678,12 +678,12 @@ def experiences_to_batches(experiences: List[Experience], advantages: List[float
             else:
                 flat_dict[key] = value
         
-        # Add PPO-specific fields
+        # Add training fields
         flat_dict['chosen_idx'] = exp.action_idx
         flat_dict['old_log_prob'] = exp.log_prob
         flat_dict['advantage'] = advantages[i]
-        flat_dict['return'] = returns[i]
-        flat_dict['outcome'] = 1.0  # Dummy, not used in PPO
+        flat_dict['return'] = returns[i] if returns is not None else 0.0  # None for critic-free algos
+        flat_dict['outcome'] = 1.0  # Dummy, not used in training
         
         batch_data.append(flat_dict)
     
@@ -993,7 +993,7 @@ def main():
     print(f"Using reward function: {args.reward_function}")
 
     # Algorithm strategy (collection plan + advantage estimation + per-batch loss).
-    _ALGOS = {"ppo": PPOAlgorithm}
+    _ALGOS = {"ppo": PPOAlgorithm, "grpo": GRPOAlgorithm}
     if config.algo not in _ALGOS:
         raise ValueError(f"Unknown --algo {config.algo!r}; choose from {sorted(_ALGOS)}")
     algo = _ALGOS[config.algo]()
