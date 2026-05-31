@@ -158,6 +158,7 @@ class PPOConfig:
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
     resume_from_step: int = 0  # Step to resume from (0 = start from beginning)
+    seed: Optional[int] = None  # Global RNG seed (torch/numpy/random). None = unseeded.
     
     # Logging
     log_every: int = 10
@@ -974,7 +975,17 @@ def main():
         field_name = field.name.replace('_', '-')
         config_kwargs[field.name] = getattr(args, field_name.replace('-', '_'))
     config = PPOConfig(**config_kwargs)
-    
+
+    # Seed all RNGs for reproducibility when requested (network init, DataLoader shuffle,
+    # numpy). Per-episode action sampling uses its own random.Random(seed) and is unaffected.
+    # Left unseeded by default to preserve prior behavior. Pair with --num-workers 1 for a
+    # fully deterministic run (parallel collection completion order is otherwise nondeterministic).
+    if config.seed is not None:
+        random.seed(config.seed)
+        np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        print(f"Seeded RNGs with {config.seed}")
+
     # Create ModelHP from parsed arguments
     model_hp_kwargs = {}
     for field in fields(ModelHP):
