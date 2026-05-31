@@ -42,6 +42,10 @@ static const int rolloutTargetMode    = policyEnvInt("STS_TARGET_MODE", 0);
 static const int rolloutRandomPolicy  = policyEnvInt("STS_RANDOM_POLICY", 0);
 // STS_END_TURN_ALWAYS=1: degenerate baseline that always ends the turn (zero card plays per rollout).
 static const int rolloutEndTurnAlways = policyEnvInt("STS_END_TURN_ALWAYS", 0);
+// STS_ROLLOUT_POTION_MODE: when the rollout drinks the player's potions (before playing cards):
+//   0 = auto (original): dump all potions at the start of boss fights, never in other fights;
+//   1 = never; 2 = always dump at the start of every fight.
+static const int rolloutPotionMode    = policyEnvInt("STS_ROLLOUT_POTION_MODE", 0);
 
 static bool haveInitMaps = false;
 static int cardPriorityMap[372] {};
@@ -376,7 +380,13 @@ bool search::SimpleAgent::playPotion(BattleContext &bc) {
 }
 
 void search::SimpleAgent::playoutBattle(BattleContext &bc) {
-    bool usedPotions = !isBossEncounter(bc.encounter);
+    // usedPotions starts false when the rollout should drink potions before playing cards.
+    bool usedPotions;
+    switch (rolloutPotionMode) {
+        case 1:  usedPotions = true; break;                          // never
+        case 2:  usedPotions = false; break;                         // always dump at start
+        default: usedPotions = !isBossEncounter(bc.encounter); break; // auto: dump in boss fights only
+    }
     while (bc.outcome == Outcome::UNDECIDED) {
         if (bc.inputState == InputState::CARD_SELECT) {
             Action action = chooseBattleCardSelect(bc);
