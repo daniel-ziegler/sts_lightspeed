@@ -9,9 +9,19 @@ This module starts with the pure tensor helpers extracted verbatim from the orig
 so both algorithms compute the policy surrogate / ratio / entropy identically.
 """
 from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 import torch
 import torch.nn.functional as F
+
+
+class CollectionJob(NamedTuple):
+    """One episode to collect. game_seed -> C++ GameContext (map/card RNG); sample_seed -> the
+    action-sampling RNG (distinct within a group so trajectories diverge); group_id tags the
+    group that trajectory belongs to (for group-relative baselines)."""
+    game_seed: int
+    sample_seed: int
+    group_id: int
 
 LOG_PROB_CLAMP = 20.0   # clamp log-probs to [-20, 20] for numerical stability
 RATIO_CLAMP = 1e8       # clamp the importance ratio to [1/RATIO_CLAMP, RATIO_CLAMP]
@@ -84,6 +94,10 @@ class Algorithm(ABC):
         return self.requires_value_head
 
     @abstractmethod
+    def collection_plan(self, config, iteration) -> list:
+        """List of CollectionJob for this iteration's experience collection."""
+
+    @abstractmethod
     def compute_advantages(self, trajectories, config, adv_norm, debug_traj=False):
         """-> (experiences, advantages, value_targets_or_None, meta), parallel over the
         concatenation of each trajectory's experiences."""
@@ -100,6 +114,13 @@ class PPOAlgorithm(Algorithm):
     """PPO with GAE and a value head: clipped surrogate + value MSE + entropy bonus."""
     name = "ppo"
     requires_value_head = True
+
+    def collection_plan(self, config, iteration):
+        # One game per seed, each its own group; sample_seed == game_seed reproduces the original
+        # start_seed = iteration*1000 collection exactly (RNG was tied to the game seed).
+        base = iteration * 1000
+        return [CollectionJob(game_seed=base + i, sample_seed=base + i, group_id=base + i)
+                for i in range(config.num_games_per_step)]
 
     def compute_advantages(self, trajectories, config, adv_norm, debug_traj=False):
         # GAE lives in rl_train (operates on the trajectory/experience structures defined there);

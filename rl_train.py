@@ -210,6 +210,7 @@ class Trajectory(NamedTuple):
     final_metrics: GameMetrics  # Complete final game state metrics
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
+    group_id: int = -1  # trajectories sharing a group_id form one group (GRPO/RLOO baseline)
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -272,8 +273,15 @@ def compute_shaped_rewards(
     return rewards, base_vals[-1]
 
 
-def run_episode(seed: int, service: NNService, reward_fn, battle_executor, config: TrainConfig) -> Trajectory:
-    """Run a complete game episode and collect experience for PPO training."""
+def run_episode(seed: int, service: NNService, reward_fn, battle_executor, config: TrainConfig,
+                sample_seed: Optional[int] = None, group_id: int = -1) -> Trajectory:
+    """Run a complete game episode and collect experience.
+
+    `seed` is the game/map seed (-> C++ GameContext, fixes the map/card RNG). `sample_seed`
+    seeds the action-sampling RNG and defaults to `seed`; decoupling them lets GRPO draw a group
+    of divergent trajectories from the SAME map. `group_id` tags the trajectory's group."""
+    if sample_seed is None:
+        sample_seed = seed
     # PPO_LOG_SEEDS=1 prints per-episode seed bookends to isolate which seed crashes
     # the C++ engine (stack-smashing aborts the process; the last >>> line names the culprit).
     _log_seeds = os.environ.get('PPO_LOG_SEEDS') == '1'
@@ -283,7 +291,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
     if _log_seeds:
         print(f"  >>> start seed {seed}", flush=True)
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
-    rng = random.Random(seed)
+    rng = random.Random(sample_seed)
     
     agent = sts.Agent()
     agent.simulation_count_base = config.mcts_simulations
@@ -447,35 +455,31 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_reward=final_base_reward,
         final_metrics=final_metrics,
         final_deck=list(gc.deck),
-        final_relics=list(gc.relics)
+        final_relics=list(gc.relics),
+        group_id=group_id,
     )
 
 
-def collect_experience(config: TrainConfig, service: NNService, reward_fn, start_seed: int = 0) -> List[Trajectory]:
-    """Collect experience from multiple game episodes."""
+def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs) -> List[Trajectory]:
+    """Collect experience for a list of CollectionJob (game_seed, sample_seed, group_id)."""
     trajectories = []
-    
+
+    def _run(job):
+        return run_episode(job.game_seed, service, reward_fn, battle_executor, config,
+                           sample_seed=job.sample_seed, group_id=job.group_id)
+
     if config.num_workers == 1:
-        # Single-threaded execution for easier debugging
-        # Create a shared executor for battle simulations
+        # Single-threaded execution for easier debugging (deterministic completion order)
         with ThreadPoolExecutor(max_workers=1) as battle_executor:
-            for i in tqdm(range(config.num_games_per_step), desc="Collecting experience"):
-                trajectory = run_episode(start_seed + i, service, reward_fn, battle_executor, config)
-                trajectories.append(trajectory)
+            for job in tqdm(jobs, desc="Collecting experience"):
+                trajectories.append(_run(job))
     else:
-        # Multi-threaded execution
-        # Create a shared executor for battle simulations
         with ThreadPoolExecutor(max_workers=config.num_workers) as battle_executor:
             with ThreadPoolExecutor(max_workers=config.num_workers) as main_executor:
-                futures = [
-                    main_executor.submit(run_episode, start_seed + i, service, reward_fn, battle_executor, config)
-                    for i in range(config.num_games_per_step)
-                ]
-                
-                for future in tqdm(as_completed(futures), total=config.num_games_per_step, desc="Collecting experience"):
-                    trajectory = future.result()
-                    trajectories.append(trajectory)
-    
+                futures = [main_executor.submit(_run, job) for job in jobs]
+                for future in tqdm(as_completed(futures), total=len(jobs), desc="Collecting experience"):
+                    trajectories.append(future.result())
+
     return trajectories
 
 
@@ -1113,7 +1117,8 @@ def main():
             # Collect experience
             start_time = time.time()
             service.update_weights(service_net)
-            trajectories = collect_experience(config, service, reward_fn, start_seed=iteration * 1000)
+            jobs = algo.collection_plan(config, iteration)
+            trajectories = collect_experience(config, service, reward_fn, jobs)
             collect_time = time.time() - start_time
             
             if not trajectories:
