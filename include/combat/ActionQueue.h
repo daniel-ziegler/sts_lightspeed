@@ -62,8 +62,8 @@ namespace sts {
 #endif
 
         void clear();
-        void pushFront(Action a);
-        void pushBack(Action a);
+        void pushFront(const Action &a);
+        void pushBack(const Action &a);
         bool isEmpty();
         Action popFront();
         [[nodiscard]] int getCapacity() const;
@@ -91,7 +91,7 @@ namespace sts {
     }
 
     template <int capacity>
-    void ActionQueue<capacity>::pushFront(Action a) {
+    void ActionQueue<capacity>::pushFront(const Action &a) {
 #ifdef sts_asserts
         assert(size != capacity);
 #endif
@@ -100,11 +100,11 @@ namespace sts {
         if (front < 0) {
             front = capacity-1;
         }
-        arr[front] = std::move(a);
+        arr[front] = a;
     }
 
     template<int capacity>
-    void ActionQueue<capacity>::pushBack(Action a) {
+    void ActionQueue<capacity>::pushBack(const Action &a) {
 #ifdef sts_asserts
         if (size >= capacity) {
             assert(false);
@@ -113,7 +113,7 @@ namespace sts {
         if (back >= capacity) {
             back = 0;
         }
-        arr[back] = std::move(a);
+        arr[back] = a;
         ++back;
         ++size;
     }

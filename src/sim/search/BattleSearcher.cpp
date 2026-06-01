@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 #include <string>
@@ -134,6 +135,9 @@ search::BattleSearcher::BattleSearcher(const BattleContext &bc, search::EvalFnc 
     constexpr std::size_t dedupSlots = std::size_t(1) << 16;
     stateToNode.assign(dedupSlots, DedupSlot{0, nullptr});
     stateToNodeMask = dedupSlots - 1;
+    // Allocate the root + populate dedup state for one-off `BattleSearcher(bc); search(N);` callers
+    // (test.cpp, pybind). playoutBattle's reuse-across-decisions path overrides via rerootAt later.
+    resetForSearch();
 }
 
 search::BattleSearcher::~BattleSearcher() = default;
@@ -144,6 +148,17 @@ void search::BattleSearcher::setRoot(const BattleContext &bc) {
     // previous decision's -- matching the old behavior of constructing a fresh searcher per move.
     randGen.seed(bc.seed + bc.floorNum);
     rolloutAgent = SimpleAgent(true, bc.seed + bc.floorNum);
+    resetForSearch();
+}
+
+void search::BattleSearcher::rerootAt(Node* newRoot) {
+    // Tree reuse: leave the node pool + dedup table alone (the chosen subtree's cached visits and
+    // evals serve as a head start for the new search). Just redirect root and reseed rng so the
+    // new decision's rollouts behave the same as if we'd constructed a fresh searcher at this state.
+    root = newRoot;
+    *rootState = newRoot->state;
+    randGen.seed(rootState->seed + rootState->floorNum);
+    rolloutAgent = SimpleAgent(true, rootState->seed + rootState->floorNum);
 }
 
 // Claims a node from the pool: recycles allNodes[poolUsed] (resetting its bookkeeping but keeping
@@ -193,27 +208,21 @@ bool search::BattleSearcher::resetForSearch() {
     // Recycle the pool rather than freeing it: reclaim every node for reuse and drop the dedup map.
     poolUsed = 0;
     std::memset(stateToNode.data(), 0, stateToNode.size() * sizeof(DedupSlot));
-    root.edges.clear();
-    root.simulationCount = 0;
-    root.evaluationSum = 0;
-    root.isRandomNode = false;
-    root.parent = nullptr;
-    root.outcomesGenerated = 0;
-    root.randomnessBase = 0;
-    root.state = *rootState;
+    root = allocNode();
+    root->state = *rootState;
 
-    if (isTerminalState(root.state)) {
-        root.evaluationSum = evaluateEndState(root.state);
-        root.simulationCount = 1;
+    if (isTerminalState(root->state)) {
+        root->evaluationSum = evaluateEndState(root->state);
+        root->simulationCount = 1;
         return false;
     }
     return true;
 }
 
 void search::BattleSearcher::search(int64_t simulations) {
-    if (!resetForSearch()) {
-        return;
-    }
+    g_debug_scum_search = this;
+    // Root setup (setRoot/rerootAt) has run; if root is already terminal we have nothing to do.
+    if (isTerminalState(root->state)) return;
 
     for (std::int64_t simCount = 0; simCount < simulations; ++simCount) {
         step();
@@ -221,9 +230,8 @@ void search::BattleSearcher::search(int64_t simulations) {
 }
 
 void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
-    if (!resetForSearch()) {
-        return;
-    }
+    g_debug_scum_search = this;
+    if (isTerminalState(root->state)) return;
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(maxMicros);
 
@@ -241,19 +249,23 @@ void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
 
 void search::BattleSearcher::step() {
     searchStack.clear();
-    searchStack.push_back(&root);
+    searchStack.push_back(root);
     actionStack.clear();
-    onPathSet.clear();
-    onPathSet.insert(&root);
 
-    Node* cur = &root;
+    // Cycle guard: is `n` already on the descent path? Linear scan; depth is small in practice.
+    auto onPath = [&](Node* n) {
+        return std::find(searchStack.begin(), searchStack.end(), n) != searchStack.end();
+    };
+
+    Node* cur = root;
+    Edge* stagedOutcomeEdge = nullptr;  // outcome 0 of a chance node created this iteration, already executed
     int depth = 0;
     while (true) {
         // turn / cardsPlayedThisTurn are NOT globally monotonic -- potion use and card-select
         // actions advance neither -- so the transposition graph can genuinely cycle. The known
         // case is drinking Entropic Brew, which can re-roll itself: a stochastic action whose
         // outcome is gameplay-identical to the pre-action state (differing only in rng, which
-        // equalForSearch ignores), deduping the outcome back onto the path. The onPathSet guards
+        // equalForSearch ignores), deduping the outcome back onto the path. The onPath guards
         // below break such cycles by rolling out instead of descending into an on-path node; this
         // bound is only a backstop for any cycle they fail to catch.
         if (++depth > 5000) {
@@ -261,12 +273,18 @@ void search::BattleSearcher::step() {
         }
 
         if (cur->isRandomNode) {
-            // Chance node: resolve one outcome (sampled/selected), descend into it.
-            Edge* outcomeEdge = selectChanceOutcome(*cur);
+            // Chance node: resolve one outcome (staged at creation, or sampled/selected), descend into it.
+            Edge* outcomeEdge;
+            if (stagedOutcomeEdge != nullptr) {
+                outcomeEdge = stagedOutcomeEdge;
+                stagedOutcomeEdge = nullptr;
+            } else {
+                outcomeEdge = selectChanceOutcome(*cur);
+            }
             ++outcomeEdge->visitCount;
             Node* child = outcomeEdge->node;
 
-            if (onPathSet.count(child) != 0) {
+            if (onPath(child)) {
                 // Outcome reproduces a state already on the path -> cycle. Roll out instead.
                 BattleContext &rollout = (rolloutScratch = child->state);
                 rolloutToEnd(rollout, actionStack);
@@ -275,7 +293,6 @@ void search::BattleSearcher::step() {
             }
 
             searchStack.push_back(child);
-            onPathSet.insert(child);
 
             if (child->simulationCount == 0) {
                 BattleContext &rollout = (rolloutScratch = child->state);
@@ -308,7 +325,7 @@ void search::BattleSearcher::step() {
 
         if (edge.node != nullptr) {
             // Already expanded: descend (transposition or revisit).
-            if (onPathSet.count(edge.node) != 0) {
+            if (onPath(edge.node)) {
                 // Descending would revisit an on-path node -> cycle. Roll out instead.
                 BattleContext &rollout = (rolloutScratch = edge.node->state);
                 rolloutToEnd(rollout, actionStack);
@@ -318,40 +335,55 @@ void search::BattleSearcher::step() {
             actionStack.push_back(edge.action);
             cur = edge.node;
             searchStack.push_back(cur);
-            onPathSet.insert(cur);
             continue;
         }
 
-        // First traversal of this action: execute on a copy of the current state.
+        // First traversal of this action: execute on a copy of the current state. The rng is
+        // pre-seeded to Random(base + 0) so that, if the action turns out to be stochastic,
+        // this execution is exactly chance outcome 0 and can be kept rather than redone.
         BattleContext next = cur->state;
-        const auto rngCounterBefore = next.rng.counter;
-        Random preActionRng = next.rng;
+        const Random preActionRng = next.rng;
+        Random baseGen = preActionRng;
+        const auto randomnessBase = static_cast<std::uint64_t>(baseGen.randomLong());
+        next.rng = Random(randomnessBase);
         edge.action.execute(next);
         actionStack.push_back(edge.action);
-        const bool rngChanged = next.rng.counter != rngCounterBefore;
+        const bool rngChanged = next.rng.counter != 0;
 
         if (rngChanged) {
             // Stochastic action: create a chance node that sources its pre-action state
-            // from `cur` and resolves outcomes via Random(randomnessBase + N).
+            // from `cur` and resolves outcomes via Random(randomnessBase + N). `next` already
+            // holds outcome 0; record it as the chance node's first edge and stage that edge
+            // for the descent at the top of the next loop iteration.
             Node* chance = allocNode();
             chance->isRandomNode = true;
             chance->stochasticAction = edge.action;
             chance->parent = cur;
-            chance->randomnessBase = static_cast<std::uint64_t>(preActionRng.randomLong());
+            chance->randomnessBase = randomnessBase;
+            chance->outcomesGenerated = 1;
             edge.node = chance;
+
+            Edge outcomeEdge;
+            outcomeEdge.action = Action{};
+            outcomeEdge.node = getOrCreateNode(std::move(next));
+            outcomeEdge.rngAdvanceSteps = 0;
+            chance->edges.push_back(outcomeEdge);
+            stagedOutcomeEdge = &chance->edges.back();
+
             cur = chance;
             searchStack.push_back(cur);
-            onPathSet.insert(cur);
-            continue;  // outcome resolved at the top of the loop next iteration
+            continue;  // staged outcome consumed at the top of the loop next iteration
         }
 
-        // Deterministic action: deduplicate into a decision node. Move `next` in: it is consumed
-        // only if a new node is created (see getOrCreateNode), so the two reads of `next` below are
-        // safe -- each is reached only when the node already existed and `next` was left intact.
+        // Deterministic action: the rng was never read, so undo the pre-seed, then deduplicate
+        // into a decision node. Move `next` in: it is consumed only if a new node is created
+        // (see getOrCreateNode), so the two reads of `next` below are safe -- each is reached
+        // only when the node already existed and `next` was left intact.
+        next.rng = preActionRng;
         Node* child = getOrCreateNode(std::move(next));
         edge.node = child;
 
-        if (onPathSet.count(child) != 0) {
+        if (onPath(child)) {
             // Existing on-path node (a brand-new node is never on the path) -> next intact.
             // Deterministic action cycled back to an on-path node. Roll out instead.
             BattleContext &rollout = (rolloutScratch = next);  // next == child->state
@@ -361,7 +393,6 @@ void search::BattleSearcher::step() {
         }
 
         searchStack.push_back(child);
-        onPathSet.insert(child);
 
         if (child->simulationCount == 0) {
             // Brand-new node (only new nodes have simulationCount 0 here) -> next was moved into
@@ -432,13 +463,31 @@ int search::BattleSearcher::selectBestEdgeToSearch(const search::BattleSearcher:
     return bestEdge;
 }
 
+// STS_MAX_ROLLOUT_TURNS: if >0, cut the rollout short after that many turns from the start state
+// and let evaluateEndState's non-terminal branch heuristic the result. Default 0 = original
+// roll-to-terminal behavior.
+static int rolloutMaxTurnsEnv() {
+    static const int v = [](){
+        if (const char *s = std::getenv("STS_MAX_ROLLOUT_TURNS")) return std::atoi(s);
+        return 0;
+    }();
+    return v;
+}
+
 void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action> &actionStack) {
+    const int maxTurns = rolloutMaxTurnsEnv();
+    const int startTurn = bc.turn;
     while (!isTerminalState(bc)) {
+        if (maxTurns > 0 && bc.turn - startTurn >= maxTurns) break;
         ++simulationIdx;
         Action action;
         switch (bc.inputState) {
             case InputState::PLAYER_NORMAL:
-                action = rolloutAgent.chooseBattleCardPlay(bc);
+                // Rollout potion policy (STS_ROLLOUT_POTION_MODE) gets first refusal; default
+                // mode never drinks, leaving potion plays to the search tree.
+                if (!rolloutAgent.choosePotionAction(bc, action)) {
+                    action = rolloutAgent.chooseBattleCardPlay(bc);
+                }
                 break;
 
             case InputState::CARD_SELECT:
@@ -750,7 +799,9 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     const double potionScore = bc.potionCount * evalWeights.potionWeight;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
-        return evalWeights.winBonus + bc.player.curHp + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
+        // search doesn't value preserving HP that the game is about to restore anyway.
+        return evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
     } else {
         const bool couldHaveSpikers = bc.encounter == MonsterEncounter::THREE_SHAPES || bc.encounter == MonsterEncounter::FOUR_SHAPES;
         const double energyPenalty = bc.energyWasted * -evalWeights.energyWasteWeight * (couldHaveSpikers ? 0 : 1);
@@ -762,21 +813,21 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
 }
 
 search::Action search::BattleSearcher::getBestAction() const {
-    if (root.edges.empty()) {
+    if (root->edges.empty()) {
         throw std::runtime_error("BattleSearcher::getBestAction() called with no available actions");
     }
 
     int bestEdgeIdx = 0;
-    std::int32_t maxVisits = root.edges[0].visitCount;
+    std::int32_t maxVisits = root->edges[0].visitCount;
 
-    for (int i = 1; i < root.edges.size(); ++i) {
-        if (root.edges[i].visitCount > maxVisits) {
-            maxVisits = root.edges[i].visitCount;
+    for (int i = 1; i < root->edges.size(); ++i) {
+        if (root->edges[i].visitCount > maxVisits) {
+            maxVisits = root->edges[i].visitCount;
             bestEdgeIdx = i;
         }
     }
 
-    return root.edges[bestEdgeIdx].action;
+    return root->edges[bestEdgeIdx].action;
 }
 
 // (edge, state-to-describe-the-action-in). Reads stored node state directly -- no replay.
@@ -792,7 +843,7 @@ std::vector<EdgeInfo> getEdgesForLayer(const search::BattleSearcher &s, int laye
 
     std::vector<EdgeInfo> layerEdges;
     std::unordered_set<const search::BattleSearcher::Node*> seen;
-    std::vector<std::pair<const search::BattleSearcher::Node*, int>> stack { {&s.root, 1} };
+    std::vector<std::pair<const search::BattleSearcher::Node*, int>> stack { {s.root, 1} };
 
     while (!stack.empty()) {
         const auto [node, depth] = stack.back();

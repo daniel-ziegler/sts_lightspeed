@@ -77,26 +77,58 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
 }
 
 void search::SearchAgent::playoutBattle(BattleContext &bc) {
-    // One searcher for the whole battle: setRoot re-points it at each decision's state (and reseeds),
-    // reusing its node pool across moves instead of rebuilding and freeing the tree every decision.
-    search::BattleSearcher searcher(bc);
+    // One searcher for the whole battle. Each decision tries to reroot at the chosen child's
+    // subtree so its cached visit counts carry over as a head start; falls back to a full setRoot
+    // when no matching subtree exists (chance outcome wasn't sampled) or the node pool got large.
+    search::BattleSearcher searcher(bc);   // ctor's resetForSearch sets up root for the first iter
+    const bool boss = isBossEncounter(bc.encounter);
     searcher.explorationParameter = explorationParameter;
-    searcher.chanceWideningC = chanceWideningC;
-    searcher.chanceWideningAlpha = chanceWideningAlpha;
+    searcher.chanceWideningC = boss ? bossChanceWideningC : chanceWideningC;
+    searcher.chanceWideningAlpha = boss ? bossChanceWideningAlpha : chanceWideningAlpha;
     searcher.evalWeights = evalWeights;
 
-    while (bc.outcome == Outcome::UNDECIDED) {
-        const double bossMultiplier = isBossEncounter(bc.encounter) ? bossSimulationMultiplier : 1.0;
+    // Cap reuse-driven pool growth so the dedup table's load factor stays low. Beyond this we do
+    // a full setRoot, which recycles all nodes into the pool and drops the dedup map.
+    constexpr std::size_t reusePoolCap = 32 * 1024;
 
-        searcher.setRoot(bc);
+    const sts::search::BattleSearcher::Edge *prevBestEdge = nullptr;
+
+    while (bc.outcome == Outcome::UNDECIDED) {
+        if (prevBestEdge != nullptr) {
+            // Locate the new root in the existing tree.
+            using Node = sts::search::BattleSearcher::Node;
+            Node* candidate = nullptr;
+            Node* edgeChild = prevBestEdge->node;
+            if (edgeChild != nullptr && !edgeChild->isRandomNode) {
+                if (edgeChild->state.equalForSearch(bc)) {
+                    candidate = edgeChild;
+                }
+            } else if (edgeChild != nullptr) {
+                // Chance node: find the outcome whose realized state matches bc.
+                for (auto &oe : edgeChild->edges) {
+                    if (oe.node != nullptr && oe.node->state.equalForSearch(bc)) {
+                        candidate = oe.node;
+                        break;
+                    }
+                }
+            }
+            if (candidate != nullptr && searcher.allNodes.size() < reusePoolCap) {
+                searcher.rerootAt(candidate);
+            } else {
+                searcher.setRoot(bc);
+            }
+            prevBestEdge = nullptr;   // bestEdge memory may be invalidated by setRoot above
+        }
+
+        const double bossMultiplier = isBossEncounter(bc.encounter) ? bossSimulationMultiplier : 1.0;
         if (searchTimeMicros > 0) {
             searcher.searchForMicros(static_cast<std::int64_t>(bossMultiplier * searchTimeMicros));
         } else {
             searcher.search(static_cast<std::int64_t>(bossMultiplier * simulationCountBase));
         }
-        simulationCountTotal += searcher.root.simulationCount;
+        simulationCountTotal += searcher.root->simulationCount;
 
-        const auto &rootNode = searcher.root;
+        const auto &rootNode = *searcher.root;
         if (rootNode.edges.empty()) {
             break;
         }
@@ -119,6 +151,7 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
         }
 
         takeAction(bc, bestEdge->action);
+        prevBestEdge = bestEdge;   // valid for next iter's reroot lookup (no setRoot between here and there)
     }
 }
 
@@ -141,7 +174,7 @@ void search::SearchAgent::stepThroughSolution(BattleContext &bc, std::vector<sea
 }
 
 void search::SearchAgent::stepThroughSearchTree(BattleContext &bc, const search::BattleSearcher &s) {
-    const search::BattleSearcher::Node *curNode = &s.root;
+    const search::BattleSearcher::Node *curNode = s.root;
     for (int actionCount = 0; actionCount < stepsNoSolution; ++actionCount) {
         if (bc.outcome != Outcome::UNDECIDED) {
             break;

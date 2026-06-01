@@ -57,7 +57,7 @@ namespace sts::search {
         };
 
         std::unique_ptr<BattleContext> rootState;
-        Node root;
+        Node* root = nullptr;   // points into allNodes; set by resetForSearch (fresh) or rerootAt (reuse)
 
         // Graph search: node pool and state deduplication.
         // stateToNode buckets by search-hash; collisions are resolved by equalForSearch,
@@ -86,9 +86,8 @@ namespace sts::search {
 
         std::default_random_engine randGen;
 
-        std::vector<Node*> searchStack;
+        std::vector<Node*> searchStack;        // descent path; doubles as the cycle-guard set (linear scan, depth is small)
         std::vector<Action> actionStack;
-        std::unordered_set<Node*> onPathSet;   // nodes on the current descent path (cycle guard)
         
         SimpleAgent rolloutAgent;
         BattleContext rolloutScratch;   // reused playout buffer: copy-assigning into it keeps the card-pile vector capacity, avoiding a fresh allocation per rollout
@@ -97,12 +96,13 @@ namespace sts::search {
         ~BattleSearcher();
 
         // public methods
-        void setRoot(const BattleContext &bc);      // point the searcher at a new root state and reseed its rng, reusing the node pool
+        void setRoot(const BattleContext &bc);      // fresh reset: clear pool/dedup, alloc new root, reseed rng
+        void rerootAt(Node* newRoot);               // tree reuse: keep pool/dedup; root = newRoot; reseed rng
         void search(int64_t simulations);
         void searchForMicros(int64_t maxMicros);   // run steps until the wall-clock budget (microseconds) is spent
         void step();
         Action getBestAction() const;
-        const std::vector<Edge>& getRootEdges() const { return root.edges; }
+        const std::vector<Edge>& getRootEdges() const { return root->edges; }
 
         // private helpers
         bool resetForSearch();   // reset node pool/root for a fresh search; returns false if the root is already terminal

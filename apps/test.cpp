@@ -144,6 +144,8 @@ static int g_print_level = 0;
 static double g_explorationParameter = 9.9;   // tuned default
 static double g_chanceWideningC = 4.6;         // tuned default
 static double g_chanceWideningAlpha = 0.37;    // tuned default
+static double g_bossChanceWideningC = 6.46;       // boss-specific (more widening); see SearchAgent.h
+static double g_bossChanceWideningAlpha = 0.8495;
 static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
 static search::EvalWeights g_evalWeights;
 
@@ -165,6 +167,8 @@ void agentMtRunner(AgentMtInfo *info) {
         agent.explorationParameter = g_explorationParameter;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.bossChanceWideningC = g_bossChanceWideningC;
+        agent.bossChanceWideningAlpha = g_bossChanceWideningAlpha;
         agent.searchTimeMicros = g_searchTimeMicros;
         agent.evalWeights = g_evalWeights;
         agent.rng = std::default_random_engine(gc.seed);
@@ -488,6 +492,10 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         agent.explorationParameter = info->explorationParameter;
         agent.chanceWideningC = info->chanceWideningC;
         agent.chanceWideningAlpha = info->chanceWideningAlpha;
+        // eval_states applies its widening args uniformly (incl. boss fights) so tuning on a
+        // boss-only set controls boss-state behavior; overrides SearchAgent's baked-in boss default.
+        agent.bossChanceWideningC = info->chanceWideningC;
+        agent.bossChanceWideningAlpha = info->chanceWideningAlpha;
         agent.searchTimeMicros = info->searchTimeMicros;
         agent.evalWeights = info->evalWeights;
         agent.verbosityLevel = 0;
@@ -496,7 +504,9 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         agent.playoutBattle(bc);
 
         const bool dead = (bc.outcome == sts::Outcome::PLAYER_LOSS);
-        const double score = dead ? -200.0 : (bc.player.curHp + 10.0 * bc.potionCount);
+        // postBattleHealedHp: boss victories are scored on post-act-transition-heal HP, matching
+        // what the player actually carries forward.
+        const double score = dead ? -200.0 : (bc.postBattleHealedHp() + 10.0 * bc.potionCount);
 
         {
             std::scoped_lock lock(info->m);
@@ -596,6 +606,8 @@ static void applyGlobalParam(const std::string &arg) {
     if (key == "exploration") g_explorationParameter = val;
     else if (key == "wideningC") g_chanceWideningC = val;
     else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
+    else if (key == "bossWideningC") g_bossChanceWideningC = val;
+    else if (key == "bossWideningAlpha") g_bossChanceWideningAlpha = val;
     else if (key == "time") g_searchTimeMicros = static_cast<std::int64_t>(val);
     else if (key == "winBonus") g_evalWeights.winBonus = val;
     else if (key == "potionWeight") g_evalWeights.potionWeight = val;
@@ -630,6 +642,8 @@ static void dumpBattleOutcomesRunner(DumpInfo *info) {
         agent.explorationParameter = g_explorationParameter;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.bossChanceWideningC = g_bossChanceWideningC;
+        agent.bossChanceWideningAlpha = g_bossChanceWideningAlpha;
         agent.searchTimeMicros = g_searchTimeMicros;
         agent.evalWeights = g_evalWeights;
         agent.logBattleOutcomes = true;

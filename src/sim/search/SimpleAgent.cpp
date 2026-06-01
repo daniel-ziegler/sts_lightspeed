@@ -7,6 +7,8 @@
 #include "sim/PrintHelpers.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 #include <map>
 #include <array>
 #include <bitset>
@@ -14,6 +16,42 @@
 #include <mutex>
 
 using namespace sts;
+
+// Rollout-policy knobs, read once from env so we can sweep without recompiling.
+// STS_BLOCK_OFFSET: "we have enough block" check (default 4 = original).
+// STS_AOE_MIN: minimum alive monsters to prefer AoE over single-target attack (default 2).
+// STS_PRIO_MODE: category priority order in chooseBattleCardPlay (default 0):
+//   0 = zeroCostNonAttacks -> nonZero -> zeroCostAttacks  (original)
+//   1 = nonZero -> zeroCostNonAttacks -> zeroCostAttacks   (energy-first)
+//   2 = zeroCostNonAttacks -> zeroCostAttacks -> nonZero   (cheap-first)
+// STS_DEFENSIVE_HP: if 0 < curHp <= this, force defensive mode (skip block-sufficient short-circuit).
+//   Default 0 = disabled.
+// STS_TARGET_MODE: attack target selection (default 0):
+//   0 = lowest-HP monster (original); 1 = highest-HP; 2 = randomize.
+static int policyEnvInt(const char *name, int def) {
+    if (const char *v = std::getenv(name)) return std::atoi(v);
+    return def;
+}
+static const int rolloutBlockOffset   = policyEnvInt("STS_BLOCK_OFFSET", 4);
+static const int rolloutAoeMin        = policyEnvInt("STS_AOE_MIN", 2);
+static const int rolloutPrioMode      = policyEnvInt("STS_PRIO_MODE", 0);
+static const int rolloutDefensiveHp   = policyEnvInt("STS_DEFENSIVE_HP", 0);
+static const int rolloutTargetMode    = policyEnvInt("STS_TARGET_MODE", 0);
+// STS_RANDOM_POLICY=1: ignore all heuristics and just pick uniform-random over playable cards.
+// Baseline to gauge whether the structured policy is doing anything useful under MCTS averaging.
+static const int rolloutRandomPolicy  = policyEnvInt("STS_RANDOM_POLICY", 0);
+// STS_END_TURN_ALWAYS=1: degenerate baseline that always ends the turn (zero card plays per rollout).
+static const int rolloutEndTurnAlways = policyEnvInt("STS_END_TURN_ALWAYS", 0);
+// STS_ROLLOUT_POTION_MODE: if/when MCTS rollouts (BattleSearcher::rolloutToEnd) drink the
+// player's potions. The search tree always enumerates potion plays as actions; this only
+// shapes the value estimates rollouts feed back.
+//   0 = never (default): potions left to the search tree;
+//   1 = dump all potions at the start of the rollout in boss fights only;
+//   2 = always dump at the start of the rollout;
+//   3 = heuristic opportune timing (block/intangible vs a big unblocked hit, fire/explosive as
+//       kill-confirm, weak vs a big attack, fear/poison on a tanky target, blood when wounded;
+//       buffs/utility drink immediately).
+static const int rolloutPotionMode    = policyEnvInt("STS_ROLLOUT_POTION_MODE", 0);
 
 static bool haveInitMaps = false;
 static int cardPriorityMap[372] {};
@@ -347,7 +385,138 @@ bool search::SimpleAgent::playPotion(BattleContext &bc) {
     return i == bc.potionCapacity;
 }
 
+// "Dump" rollout potion policy: pick the first drinkable potion (high-HP target if one is
+// required). Returns false when no potion can be drunk.
+static bool chooseDumpPotionAction(const BattleContext &bc, bool randomize,
+                                   std::default_random_engine &rng, search::Action &outAction) {
+    for (int i = 0; i < bc.potionCapacity; ++i) {
+        const Potion p = bc.potions[i];
+        if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID) {
+            continue;
+        }
+        int target = 0;
+        if (potionRequiresTarget(p)) {
+            if (bc.monsters.getTargetableCount() <= 0) {
+                continue;
+            }
+            target = getHighHpMonster(bc, randomize, rng);
+        }
+        outAction = search::Action(search::ActionType::POTION, i, target);
+        return true;
+    }
+    return false;
+}
+
+// Heuristic "opportune moment" rollout potion policy (STS_ROLLOUT_POTION_MODE=3). Picks at most
+// one held potion whose moment has arrived; consulted before every card-play decision, so
+// block / incoming damage / monster HP are re-evaluated as the turn unfolds (e.g. Fire Potion
+// fires only once attacks have brought a monster into kill range).
+bool search::SimpleAgent::chooseOpportunePotionAction(const BattleContext &bc, Action &outAction) {
+    const bool hasBark = bc.player.hasRelic<R::SACRED_BARK>();
+    const int incoming = getIncomingDamage(bc);
+    const int unblocked = std::max(0, incoming - bc.player.block);
+
+    for (int i = 0; i < bc.potionCapacity; ++i) {
+        const Potion p = bc.potions[i];
+        if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID) {
+            continue;
+        }
+
+        bool drink = false;
+        int target = 0;
+
+        switch (p) {
+            // --- defensive: spend against a big unblocked hit ---
+            case Potion::BLOCK_POTION:
+                drink = unblocked >= (hasBark ? 24 : 12);   // fully converts to prevented damage
+                break;
+            case Potion::GHOST_IN_A_JAR:
+                drink = incoming >= 18;                      // intangible negates a big turn
+                break;
+            case Potion::WEAK_POTION:
+                if (incoming >= 14) {
+                    target = getHighHpMonster(bc, randomize, rng);
+                    drink = target >= 0;
+                }
+                break;
+
+            // --- offensive: kill-confirm / amplify a sustained target ---
+            case Potion::FIRE_POTION: {
+                const int dmg = hasBark ? 40 : 20;
+                for (int m = 0; m < bc.monsters.monsterCount; ++m) {
+                    const auto &mon = bc.monsters.arr[m];
+                    if (mon.isTargetable() && mon.curHp > 0 && mon.curHp <= dmg) {
+                        target = m;
+                        drink = true;
+                        break;
+                    }
+                }
+                break;
+            }
+            case Potion::EXPLOSIVE_POTION: {
+                const int dmg = hasBark ? 20 : 10;
+                int kills = 0, alive = 0;
+                for (int m = 0; m < bc.monsters.monsterCount; ++m) {
+                    const auto &mon = bc.monsters.arr[m];
+                    if (!mon.isTargetable() || mon.curHp <= 0) continue;
+                    ++alive;
+                    if (mon.curHp <= dmg) ++kills;
+                }
+                drink = kills >= 2 || (kills >= 1 && kills == alive);  // clears the board / finishes it
+                break;
+            }
+            case Potion::FEAR_POTION:
+                target = getHighHpMonster(bc, randomize, rng);
+                drink = target >= 0 && bc.monsters.arr[target].curHp >= 40;  // worth amplifying
+                break;
+            case Potion::POISON_POTION:
+                target = getHighHpMonster(bc, randomize, rng);
+                drink = target >= 0 && bc.monsters.arr[target].curHp >= 30;  // ramp pays off; drink early
+                break;
+
+            // --- heal only when it won't overheal ---
+            case Potion::BLOOD_POTION: {
+                const int heal = static_cast<int>(bc.player.maxHp * (hasBark ? 40 : 20) / 100.0f);
+                drink = (bc.player.maxHp - bc.player.curHp) >= static_cast<int>(heal * 0.8);
+                break;
+            }
+
+            // --- no opportune moment: take it now (earlier = more value) ---
+            default:
+                if (potionRequiresTarget(p)) {
+                    target = getHighHpMonster(bc, randomize, rng);
+                    drink = target >= 0;
+                } else {
+                    drink = true;
+                }
+                break;
+        }
+
+        if (drink) {
+            outAction = search::Action(search::ActionType::POTION, i, target);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool search::SimpleAgent::choosePotionAction(const BattleContext &bc, Action &outAction) {
+    switch (rolloutPotionMode) {
+        case 1:
+            return isBossEncounter(bc.encounter)
+                   && chooseDumpPotionAction(bc, randomize, rng, outAction);
+        case 2:
+            return chooseDumpPotionAction(bc, randomize, rng, outAction);
+        case 3:
+            return chooseOpportunePotionAction(bc, outAction);
+        default:
+            return false;   // never: potions are left to the search tree
+    }
+}
+
 void search::SimpleAgent::playoutBattle(BattleContext &bc) {
+    // usedPotions starts false when this standalone playout should dump potions before playing
+    // cards (boss fights). The MCTS rollout's potion policy lives in choosePotionAction instead.
     bool usedPotions = !isBossEncounter(bc.encounter);
     while (bc.outcome == Outcome::UNDECIDED) {
         if (bc.inputState == InputState::CARD_SELECT) {
@@ -367,15 +536,37 @@ void search::SimpleAgent::playoutBattle(BattleContext &bc) {
 }
 
 sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc) {
+    if (rolloutEndTurnAlways) {
+        return Action(ActionType::END_TURN);
+    }
     if (!bc.isCardPlayAllowed() || bc.player.cardsPlayedThisTurn > 1000) {
         return Action(ActionType::END_TURN);
     }
 
+    // One pass over the hand: skip unplayable cards, categorize the rest.
     fixed_list<int,10> playableCardsIdxs;
+    fixed_list<int,10> zeroCostAttacks;
+    fixed_list<int,10> zeroCostNonAttacks;
+    fixed_list<int,10> nonZeroCostCards;
+    fixed_list<int,10> aoeCards;
+
     for (int i = 0; i < bc.cards.cardsInHand; ++i) {
         const auto &c = bc.cards.hand[i];
-        if (c.canUseOnAnyTarget(bc)) {
-            playableCardsIdxs.push_back(i);
+        if (!c.canUseOnAnyTarget(bc)) {
+            continue;
+        }
+        playableCardsIdxs.push_back(i);
+        if (isAoeCard.test(static_cast<int>(c.getId()))) {
+            aoeCards.push_back(i);
+        }
+        if (c.cost == 0 || c.costForTurn == 0) {
+            if (c.getType() == CardType::ATTACK) {
+                zeroCostAttacks.push_back(i);
+            } else {
+                zeroCostNonAttacks.push_back(i);
+            }
+        } else {
+            nonZeroCostCards.push_back(i);
         }
     }
 
@@ -383,31 +574,26 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
         return Action(ActionType::END_TURN);
     }
 
-    fixed_list<int,10> zeroCost;
-    fixed_list<int,10> zeroCostAttacks;
-    fixed_list<int,10> zeroCostNonAttacks;
-    fixed_list<int,10> nonZeroCostCards;
-    fixed_list<int,10> aoeCards;
-
-    for (auto handIdx : playableCardsIdxs) {
+    if (rolloutRandomPolicy) {
+        // Baseline: skip all heuristics, pick a uniform-random playable card + random target.
+        std::uniform_int_distribution<int> pickDist(0, playableCardsIdxs.size() - 1);
+        const int handIdx = playableCardsIdxs[pickDist(rng)];
         const auto &c = bc.cards.hand[handIdx];
-        if (isAoeCard.test(static_cast<int>(c.getId()))) {
-            aoeCards.push_back(handIdx);
+        if (!c.requiresTarget()) {
+            return Action(ActionType::CARD, handIdx);
         }
-        if (c.cost == 0 || c.costForTurn == 0) {
-            zeroCost.push_back(handIdx);
-            if (c.getType() == CardType::ATTACK) {
-                zeroCostAttacks.push_back(handIdx);
-            } else {
-                zeroCostNonAttacks.push_back(handIdx);
-            }
-        } else {
-            nonZeroCostCards.push_back(handIdx);
+        fixed_list<int,5> alive;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            if (bc.monsters.arr[i].isTargetable()) alive.push_back(i);
         }
+        const int tgt = alive.empty() ? 0
+            : alive[std::uniform_int_distribution<int>(0, alive.size()-1)(rng)];
+        return Action(ActionType::CARD, handIdx, tgt);
     }
 
     const int incomingDamage = getIncomingDamage(bc);
-    if (bc.player.block > (incomingDamage - bc.gameContext->act - 4)) {
+    const bool forceDefensive = rolloutDefensiveHp > 0 && bc.player.curHp <= rolloutDefensiveHp;
+    if (!forceDefensive && bc.player.block > (incomingDamage - bc.gameContext->act - rolloutBlockOffset)) {
         fixed_list<int,10> offensiveCards;
         for (auto handIdx : nonZeroCostCards) {
             const auto &c = bc.cards.hand[handIdx];
@@ -429,21 +615,33 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
         }
     }
 
-    int bestCardIdx = playableCardsIdxs.front();
-    if (!zeroCostNonAttacks.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, zeroCostNonAttacks, randomize, rng);
+    // Try the three categories in the configured priority order; AoE override only fires when
+    // the chosen card came from nonZeroCostCards (the original behavior).
+    const fixed_list<int,10> *priority[3] = {&zeroCostNonAttacks, &nonZeroCostCards, &zeroCostAttacks};
+    if (rolloutPrioMode == 1) {
+        priority[0] = &nonZeroCostCards;
+        priority[1] = &zeroCostNonAttacks;
+    } else if (rolloutPrioMode == 2) {
+        priority[1] = &zeroCostAttacks;
+        priority[2] = &nonZeroCostCards;
+    }
 
-    } else if (!nonZeroCostCards.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, nonZeroCostCards, randomize, rng);
-        if (!aoeCards.empty() && bc.monsters.monstersAlive > 1 && bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
-            bestCardIdx = getBestCardToPlay(bc, aoeCards, randomize, rng);
+    int bestCardIdx = -1;
+    const fixed_list<int,10> *chosen = nullptr;
+    for (int p = 0; p < 3; ++p) {
+        if (!priority[p]->empty()) {
+            bestCardIdx = getBestCardToPlay(bc, *priority[p], randomize, rng);
+            chosen = priority[p];
+            break;
         }
-
-    } else if (!zeroCostAttacks.empty()) {
-        bestCardIdx = getBestCardToPlay(bc, zeroCostAttacks, randomize, rng);
-
-    } else {
+    }
+    if (bestCardIdx < 0) {
         return Action(ActionType::END_TURN);
+    }
+    if (chosen == &nonZeroCostCards && !aoeCards.empty() &&
+        bc.monsters.monstersAlive >= rolloutAoeMin &&
+        bc.cards.hand[bestCardIdx].getType() == CardType::ATTACK) {
+        bestCardIdx = getBestCardToPlay(bc, aoeCards, randomize, rng);
     }
 
     const auto &c = bc.cards.hand[bestCardIdx];
@@ -452,10 +650,23 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
     }
 
     int targetIdx;
-    if (c.getType() == CardType::ATTACK) {
-         targetIdx = getLowHpMonster(bc, randomize, rng);
-    } else {
+    if (rolloutTargetMode == 1) {
         targetIdx = getHighHpMonster(bc, randomize, rng);
+    } else if (rolloutTargetMode == 2) {
+        // mode 2: randomize across alive monsters
+        fixed_list<int,5> alive;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            if (bc.monsters.arr[i].isTargetable()) alive.push_back(i);
+        }
+        if (alive.empty()) targetIdx = 0;
+        else {
+            std::uniform_int_distribution<int> dist(0, alive.size() - 1);
+            targetIdx = alive[dist(rng)];
+        }
+    } else {
+        targetIdx = (c.getType() == CardType::ATTACK)
+                ? getLowHpMonster(bc, randomize, rng)
+                : getHighHpMonster(bc, randomize, rng);
     }
     return Action(ActionType::CARD, bestCardIdx, targetIdx);
 }
@@ -1181,6 +1392,26 @@ void initMaps() {
     for (int i = 0; i < cardsPriorities.size(); ++i) {
         CardId c = cardsPriorities[i];
         cardPriorityMap[static_cast<int>(c)] = i + 1;
+    }
+
+    // STS_DUMP_CARDPLAY=path: dump the default cardPlayMap (after the priorities-array init, before
+    // any user override) so an external tuner can see the starting point.
+    if (const char *path = std::getenv("STS_DUMP_CARDPLAY")) {
+        std::ofstream f(path);
+        for (int i = 0; i < 372; ++i) {
+            f << i << " " << cardPlayMap[i] << "\n";
+        }
+    }
+
+    // STS_CARDPLAY_OVERRIDE=path: optional per-card cardPlayMap overrides. File format is
+    // whitespace-separated "<int_card_id> <int_priority>" pairs (lower priority = play first).
+    // Lines with unrecognized id (>=372) are ignored. Lets us autotune without recompiling.
+    if (const char *path = std::getenv("STS_CARDPLAY_OVERRIDE")) {
+        std::ifstream f(path);
+        int id, prio;
+        while (f >> id >> prio) {
+            if (id >= 0 && id < 372) cardPlayMap[id] = prio;
+        }
     }
 
     for (int i = 0; i < bossRelicPriorities.size(); ++i) {
