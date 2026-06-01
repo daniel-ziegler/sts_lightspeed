@@ -5,8 +5,11 @@ collects a group), computes the RLOO advantages, and prints the group summary pl
 worst members' full playthroughs. Lets you read how a policy plays without touching training.
 """
 import argparse
+import faulthandler
 
 import torch
+
+faulthandler.enable()  # dump a native traceback on segfault
 
 from network import NN, ModelHP, load_network_backward_compatible
 from rl_train import NNService, TrainConfig, collect_experience, compute_progress_reward

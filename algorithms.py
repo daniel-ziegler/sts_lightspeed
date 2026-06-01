@@ -223,7 +223,10 @@ class GRPOAlgorithm(Algorithm):
         if debug_traj:
             print(f"GRPO: {len(groups)} groups, mean within-group return std "
                   f"{self.last_group_reward_std:.4f}, {len(all_experiences)} experiences")
-            self._print_group_debug(trajectories, groups, returns_by_idx)
+            try:  # debug printing must never crash training
+                self._print_group_debug(trajectories, groups, returns_by_idx)
+            except Exception as e:
+                print(f"(group debug print skipped: {type(e).__name__}: {e})")
         return all_experiences, all_advantages, None, all_meta
 
     @staticmethod
