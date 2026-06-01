@@ -7,6 +7,10 @@ seeds 1_000_000..1_000_099 (well outside any training seed range), mcts_simulati
 """
 import argparse, csv, os, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+# Must precede `import torch`: disables TorchInductor's compile-worker subprocess pool whose
+# pipe-reader thread races with torch teardown and intermittently segfaults (rl_train sets this
+# only when it is the main module; here torch is imported before rl_train).
+os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
 import torch
 
 import slaythespire as sts

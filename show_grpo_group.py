@@ -6,10 +6,17 @@ worst members' full playthroughs. Lets you read how a policy plays without touch
 """
 import argparse
 import faulthandler
+import os
+
+# Must precede `import torch`: disables TorchInductor's async compile-worker subprocess pool,
+# whose pipe-reader thread races with torch teardown and intermittently segfaults. rl_train sets
+# this too, but only when it's the main module -- here torch is imported before rl_train, so we
+# must set it ourselves first. (Same root cause as the checkpoint-save crash.)
+os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
 
 import torch
 
-faulthandler.enable()  # dump a native traceback on segfault
+faulthandler.enable()  # dump a native traceback if a segfault somehow still occurs
 
 from network import NN, ModelHP, load_network_backward_compatible
 from rl_train import NNService, TrainConfig, collect_experience, compute_progress_reward
