@@ -1200,7 +1200,12 @@ def main():
                 'policy_grad_norm': losses.get('policy_grad_norm', 0),
                 'value_grad_norm': losses.get('value_grad_norm', 0),
                 'clipfrac': losses.get('clipfrac', 0),
-                'explained_variance': losses.get('explained_variance', 0)
+                'explained_variance': losses.get('explained_variance', 0),
+                # EWMA std used to normalize PPO advantages. Logged so the effective
+                # return-vs-entropy exchange rate (entropy_coef * adv_norm_std) is recoverable,
+                # e.g. for objective-indifference lines in plots. Meaningless for critic-free
+                # algos (GRPO leaves advantages raw and never updates adv_norm).
+                'adv_norm_std': float(adv_norm.std),
             }
             
             # Write stats to JSONL file based on save path
