@@ -223,7 +223,44 @@ class GRPOAlgorithm(Algorithm):
         if debug_traj:
             print(f"GRPO: {len(groups)} groups, mean within-group return std "
                   f"{self.last_group_reward_std:.4f}, {len(all_experiences)} experiences")
+            self._print_group_debug(trajectories, groups, returns_by_idx)
         return all_experiences, all_advantages, None, all_meta
+
+    @staticmethod
+    def _print_group_debug(trajectories, groups, returns_by_idx):
+        """Show the most divergent group: same map seed, different plays. Prints each member's
+        outcome/return/RLOO advantage, then the full playthroughs of the best and worst members."""
+        import slaythespire as sts
+        from rl_train import print_trajectory  # lazy: rl_train imports this module at load time
+
+        def rloo(idxs, i):
+            total = sum(returns_by_idx[j] for j in idxs)
+            n = len(idxs)
+            return (returns_by_idx[i] - (total - returns_by_idx[i]) / (n - 1)) if n > 1 else 0.0
+
+        multi = {g: idxs for g, idxs in groups.items() if len(idxs) > 1}
+        if not multi:
+            return
+        spread = lambda idxs: max(returns_by_idx[i] for i in idxs) - min(returns_by_idx[i] for i in idxs)
+        gid = max(multi, key=lambda g: spread(multi[g]))
+        idxs = sorted(multi[gid], key=lambda i: -returns_by_idx[i])
+        map_seed = trajectories[idxs[0]].seed
+
+        print(f"=== GRPO group debug: group {gid} (map seed {map_seed}), "
+              f"return spread {spread(idxs):.3f} ===")
+        for rank, i in enumerate(idxs):
+            traj = trajectories[i]
+            won = traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY
+            print(f"  member {rank}: {'WIN ' if won else 'loss'} floor {traj.final_metrics.floor_num:>2}  "
+                  f"return {returns_by_idx[i]:+.3f}  rloo_adv {rloo(idxs, i):+.3f}  "
+                  f"({len(traj.experiences)} decisions)")
+        # Full playthroughs of the extremes -- same map, divergent play.
+        for label, i in (('BEST', idxs[0]), ('WORST', idxs[-1])):
+            traj = trajectories[i]
+            adv = rloo(idxs, i)
+            print_trajectory(traj, [adv] * len(traj.experiences),
+                             title=f"--- {label} member of group {gid} "
+                                   f"(return {returns_by_idx[i]:+.3f}, rloo_adv {adv:+.3f}) ---")
 
     def compute_loss(self, batch, net_output, config):
         new_logits = net_output[0] if isinstance(net_output, tuple) else net_output

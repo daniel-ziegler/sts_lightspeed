@@ -494,6 +494,62 @@ def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs)
     return trajectories
 
 
+def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, title: str = ""):
+    """Print a human-readable playthrough of one trajectory: a per-step state/choice/action table
+    followed by the final outcome, deck, and relics. The Pred Value / Return columns are included
+    only when `values`/`returns` are given (PPO); critic-free algos pass just the advantages."""
+    print(title or f"=== Trajectory (seed {traj.seed}) ===")
+    print(f"Trajectory length: {len(traj.experiences)} steps")
+    has_v = values is not None and returns is not None
+    header = f"Step | {'State':12s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s}"
+    if has_v:
+        header += f" | {'Pred Value':10s} | {'GAE Return':10s}"
+    header += f" | {'Advantage':13s}"
+    print(header)
+    print("-" * 140)
+
+    for t in range(len(traj.experiences)):
+        exp = traj.experiences[t]
+        # Choice summary - what was offered
+        offered_items = []
+        if exp.choice.cards_offered:
+            offered_items.append(f"{len(exp.choice.cards_offered)}card")
+        if exp.choice.relics_offered:
+            offered_items.append(f"{len(exp.choice.relics_offered)}rel")
+        if exp.choice.potions_offered:
+            offered_items.append(f"{len(exp.choice.potions_offered)}pot")
+        if exp.choice.fixed_actions:
+            offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
+        if exp.choice.paths_offered:
+            offered_items.append(f"{len(exp.choice.paths_offered)}path")
+        choice_desc = '+'.join(offered_items) if offered_items else "none"
+        action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
+        state_str = f"{exp.metrics.floor_num:>2}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
+
+        row = (f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | "
+               f"{np.exp(exp.log_prob):6.3f} | {traj.rewards[t]:6.3f}")
+        if has_v:
+            row += f" | {values[t]:10.3f} | {returns[t]:10.3f}"
+        row += f" | {advantages[t]:13.3f}"
+        print(row)
+
+    print("-" * 140)
+    fm = traj.final_metrics
+    print(f"Final game outcome: {fm.outcome}")
+    print(f"Final reward: {traj.final_reward:.3f}, Final state: {fm.floor_num}: {fm.cur_hp}/{fm.max_hp}hp")
+    print(f"Final deck ({len(traj.final_deck)} cards):")
+    deck_summary = Counter(str(card) for card in traj.final_deck)
+    for card_str, count in deck_summary.most_common():
+        if count > 1:
+            print(f"  {count}x {card_str}")
+        else:
+            print(f"  {card_str}")
+    print(f"Final relics ({len(traj.final_relics)}):")
+    for relic in traj.final_relics:
+        print(f"  {relic.id}")
+    print("=" * 80)
+
+
 def compute_advantages(trajectories: List[Trajectory], config: TrainConfig, adv_norm: RunningMoments, debug_traj: bool = False) -> tuple[List[Experience], List[float], List[float], List[dict]]:
     """Compute advantages using GAE and prepare training data."""
     all_experiences = []
@@ -528,59 +584,10 @@ def compute_advantages(trajectories: List[Trajectory], config: TrainConfig, adv_
         
         # Debug output for random trajectory
         if debug_traj and traj_idx == debug_traj_idx:
-            print(f"=== PPO Advantage Calculation Debug (seed {traj.seed}) ===")
-            print(f"Trajectory length: {len(traj.experiences)} steps")
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
-            print(f"Step | {'State':12s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s} | {'Pred Value':10s} | {'GAE Return':10s} | {'Raw Advantage':13s}")
-            print("-" * 140)
-            
-            for t in range(len(traj.experiences)):
-                exp = traj.experiences[t]
-                
-                # Get choice summary - what was offered
-                offered_items = []
-                if exp.choice.cards_offered:
-                    offered_items.append(f"{len(exp.choice.cards_offered)}card")
-                if exp.choice.relics_offered:
-                    offered_items.append(f"{len(exp.choice.relics_offered)}rel")
-                if exp.choice.potions_offered:
-                    offered_items.append(f"{len(exp.choice.potions_offered)}pot")
-                if exp.choice.fixed_actions:
-                    offered_items.append(f"{len(exp.choice.fixed_actions)}fix")
-                if exp.choice.paths_offered:
-                    offered_items.append(f"{len(exp.choice.paths_offered)}path")
-                
-                choice_desc = f"{'+'.join(offered_items)}" if offered_items else "none"
-                
-                # Get action description - use the clean description generated during experience collection
-                action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
-                
-                # Create state string: 18: 20/72hp format
-                state_str = f"{exp.metrics.floor_num:>2}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
-                
-                print(f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | {np.exp(exp.log_prob):6.3f} | {rewards[t]:6.3f} | {values[t]:10.3f} | {returns[t]:10.3f} | {advantages[t]:13.3f}")
-            
-            print("-" * 140)
-            final_metrics = traj.final_metrics
-            print(f"Final game outcome: {final_metrics.outcome}")
-            final_state = f"{final_metrics.floor_num}: {final_metrics.cur_hp}/{final_metrics.max_hp}hp"
-            print(f"Final reward: {traj.final_reward:.3f}, Final state: {final_state}")
-            
-            # Show final deck and relics
-            print(f"Final deck ({len(traj.final_deck)} cards):")
-            deck_summary = Counter(str(card) for card in traj.final_deck)
-            for card_str, count in deck_summary.most_common():
-                if count > 1:
-                    print(f"  {count}x {card_str}")
-                else:
-                    print(f"  {card_str}")
-            
-            print(f"Final relics ({len(traj.final_relics)}):") 
-            for relic in traj.final_relics:
-                print(f"  {relic.id}")
-            
-            print("=" * 80)
+            print_trajectory(traj, advantages, values=values, returns=returns,
+                             title=f"=== PPO Advantage Calculation Debug (seed {traj.seed}) ===")
         
         # Store experiences and raw (un-normalized) GAE advantages/returns.
         all_experiences.extend(traj.experiences)
