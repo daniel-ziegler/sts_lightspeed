@@ -81,9 +81,10 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
     // subtree so its cached visit counts carry over as a head start; falls back to a full setRoot
     // when no matching subtree exists (chance outcome wasn't sampled) or the node pool got large.
     search::BattleSearcher searcher(bc);   // ctor's resetForSearch sets up root for the first iter
+    const bool boss = isBossEncounter(bc.encounter);
     searcher.explorationParameter = explorationParameter;
-    searcher.chanceWideningC = chanceWideningC;
-    searcher.chanceWideningAlpha = chanceWideningAlpha;
+    searcher.chanceWideningC = boss ? bossChanceWideningC : chanceWideningC;
+    searcher.chanceWideningAlpha = boss ? bossChanceWideningAlpha : chanceWideningAlpha;
     searcher.evalWeights = evalWeights;
 
     // Cap reuse-driven pool growth so the dedup table's load factor stays low. Beyond this we do

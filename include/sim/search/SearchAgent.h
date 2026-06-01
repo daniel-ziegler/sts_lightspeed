@@ -49,6 +49,13 @@ namespace sts::search {
         double chanceWideningAlpha = 0.37;    // tuned default
         EvalWeights evalWeights;
 
+        // Boss fights are long and high-variance, so they want more chance-node widening than the
+        // general (hallway-dominated) defaults. Applied via isBossEncounter in playoutBattle; only
+        // the widening is boss-specific (exploration + eval weights stay general). Validated
+        // boss-specific on held-out heroe2-policy boss states (+~3 SCORE / +1.3pp win vs general).
+        double bossChanceWideningC = 6.46;
+        double bossChanceWideningAlpha = 0.8495;
+
         std::default_random_engine rng;
 
         // public interface
