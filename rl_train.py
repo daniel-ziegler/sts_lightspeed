@@ -165,6 +165,11 @@ class TrainConfig:
     shaping_relic_coef: float = 0.0   # per relic held
     shaping_maxhp_coef: float = 0.0   # per max-HP point
     shaping_offset: float = 0.0
+    # Genuine (non-telescoping) penalty for being low on HP after a battle: charged once per
+    # damage event when post-event HP < 30% of max, scaling linearly from 0 at 30% to this coef
+    # at 0 HP. Unlike the potential terms above it changes the trajectory ranking -- a tiebreaker
+    # that rewards safer wins (e.g. for GRPO groups where everyone wins). Default 0 = off.
+    shaping_lowhp_coef: float = 0.0
 
     # Per-battle MCTS wall-clock budget (seconds). Sized for the default 1000 sims; raise it
     # when running with many more simulations so long boss fights aren't cut off mid-search.
@@ -250,6 +255,8 @@ def compute_shaped_rewards(
     offset: float,
     relic_coef: float = 0.0,
     maxhp_coef: float = 0.0,
+    lowhp_coef: float = 0.0,
+    lowhp_thresh: float = 0.30,
 ) -> Tuple[List[float], float]:
     """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
 
@@ -276,6 +283,21 @@ def compute_shaped_rewards(
     shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
     total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
     rewards = [total_vals[i + 1] - total_vals[i] for i in range(len(step_metrics))]
+
+    # Low-HP penalty (NON-telescoping, on top of the potential deltas above): after each damage
+    # event -- a decision whose HP dropped vs the previous one, i.e. a battle/event just dealt
+    # damage -- charge a cost if the post-event HP fraction is below lowhp_thresh, scaling
+    # linearly from 0 at the threshold to lowhp_coef at 0 HP. Once per damage event (a decision at
+    # unchanged low HP is not re-charged), so it accumulates across a dangerous run but stays ~0
+    # for a clean one. Genuinely shifts the return -> ranks safer wins above riskier ones.
+    if lowhp_coef > 0.0:
+        prev_hp = None
+        for i, m in enumerate(step_metrics):
+            frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
+            if prev_hp is not None and m.cur_hp < prev_hp and frac < lowhp_thresh:
+                rewards[i] -= lowhp_coef * (lowhp_thresh - frac) / lowhp_thresh
+            prev_hp = m.cur_hp
+
     return rewards, base_vals[-1]
 
 
@@ -450,6 +472,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         [e.metrics for e in experiences], final_metrics, reward_fn,
         config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
         relic_coef=config.shaping_relic_coef, maxhp_coef=config.shaping_maxhp_coef,
+        lowhp_coef=config.shaping_lowhp_coef,
     )
     
     # Add terminal state value (0.0) for GAE bootstrap
