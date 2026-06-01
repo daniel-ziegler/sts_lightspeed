@@ -43,6 +43,11 @@ namespace sts::search {
         void stepShopScreen(GameContext &gc);
 
         bool playPotion(BattleContext &bc);
+        // MCTS-rollout potion policy (STS_ROLLOUT_POTION_MODE). Returns true and fills outAction
+        // if the rollout should drink a potion at this decision point. 0 = never (default),
+        // 1 = dump at rollout start in boss fights, 2 = always dump, 3 = heuristic opportune timing.
+        bool choosePotionAction(const BattleContext &bc, Action &outAction);
+        bool chooseOpportunePotionAction(const BattleContext &bc, Action &outAction);
         static fixed_list<int,16> getBestMapPathForWeights(const Map &m, const int *weights);
         static void runAgentsMt(int threadCount, std::uint64_t startSeed, int playoutCount, bool print);
     };

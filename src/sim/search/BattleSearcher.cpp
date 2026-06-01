@@ -483,7 +483,11 @@ void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action>
         Action action;
         switch (bc.inputState) {
             case InputState::PLAYER_NORMAL:
-                action = rolloutAgent.chooseBattleCardPlay(bc);
+                // Rollout potion policy (STS_ROLLOUT_POTION_MODE) gets first refusal; default
+                // mode never drinks, leaving potion plays to the search tree.
+                if (!rolloutAgent.choosePotionAction(bc, action)) {
+                    action = rolloutAgent.chooseBattleCardPlay(bc);
+                }
                 break;
 
             case InputState::CARD_SELECT:

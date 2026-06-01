@@ -42,9 +42,15 @@ static const int rolloutTargetMode    = policyEnvInt("STS_TARGET_MODE", 0);
 static const int rolloutRandomPolicy  = policyEnvInt("STS_RANDOM_POLICY", 0);
 // STS_END_TURN_ALWAYS=1: degenerate baseline that always ends the turn (zero card plays per rollout).
 static const int rolloutEndTurnAlways = policyEnvInt("STS_END_TURN_ALWAYS", 0);
-// STS_ROLLOUT_POTION_MODE: when the rollout drinks the player's potions (before playing cards):
-//   0 = auto (original): dump all potions at the start of boss fights, never in other fights;
-//   1 = never; 2 = always dump at the start of every fight.
+// STS_ROLLOUT_POTION_MODE: if/when MCTS rollouts (BattleSearcher::rolloutToEnd) drink the
+// player's potions. The search tree always enumerates potion plays as actions; this only
+// shapes the value estimates rollouts feed back.
+//   0 = never (default): potions left to the search tree;
+//   1 = dump all potions at the start of the rollout in boss fights only;
+//   2 = always dump at the start of the rollout;
+//   3 = heuristic opportune timing (block/intangible vs a big unblocked hit, fire/explosive as
+//       kill-confirm, weak vs a big attack, fear/poison on a tanky target, blood when wounded;
+//       buffs/utility drink immediately).
 static const int rolloutPotionMode    = policyEnvInt("STS_ROLLOUT_POTION_MODE", 0);
 
 static bool haveInitMaps = false;
@@ -379,14 +385,139 @@ bool search::SimpleAgent::playPotion(BattleContext &bc) {
     return i == bc.potionCapacity;
 }
 
-void search::SimpleAgent::playoutBattle(BattleContext &bc) {
-    // usedPotions starts false when the rollout should drink potions before playing cards.
-    bool usedPotions;
-    switch (rolloutPotionMode) {
-        case 1:  usedPotions = true; break;                          // never
-        case 2:  usedPotions = false; break;                         // always dump at start
-        default: usedPotions = !isBossEncounter(bc.encounter); break; // auto: dump in boss fights only
+// "Dump" rollout potion policy: pick the first drinkable potion (high-HP target if one is
+// required). Returns false when no potion can be drunk.
+static bool chooseDumpPotionAction(const BattleContext &bc, bool randomize,
+                                   std::default_random_engine &rng, search::Action &outAction) {
+    for (int i = 0; i < bc.potionCapacity; ++i) {
+        const Potion p = bc.potions[i];
+        if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID) {
+            continue;
+        }
+        int target = 0;
+        if (potionRequiresTarget(p)) {
+            if (bc.monsters.getTargetableCount() <= 0) {
+                continue;
+            }
+            target = getHighHpMonster(bc, randomize, rng);
+        }
+        outAction = search::Action(search::ActionType::POTION, i, target);
+        return true;
     }
+    return false;
+}
+
+// Heuristic "opportune moment" rollout potion policy (STS_ROLLOUT_POTION_MODE=3). Picks at most
+// one held potion whose moment has arrived; consulted before every card-play decision, so
+// block / incoming damage / monster HP are re-evaluated as the turn unfolds (e.g. Fire Potion
+// fires only once attacks have brought a monster into kill range).
+bool search::SimpleAgent::chooseOpportunePotionAction(const BattleContext &bc, Action &outAction) {
+    const bool hasBark = bc.player.hasRelic<R::SACRED_BARK>();
+    const int incoming = getIncomingDamage(bc);
+    const int unblocked = std::max(0, incoming - bc.player.block);
+
+    for (int i = 0; i < bc.potionCapacity; ++i) {
+        const Potion p = bc.potions[i];
+        if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID) {
+            continue;
+        }
+
+        bool drink = false;
+        int target = 0;
+
+        switch (p) {
+            // --- defensive: spend against a big unblocked hit ---
+            case Potion::BLOCK_POTION:
+                drink = unblocked >= (hasBark ? 24 : 12);   // fully converts to prevented damage
+                break;
+            case Potion::GHOST_IN_A_JAR:
+                drink = incoming >= 18;                      // intangible negates a big turn
+                break;
+            case Potion::WEAK_POTION:
+                if (incoming >= 14) {
+                    target = getHighHpMonster(bc, randomize, rng);
+                    drink = target >= 0;
+                }
+                break;
+
+            // --- offensive: kill-confirm / amplify a sustained target ---
+            case Potion::FIRE_POTION: {
+                const int dmg = hasBark ? 40 : 20;
+                for (int m = 0; m < bc.monsters.monsterCount; ++m) {
+                    const auto &mon = bc.monsters.arr[m];
+                    if (mon.isTargetable() && mon.curHp > 0 && mon.curHp <= dmg) {
+                        target = m;
+                        drink = true;
+                        break;
+                    }
+                }
+                break;
+            }
+            case Potion::EXPLOSIVE_POTION: {
+                const int dmg = hasBark ? 20 : 10;
+                int kills = 0, alive = 0;
+                for (int m = 0; m < bc.monsters.monsterCount; ++m) {
+                    const auto &mon = bc.monsters.arr[m];
+                    if (!mon.isTargetable() || mon.curHp <= 0) continue;
+                    ++alive;
+                    if (mon.curHp <= dmg) ++kills;
+                }
+                drink = kills >= 2 || (kills >= 1 && kills == alive);  // clears the board / finishes it
+                break;
+            }
+            case Potion::FEAR_POTION:
+                target = getHighHpMonster(bc, randomize, rng);
+                drink = target >= 0 && bc.monsters.arr[target].curHp >= 40;  // worth amplifying
+                break;
+            case Potion::POISON_POTION:
+                target = getHighHpMonster(bc, randomize, rng);
+                drink = target >= 0 && bc.monsters.arr[target].curHp >= 30;  // ramp pays off; drink early
+                break;
+
+            // --- heal only when it won't overheal ---
+            case Potion::BLOOD_POTION: {
+                const int heal = static_cast<int>(bc.player.maxHp * (hasBark ? 40 : 20) / 100.0f);
+                drink = (bc.player.maxHp - bc.player.curHp) >= static_cast<int>(heal * 0.8);
+                break;
+            }
+
+            // --- no opportune moment: take it now (earlier = more value) ---
+            default:
+                if (potionRequiresTarget(p)) {
+                    target = getHighHpMonster(bc, randomize, rng);
+                    drink = target >= 0;
+                } else {
+                    drink = true;
+                }
+                break;
+        }
+
+        if (drink) {
+            outAction = search::Action(search::ActionType::POTION, i, target);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool search::SimpleAgent::choosePotionAction(const BattleContext &bc, Action &outAction) {
+    switch (rolloutPotionMode) {
+        case 1:
+            return isBossEncounter(bc.encounter)
+                   && chooseDumpPotionAction(bc, randomize, rng, outAction);
+        case 2:
+            return chooseDumpPotionAction(bc, randomize, rng, outAction);
+        case 3:
+            return chooseOpportunePotionAction(bc, outAction);
+        default:
+            return false;   // never: potions are left to the search tree
+    }
+}
+
+void search::SimpleAgent::playoutBattle(BattleContext &bc) {
+    // usedPotions starts false when this standalone playout should dump potions before playing
+    // cards (boss fights). The MCTS rollout's potion policy lives in choosePotionAction instead.
+    bool usedPotions = !isBossEncounter(bc.encounter);
     while (bc.outcome == Outcome::UNDECIDED) {
         if (bc.inputState == InputState::CARD_SELECT) {
             Action action = chooseBattleCardSelect(bc);
