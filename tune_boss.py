@@ -35,12 +35,23 @@ SPACE = {
     "turnSurvival":  (0.0, 2.0, False),
 }
 # categorical env knobs: name -> (env_var, [choices])
+# potion modes: 0 = never (rollout incumbent), 1 = dump at rollout start in boss fights,
+# 3 = heuristic opportune timing. (2 = always-dump is excluded: identical to 1 on boss-only sets.)
 ENV_SPACE = {
-    "potionMode": ("STS_ROLLOUT_POTION_MODE", [0, 1, 2]),
+    "potionMode": ("STS_ROLLOUT_POTION_MODE", [0, 1, 3]),
 }
 
-# current tuned best (rerandomize2) + boss potion default (auto)
-WARM_BEST = {
+# Warm start: best config from the round-1 study (boss_h2_b1000, 71 trials, never-drink rollouts).
+# Enqueued once per allowed potion mode so the mode head-to-head at the optimum runs first.
+WARM_OPTIMUM = {
+    "exploration": 6.875, "wideningC": 6.46, "wideningAlpha": 0.8495,
+    "winBonus": 27.6826, "potionWeight": 8.2564, "monsterDamage": 24.828,
+    "aliveWeight": 2.3223, "energyWaste": 1.2145, "turnSurvival": 1.3359,
+}
+
+# Pre-boss-tuning defaults (general-purpose tuned values), kept in the final validation table
+# as the baseline every candidate must beat on held-out.
+ORIG_DEFAULTS = {
     "exploration": 9.9, "wideningC": 4.6, "wideningAlpha": 0.37,
     "winBonus": 53.0, "potionWeight": 11.0, "monsterDamage": 37.0,
     "aliveWeight": 3.4, "energyWaste": 1.75, "turnSurvival": 1.5,
@@ -96,7 +107,7 @@ def main():
     ap.add_argument("--n-jobs", type=int, default=1, help="concurrent trials (each uses --threads)")
     ap.add_argument("--top-k", type=int, default=8)
     ap.add_argument("--storage", default="sqlite:///tune_boss.db")
-    ap.add_argument("--study-name", default="boss")
+    ap.add_argument("--study-name", default="boss_v2")
     ap.add_argument("--log", default="tune_boss_evals.csv")
     args = ap.parse_args()
 
@@ -125,10 +136,14 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=1, multivariate=True, n_startup_trials=20),
     )
     if len(study.trials) == 0:
-        study.enqueue_trial(WARM_BEST)
+        # One enqueue per allowed potion mode at the round-1 optimum: the mode head-to-head
+        # at the best-known params is evaluated before TPE takes over.
+        for mode in ENV_SPACE["potionMode"][1]:
+            study.enqueue_trial({**WARM_OPTIMUM, "potionMode": mode})
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-    done = len(study.trials)
+    # Only completed trials count toward the budget; enqueued-but-waiting ones still need to run.
+    done = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
 
     def cb(st, tr):
         b = st.best_trial
@@ -141,7 +156,9 @@ def main():
                    n_jobs=args.n_jobs, callbacks=[cb])
 
     print("\n=== search done; validating top candidates at full fidelity ===", flush=True)
-    seen = sorted(study.trials, key=lambda t: -(t.value if t.value is not None else -1e9))
+    completed = [t for t in study.trials
+                 if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None]
+    seen = sorted(completed, key=lambda t: -t.value)
     cands, keys = [], set()
     for t in seen:
         key = tuple(round(t.params[k], 4) for k in SPACE) + tuple(t.params[k] for k in ENV_SPACE)
@@ -151,7 +168,7 @@ def main():
         cands.append(dict(t.params))
         if len(cands) >= args.top_k:
             break
-    cands.append(dict(WARM_BEST))
+    cands.append(dict(ORIG_DEFAULTS))
 
     results = []
     for allp in cands:
@@ -165,7 +182,7 @@ def main():
             ho_mean, ho_win, _, _ = run_eval(
                 args.test_bin, args.holdout_file, args.threads, fp, ep,
                 args.valid_budget, args.valid_limit, logf)
-        tag = " (warm best)" if allp is WARM_BEST or allp == WARM_BEST else ""
+        tag = " (orig defaults)" if allp == ORIG_DEFAULTS else ""
         results.append((mean, winrate, ho_mean, ho_win, allp, tag))
         ho_str = f" | holdout mean={ho_mean:.3f} win={ho_win:.3f}" if ho_mean is not None else ""
         print(f"  dev mean={mean:8.3f} win={winrate:.3f} n={n}{ho_str}  "
