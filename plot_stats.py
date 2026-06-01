@@ -22,33 +22,28 @@ import numpy as np
 import glob
 import os
 
-# All lambda reward-shaping runs (rounds 1-4); glob auto-includes new ones as they finish.
-stats_files = sorted(glob.glob(
-    '/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results/shape_*.stats.jsonl'))
-# Append the in-flight hero run + its forks + the from-scratch GRPO runs so they appear in the
-# comparison panels alongside the shape_ runs. Forks branch off the hero: lr75 = lr halved
-# @ iter 140; e2 = num_epochs 4->2 @ iter 170. GRPO runs (critic-free RLOO) start from scratch,
-# so their iteration axis lines up with the from-scratch PPO runs; their value_loss /
-# explained_variance panels read 0 (no critic).
-# ppo_ent10/ppo_ent25: fresh from-scratch PPO (epochs=2) with a strong entropy bonus (coef 0.10
-# / 0.25), testing whether PPO can hold GRPO-like high entropy while still learning faster.
-for _p in ('hero.pt.stats.jsonl', 'herofork_lr75.pt.stats.jsonl', 'heroe2.pt.stats.jsonl',
-           'heroent.pt.stats.jsonl', 'grpo_a.pt.stats.jsonl', 'grpo_b.pt.stats.jsonl',
-           'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl'):
+# Current/relevant runs only (older experiments -- the shape_* upg-coefficient sweep, the hero
+# lr/entropy forks, the grpo_b variants -- are concluded; their stats remain in lambda_results/
+# if ever needed again):
+#   hero      PPO from-scratch baseline (v1: iters 1-99) + continuation (v2: 100-177)
+#   heroe2    PPO num_epochs=2 fork -- the best policy (0.706 @ 10k-sim eval), paused @ iter 270
+#   grpo_a    GRPO (critic-free RLOO), from scratch
+#   ppo_hient PPO epochs=2, entropy_coef 0.05 ┐
+#   ppo_ent10 PPO epochs=2, entropy_coef 0.10 ├ entropy bracket: can PPO hold GRPO-like entropy?
+#   ppo_ent25 PPO epochs=2, entropy_coef 0.25 ┘ (0.25 over-flattened; killed)
+stats_files = []
+for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl', 'grpo_a.pt.stats.jsonl',
+           'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl'):
     _fp = f'/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results/{_p}'
     if os.path.exists(_fp):
         stats_files.append(_fp)
-# (prior local PPO runs, if you want them instead:)
-# stats_files = ['/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/runs/ppo_4ep.pt.stats.jsonl']
 
 # Color palette for different runs
 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
 # Per-group color overrides (takes precedence over the palette). Use to highlight headline runs.
-GROUP_COLORS = {'hero': 'black', 'herofork_lr75': 'crimson', 'heroe2': 'darkorange',
-                'heroent': 'green', 'grpo_a': 'magenta', 'grpo_b': 'teal',
-                'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet'}
-GROUP_LW = {'hero': 2.8, 'herofork_lr75': 2.8, 'heroe2': 2.8, 'heroent': 2.8,
-            'grpo_a': 2.8, 'grpo_b': 2.8, 'ppo_ent10': 2.8, 'ppo_ent25': 2.8}   # headline runs
+GROUP_COLORS = {'hero': 'black', 'heroe2': 'darkorange', 'grpo_a': 'magenta',
+                'ppo_hient': 'royalblue', 'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet'}
+GROUP_LW = {k: 2.8 for k in GROUP_COLORS}   # all headline runs
 
 def load_run_data(filename):
     """Load data from a JSONL stats file"""
@@ -122,7 +117,7 @@ def _smooth(y, alpha=SMOOTH_ALPHA):
 
 # Replicate runs (same config, different init) share one color and are AVERAGED into a single
 # bold smoothed line; each replicate's raw line is still drawn faint. Map replicate -> base.
-REPLICATE_OF = {'baseline2': 'baseline', 'upg3b': 'upg3', 'upg5b': 'upg5'}
+REPLICATE_OF = {}  # (was used by the shape_* sweep replicates; none of the current runs replicate)
 
 from collections import OrderedDict, defaultdict
 groups = OrderedDict()
@@ -292,173 +287,6 @@ if len(runs) > 1:
 plt.tight_layout()
 plt.show()
 
-# %% [markdown]
-# ## Dose-response: upgrade-shaping coefficient
-
-# %%
-# Upgrade-shaping coefficient per run label. baseline = 0; upgN denotes the coef applied.
-UPG_DOSE = {
-    'baseline': 0.0,
-    'upg3':     0.021,
-    'upg5':     0.035,
-    'upg10':    0.07,
-    'upg20':    0.14,
-    'upg40':    0.28,
-}
-# Runs that didn't complete the full 100 iters (e.g. upg20 crashed at 60).
-PARTIAL_RUNS = {'upg20'}
-
-# Build {dose: [member runs]} by merging replicates (REPLICATE_OF) and keeping only labels in UPG_DOSE.
-dose_groups = defaultdict(list)
-for run in runs:
-    base = REPLICATE_OF.get(run['label'], run['label'])
-    if base in UPG_DOSE:
-        dose_groups[base].append(run)
-
-def _last10_stats(members, field):
-    """For each member, take its last 10 iter values for `field`; average mean/std across members."""
-    means, stds, ns = [], [], []
-    for m in members:
-        ys = np.asarray(m[field], dtype=float)
-        ys = ys[~np.isnan(ys)]
-        if len(ys) == 0:
-            continue
-        tail = ys[-10:]
-        means.append(np.mean(tail))
-        stds.append(np.std(tail))
-        ns.append(len(tail))
-    if not means:
-        return np.nan, np.nan, 0
-    # Mean-of-means across replicates; pool std as mean of replicate stds (good enough for error bars).
-    return float(np.mean(means)), float(np.mean(stds)), int(np.mean(ns))
-
-rows = []  # (label, dose, partial, win_mean, win_std, floor_mean, floor_std, n_iters)
-for label, dose in sorted(UPG_DOSE.items(), key=lambda kv: kv[1]):
-    members = dose_groups.get(label, [])
-    if not members:
-        continue
-    wm, ws, n = _last10_stats(members, 'win_rates')
-    fm, fs, _ = _last10_stats(members, 'avg_floors')
-    rows.append((label, dose, label in PARTIAL_RUNS, wm, ws, fm, fs, n))
-
-# Print a numeric table so the values are at hand even without the figure.
-print('\nDose-response (last-10-iter means, averaged over replicates):')
-print(f"{'label':<10}{'coef':>8}{'partial':>9}{'win_mean':>10}{'win_std':>9}"
-      f"{'floor_mean':>12}{'floor_std':>10}{'n':>4}")
-for label, dose, partial, wm, ws, fm, fs, n in rows:
-    print(f"{label:<10}{dose:>8.3f}{str(partial):>9}{wm:>10.4f}{ws:>9.4f}"
-          f"{fm:>12.4f}{fs:>10.4f}{n:>4}")
-
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
-def _plot_dose(ax, which, ylabel, title):
-    """which: 'w' for win-rate, 'f' for avg-floor."""
-    full_x, full_y, full_e = [], [], []
-    part_x, part_y, part_e, part_lbl = [], [], [], []
-    for label, dose, partial, wm, ws, fm, fs, n in rows:
-        ym = wm if which == 'w' else fm
-        ye = ws if which == 'w' else fs
-        if np.isnan(ym):
-            continue
-        if partial:
-            part_x.append(dose); part_y.append(ym); part_e.append(ye); part_lbl.append((label, n))
-        else:
-            full_x.append(dose); full_y.append(ym); full_e.append(ye)
-    # Connect all points (full + partial) sorted by dose to show the curve shape.
-    all_pts = sorted(list(zip(full_x, full_y)) + list(zip(part_x, part_y)))
-    if all_pts:
-        ax.plot([p[0] for p in all_pts], [p[1] for p in all_pts],
-                color='steelblue', alpha=0.5, linewidth=1.2, zorder=1)
-    ax.errorbar(full_x, full_y, yerr=full_e, fmt='o', color='steelblue',
-                markersize=8, capsize=4, label='completed (100 iters)', zorder=2)
-    if part_x:
-        ax.errorbar(part_x, part_y, yerr=part_e, fmt='o', mfc='none', mec='steelblue',
-                    color='steelblue', markersize=10, capsize=4,
-                    label='partial', zorder=3)
-        for x, y, (lbl, n) in zip(part_x, part_y, part_lbl):
-            ax.annotate(f'{lbl} (partial, {n} iters)', xy=(x, y),
-                        xytext=(6, 6), textcoords='offset points', fontsize=8)
-    # Label each completed point with its run name for quick reference.
-    for label, dose, partial, wm, ws, fm, fs, n in rows:
-        ym = wm if which == 'w' else fm
-        if np.isnan(ym) or partial:
-            continue
-        ax.annotate(label, xy=(dose, ym), xytext=(6, -10),
-                    textcoords='offset points', fontsize=8, color='gray')
-    ax.set_xlabel('Upgrade-shaping coefficient')
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, loc='best')
-
-_plot_dose(ax1, 'w', 'Win rate (last 10 iters)', 'Dose-response: win rate')
-_plot_dose(ax2, 'f', 'Avg floor (last 10 iters)', 'Dose-response: avg floor')
-
-plt.tight_layout()
-plt.show()
-
-# %% [markdown]
-# ## Hero run (24h, full lambda box, upg5 shaping)
-
-# %%
-# Single-curve view of the headline run; vertical lines mark hyperparam interventions.
-# Each entry: (iter_at_change, label_for_annotation). Append new ones here when adjustments land.
-HERO_INTERVENTIONS = [
-    (100, 'lr/2, workers 20->30, games 192->512, compile on'),
-    (140, 'fork lr75: lr 1.5e-5->7.5e-6 (crimson)'),
-    (170, 'forks @170: e2 num_epochs 4->2 (orange), ent coef 0.01->0.003 (green)'),
-]
-hero_file = '/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results/hero.pt.stats.jsonl'
-hero = load_run_data(hero_file)
-# Forks branched off the hero (lr/2 @ iter 140, num_epochs->2 @ iter 170); overlay each on
-# every hero panel. (label, file, color)
-_FORKS = [
-    ('fork lr/2', 'herofork_lr75.pt.stats.jsonl', 'crimson'),
-    ('fork e2',   'heroe2.pt.stats.jsonl',        'darkorange'),
-    ('fork ent',  'heroent.pt.stats.jsonl',       'green'),
-]
-forks = [(lbl, load_run_data(f'/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results/{fn}'), c)
-         for lbl, fn, c in _FORKS]
-if hero is not None:
-    print(f"hero: {len(hero['iterations'])} iters, last win={hero['win_rates'][-1]:.3f} "
-          f"floor={hero['avg_floors'][-1]:.2f}")
-    for lbl, fk, _ in forks:
-        if fk is not None:
-            print(f"{lbl}: {len(fk['iterations'])} iters, last win={fk['win_rates'][-1]:.3f} "
-                  f"floor={fk['avg_floors'][-1]:.2f}")
-
-    def _hero_plot(ax, field, ylabel, title, ylim=None):
-        x, y = hero['iterations'], hero[field]
-        ax.plot(x, y, color='steelblue', alpha=0.18, linewidth=1, label='raw')
-        ax.plot(x, _smooth(y), color='steelblue', linewidth=2, label=f'hero EMA α={SMOOTH_ALPHA}')
-        for lbl, fk, c in forks:
-            if fk is not None and field in fk:
-                fx, fy = fk['iterations'], fk[field]
-                ax.plot(fx, fy, color=c, alpha=0.18, linewidth=1)
-                ax.plot(fx, _smooth(fy), color=c, linewidth=2, label=f'{lbl} EMA')
-        for it, lbl in HERO_INTERVENTIONS:
-            ax.axvline(it, color='black', linewidth=0.8, linestyle='--', alpha=0.6)
-            ax.annotate(lbl, xy=(it, ax.get_ylim()[1]), xytext=(3, -10),
-                        textcoords='offset points', fontsize=7, color='black')
-        ax.set_xlabel('Iteration'); ax.set_ylabel(ylabel)
-        ax.set_title(title); ax.grid(True, alpha=0.3)
-        if ylim is not None:
-            ax.set_ylim(*ylim)
-        ax.legend(fontsize=7, loc='best')
-
-    fig, axes = plt.subplots(2, 3, figsize=(18, 9))
-    _hero_plot(axes[0][0], 'win_rates',          'Win rate', 'Hero — Win rate')
-    _hero_plot(axes[0][1], 'avg_floors',         'Avg floor', 'Hero — Avg floor')
-    _hero_plot(axes[0][2], 'avg_rewards',        'Avg reward', 'Hero — Avg reward')
-    _hero_plot(axes[1][0], 'kl_divs',            'KL', 'Hero — KL divergence')
-    _hero_plot(axes[1][1], 'grad_norms',         'Grad norm', 'Hero — Grad norm')
-    _hero_plot(axes[1][2], 'explained_variances', 'Explained variance',
-               'Hero — Value explained variance', ylim=(None, 1.0))
-    plt.tight_layout()
-    plt.show()
-else:
-    print(f"hero stats file not found yet: {hero_file}")
-
 # %%
 # From-scratch GRPO vs from-scratch PPO at matched WALL TIME (the fair learning-speed view —
 # the iteration axis hides that the algorithms do different amounts of work per iteration).
@@ -466,9 +294,9 @@ else:
 # GRPO runs share the box with each other (16 of 30 workers each) while hero v1 had it alone
 # (20 workers), so GRPO wall times are inflated by contention.
 _LR = '/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results'
+hero_file = f'{_LR}/hero.pt.stats.jsonl'
 GRPO_RUNS = [
     ('grpo_a (RLOO, lr 1e-4)', f'{_LR}/grpo_a.pt.stats.jsonl', 'magenta'),
-    ('grpo_b (RLOO, lr 3e-4)', f'{_LR}/grpo_b.pt.stats.jsonl', 'teal'),
 ]
 
 def _wall_hours(run, max_iter=None):
@@ -518,8 +346,8 @@ else:
 # Effective entropy/return exchange rate per run, in RAW-return units (the axis the plot uses):
 #   GRPO uses raw advantages          -> effective coef = entropy_coef
 #   PPO normalizes advantages by std  -> effective coef = entropy_coef * adv_norm_std
-ENTROPY_COEF = {'grpo_a': 0.01, 'grpo_b': 0.01, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25}
-PPO_NORMALIZED = {'ppo_ent10', 'ppo_ent25'}  # divide advantages by the (logged) adv_norm_std
+ENTROPY_COEF = {'grpo_a': 0.01, 'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25}
+PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25'}  # divide advantages by the (logged) adv_norm_std
 
 def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     """unit_scale: indifference slope is annotated per (unit_scale of x), e.g. 0.01 win rate."""
