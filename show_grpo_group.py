@@ -21,6 +21,8 @@ def main():
     ap.add_argument('--group-size', type=int, default=4)
     ap.add_argument('--mcts-sims', type=int, default=1000)
     ap.add_argument('--num-workers', type=int, default=4)
+    ap.add_argument('--lowhp-coef', type=float, default=0.0,
+                    help='low-HP-after-battle penalty (the tiebreaker); 0 = off')
     args = ap.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -36,7 +38,7 @@ def main():
         algo='grpo', group_size=args.group_size,
         mcts_simulations=args.mcts_sims,
         mcts_exploration=6.57, mcts_widening_c=3.14, mcts_widening_alpha=0.97,
-        shaping_upg_coef=0.035, shaping_offset=0.307,
+        shaping_upg_coef=0.035, shaping_offset=0.307, shaping_lowhp_coef=args.lowhp_coef,
         num_workers=args.num_workers, num_games_per_step=args.group_size,
         battle_timeout=120,
     )
