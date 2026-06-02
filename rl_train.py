@@ -144,11 +144,15 @@ class TrainConfig:
     gae_lambda: float = 0.97
     adv_norm_decay: float = 5e-4  # per-item EWMA decay for advantage mean/std (batch retains (1-decay)^N; 1.0 = current batch only)
 
-    # MCTS battle search (per-episode agent knobs)
+    # MCTS battle search (per-episode agent knobs). exploration/widening default to None =
+    # inherit the engine's SearchAgent defaults, which are a JOINTLY-tuned set (exploration,
+    # general + boss-gated widening, eval weights). Overriding part of that set yields a
+    # mixed-era config that was never validated and measurably hurts win rate -- only set
+    # these explicitly together with matching eval weights.
     mcts_simulations: int = 1000
-    mcts_exploration: float = 3 * 2 ** 0.5  # ~4.2426 engine default; tuned ~6.5
-    mcts_widening_c: float = 1.0            # tuned ~3.1
-    mcts_widening_alpha: float = 0.5        # tuned ~0.97
+    mcts_exploration: Optional[float] = None
+    mcts_widening_c: Optional[float] = None
+    mcts_widening_alpha: Optional[float] = None
 
     # Reward shaping (potential-based). We extend the existing telescoping potential
     # Phi(s) with shape(s) = shaping_hp_coef*(cur_hp/max_hp) + shaping_upg_coef*num_upgraded.
@@ -298,10 +302,14 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
     
     agent = sts.Agent()
     agent.simulation_count_base = config.mcts_simulations
-    agent.verbosity_level = 0  # silence per-action battle prints (keep ppo_train's own stdout)
-    agent.exploration_parameter = config.mcts_exploration
-    agent.chance_widening_c = config.mcts_widening_c
-    agent.chance_widening_alpha = config.mcts_widening_alpha
+    agent.verbosity_level = 0  # silence per-action battle prints (keep rl_train's own stdout)
+    # None = leave the engine's jointly-tuned search defaults in place (see TrainConfig).
+    if config.mcts_exploration is not None:
+        agent.exploration_parameter = config.mcts_exploration
+    if config.mcts_widening_c is not None:
+        agent.chance_widening_c = config.mcts_widening_c
+    if config.mcts_widening_alpha is not None:
+        agent.chance_widening_alpha = config.mcts_widening_alpha
     experiences = []
     values = []  # Collect values separately
 

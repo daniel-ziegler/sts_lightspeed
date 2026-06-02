@@ -57,9 +57,8 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
     agent = sts.Agent()
     agent.simulation_count_base = sim_count
     agent.verbosity_level = 0
-    agent.exploration_parameter = 6.57
-    agent.chance_widening_c = 3.14
-    agent.chance_widening_alpha = 0.97
+    # exploration/widening left at the engine's jointly-tuned SearchAgent defaults
+    # (knobs + eval weights are a coupled set; partial overrides are unvalidated).
     agent.record_actions = True
 
     stream: list[int] = []          # mixed GameAction / search::Action bits, in order

@@ -42,13 +42,12 @@ def main():
     net = load_network_backward_compatible(net, state)
     net.eval()
 
-    # TrainConfig with eval knobs. Shaping coefs zero -> reward (and the rewards we ignore) match
-    # plain victory/progress signal. inf_batch_size defaults are fine.
+    # TrainConfig with eval knobs. Search exploration/widening are left unset so battles use the
+    # engine's jointly-tuned SearchAgent defaults (knobs + eval weights are a coupled set).
+    # Shaping coefs zero -> reward (and the rewards we ignore) match plain victory/progress
+    # signal. inf_batch_size defaults are fine.
     config = TrainConfig(
         mcts_simulations=args.mcts_sims,
-        mcts_exploration=6.57,
-        mcts_widening_c=3.14,
-        mcts_widening_alpha=0.97,
         shaping_hp_coef=0.0, shaping_upg_coef=0.0,
         shaping_offset=0.0, shaping_relic_coef=0.0, shaping_maxhp_coef=0.0,
         num_workers=args.num_workers,
