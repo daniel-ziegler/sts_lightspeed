@@ -161,6 +161,9 @@ class TrainConfig:
     mcts_exploration: Optional[float] = None
     mcts_widening_c: Optional[float] = None
     mcts_widening_alpha: Optional[float] = None
+    mcts_boss_widening_c: Optional[float] = None      # None = engine's boss-gated default
+    mcts_boss_widening_alpha: Optional[float] = None
+    log_battle_outcomes: bool = False                 # attach per-battle snapshots to trajectories
 
     # Reward shaping (potential-based). We extend the existing telescoping potential
     # Phi(s) with shape(s) = shaping_hp_coef*(cur_hp/max_hp) + shaping_upg_coef*num_upgraded.
@@ -226,6 +229,7 @@ class Trajectory(NamedTuple):
     final_metrics: GameMetrics  # Complete final game state metrics
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
+    battle_log: list = []  # per-battle BattleSnapshots (when config.log_battle_outcomes)
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -318,6 +322,12 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         agent.chance_widening_c = config.mcts_widening_c
     if config.mcts_widening_alpha is not None:
         agent.chance_widening_alpha = config.mcts_widening_alpha
+    if config.mcts_boss_widening_c is not None:
+        agent.boss_chance_widening_c = config.mcts_boss_widening_c
+    if config.mcts_boss_widening_alpha is not None:
+        agent.boss_chance_widening_alpha = config.mcts_boss_widening_alpha
+    if config.log_battle_outcomes:
+        agent.log_battle_outcomes = True
     experiences = []
     values = []  # Collect values separately
 
@@ -480,6 +490,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_metrics=final_metrics,
         final_deck=list(gc.deck),
         final_relics=list(gc.relics),
+        battle_log=list(agent.battle_log) if config.log_battle_outcomes else [],
     )
 
 
