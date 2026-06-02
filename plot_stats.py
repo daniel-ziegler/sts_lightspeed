@@ -84,6 +84,8 @@ def load_run_data(filename):
         'clipfracs': np.array([d.get('clipfrac', np.nan) for d in data]),
         'explained_variances': np.array([d.get('explained_variance', np.nan) for d in data]),
         'adv_norm_stds': np.array([d.get('adv_norm_std', np.nan) for d in data]),
+        'num_experiences': np.array([d.get('num_experiences', np.nan) for d in data]),
+        'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
     }
 
 # Load all runs
@@ -371,12 +373,24 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
         if gkey not in ENTROPY_COEF:
             continue
         coef = ENTROPY_COEF[gkey]
-        if gkey in PPO_NORMALIZED:  # raw-unit coef = entropy_coef * latest adv_norm_std
+        if gkey in PPO_NORMALIZED:  # PPO divides advantages by the (logged) EWMA std
             _, stds = _avg_over_iters(members, 'adv_norm_stds')
             stds = stds[~np.isnan(stds)]
             if stds.size == 0:
                 continue
             coef = coef * stds[-1]
+        # Per-trajectory decision count N: the loss is a per-DECISION mean, but the return
+        # gradient aggregates over a trajectory's ~N decisions (policy gradient theorem:
+        # grad E[R] = E[sum_t A_t grad log pi_t]), while the entropy term is genuinely
+        # per-decision. So the effective entropy weight in trajectory-return units is
+        # coef * N (times adv_norm_std for PPO). Forgetting N makes the lines ~30-40x too steep.
+        _, nexp = _avg_over_iters(members, 'num_experiences')
+        _, ntraj = _avg_over_iters(members, 'num_trajectories')
+        okn = ~(np.isnan(nexp) | np.isnan(ntraj)) & (ntraj > 0)
+        if okn.sum() == 0:
+            continue
+        n_per_traj = float(np.mean(nexp[okn] / ntraj[okn]))
+        coef = coef * n_per_traj
         color = _gcolor(gi, gkey)
         _, xv = _avg_over_iters(members, xfield)
         _, rw = _avg_over_iters(members, 'avg_rewards')
