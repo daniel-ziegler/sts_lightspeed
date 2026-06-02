@@ -205,6 +205,10 @@ class GameMetrics:
     num_upgraded: int  # count of upgraded cards in deck (for reward shaping)
     num_relics: int    # count of relics held (for reward shaping)
     outcome: sts.GameOutcome
+    # MonsterEncounter id of the most recent battle (INVALID=0 before the first one). In episode
+    # dumps this enables per-encounter battle-outcome stats: the HP change across the rows where
+    # the id flips measures what each fight cost.
+    encounter: int = 0
 
 class Experience(NamedTuple):
     """Single step of experience from a game."""
@@ -399,6 +403,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                             num_upgraded=sum(1 for card in gc.deck if card.upgraded),
                             num_relics=len(gc.relics),
                             outcome=gc.outcome,
+                            encounter=int(gc.encounter),
                         )
 
                         # Store experience data before action execution
@@ -456,6 +461,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         num_upgraded=sum(1 for card in gc.deck if card.upgraded),
         num_relics=len(gc.relics),
         outcome=gc.outcome,
+        encounter=int(gc.encounter),
     )
     
     # Per-step rewards = deltas of the (base + potential-based shaping) potential.
@@ -663,6 +669,7 @@ def save_episodes(experiences: List[Experience], advantages: List[float], return
             'outcome': m['outcome'],
             'seed': m['seed'],
             'final_floor': m['final_floor'],
+            'encounter': exp.metrics.encounter,  # most recent battle at this decision (0 = none yet)
             'pstrike_count': sum(1 for cid in exp.choice.obs.deck.cards if cid == int(sts.CardId.PERFECTED_STRIKE)),
             'reward': m['reward'],
             'value': m['value'],
