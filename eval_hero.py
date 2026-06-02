@@ -32,6 +32,9 @@ def main():
     ap.add_argument('--out-csv', default='runs/eval_hero.csv')
     ap.add_argument('--boss-widening', choices=['on', 'off'], default='on',
                     help="off forces boss fights to the general widening (A/B control arm)")
+    ap.add_argument('--legacy-config', action='store_true',
+                    help='use the pre-tuning coupled search config (exploration 4.24, widening '
+                         '1.0/0.5 incl. boss, old eval weights) instead of the engine defaults')
     ap.add_argument('--battle-csv', default=None,
                     help='also write one row per battle (boss analysis) to this path')
     args = ap.parse_args()
@@ -50,12 +53,23 @@ def main():
     # engine's jointly-tuned SearchAgent defaults (knobs + eval weights are a coupled set).
     # Shaping coefs zero -> reward (and the rewards we ignore) match plain victory/progress
     # signal. inf_batch_size defaults are fine.
+    # The pre-tuning coupled era: engine-default knobs of the old engine + old eval weights,
+    # no boss specialization. Overrides --boss-widening (the legacy era has a single widening).
+    legacy = dict(
+        mcts_exploration=3 * 2 ** 0.5,
+        mcts_widening_c=1.0, mcts_widening_alpha=0.5,
+        mcts_boss_widening_c=1.0, mcts_boss_widening_alpha=0.5,
+        mcts_win_bonus=100.0, mcts_potion_weight=10.0, mcts_victory_turn_penalty=0.01,
+        mcts_monster_damage_weight=10.0, mcts_alive_weight=1.0,
+        mcts_energy_waste_weight=0.2, mcts_draw_weight=0.03, mcts_turn_survival_weight=0.2,
+    ) if args.legacy_config else {}
+    if not args.legacy_config and args.boss_widening == 'off':
+        # pin boss widening to the general tuned values (engine default is the boss-gated set)
+        legacy = dict(mcts_boss_widening_c=4.6, mcts_boss_widening_alpha=0.37)
     config = TrainConfig(
         mcts_simulations=args.mcts_sims,
-        # 'off' pins boss widening to the general tuned values (engine default is the boss-gated set)
-        mcts_boss_widening_c=None if args.boss_widening == 'on' else 4.6,
-        mcts_boss_widening_alpha=None if args.boss_widening == 'on' else 0.37,
         log_battle_outcomes=args.battle_csv is not None,
+        **legacy,
         shaping_hp_coef=0.0, shaping_upg_coef=0.0,
         shaping_offset=0.0, shaping_relic_coef=0.0, shaping_maxhp_coef=0.0,
         num_workers=args.num_workers,
