@@ -34,7 +34,7 @@ import os
 stats_files = []
 for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl', 'grpo_a.pt.stats.jsonl',
            'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl'):
-    _fp = f'/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results/{_p}'
+    _fp = f'lambda_results/{_p}'
     if os.path.exists(_fp):
         stats_files.append(_fp)
 
@@ -295,7 +295,7 @@ plt.show()
 # PPO baseline = hero v1 (iters 1-99, before the iter-100 hyperparameter change). Caveat: the
 # GRPO runs share the box with each other (16 of 30 workers each) while hero v1 had it alone
 # (20 workers), so GRPO wall times are inflated by contention.
-_LR = '/home/dmz/osrc/sts_lightspeed.rl-ppo-fixes/lambda_results'
+_LR = 'lambda_results'
 hero_file = f'{_LR}/hero.pt.stats.jsonl'
 GRPO_RUNS = [
     ('grpo_a (RLOO, lr 1e-4)', f'{_LR}/grpo_a.pt.stats.jsonl', 'magenta'),
