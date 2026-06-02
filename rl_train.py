@@ -31,7 +31,7 @@ from network import NN, ModelHP, move_to_device, process_batch, choice_space, co
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
-    PPOAlgorithm, GRPOAlgorithm,
+    PPOAlgorithm,
 )
 import slaythespire as sts
 
@@ -117,9 +117,7 @@ class RunningMoments:
 class TrainConfig:
     """Training hyperparameters (shared across algorithms)."""
     # Algorithm selection
-    algo: str = "ppo"               # {ppo, grpo}
-    group_size: int = 8             # GRPO: trajectories per group (same map seed)
-    num_groups: int = 0             # GRPO: groups per iter (0 => num_games_per_step // group_size)
+    algo: str = "ppo"               # {ppo}
     sampling_temperature: float = 1.0  # action-sampling softmax temperature during collection
 
     # Environment settings
@@ -165,11 +163,6 @@ class TrainConfig:
     shaping_relic_coef: float = 0.0   # per relic held
     shaping_maxhp_coef: float = 0.0   # per max-HP point
     shaping_offset: float = 0.0
-    # Genuine (non-telescoping) penalty for being low on HP after a battle: charged once per
-    # damage event when post-event HP < 30% of max, scaling linearly from 0 at 30% to this coef
-    # at 0 HP. Unlike the potential terms above it changes the trajectory ranking -- a tiebreaker
-    # that rewards safer wins (e.g. for GRPO groups where everyone wins). Default 0 = off.
-    shaping_lowhp_coef: float = 0.0
 
     # Per-battle MCTS wall-clock budget (seconds). Sized for the default 1000 sims; raise it
     # when running with many more simulations so long boss fights aren't cut off mid-search.
@@ -221,7 +214,6 @@ class Trajectory(NamedTuple):
     final_metrics: GameMetrics  # Complete final game state metrics
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
-    group_id: int = -1  # trajectories sharing a group_id form one group (GRPO/RLOO baseline)
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -255,8 +247,6 @@ def compute_shaped_rewards(
     offset: float,
     relic_coef: float = 0.0,
     maxhp_coef: float = 0.0,
-    lowhp_coef: float = 0.0,
-    lowhp_thresh: float = 0.30,
 ) -> Tuple[List[float], float]:
     """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
 
@@ -283,31 +273,16 @@ def compute_shaped_rewards(
     shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
     total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
     rewards = [total_vals[i + 1] - total_vals[i] for i in range(len(step_metrics))]
-
-    # Low-HP penalty (NON-telescoping, on top of the potential deltas above): after each damage
-    # event -- a decision whose HP dropped vs the previous one, i.e. a battle/event just dealt
-    # damage -- charge a cost if the post-event HP fraction is below lowhp_thresh, scaling
-    # linearly from 0 at the threshold to lowhp_coef at 0 HP. Once per damage event (a decision at
-    # unchanged low HP is not re-charged), so it accumulates across a dangerous run but stays ~0
-    # for a clean one. Genuinely shifts the return -> ranks safer wins above riskier ones.
-    if lowhp_coef > 0.0:
-        prev_hp = None
-        for i, m in enumerate(step_metrics):
-            frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
-            if prev_hp is not None and m.cur_hp < prev_hp and frac < lowhp_thresh:
-                rewards[i] -= lowhp_coef * (lowhp_thresh - frac) / lowhp_thresh
-            prev_hp = m.cur_hp
-
     return rewards, base_vals[-1]
 
 
 def run_episode(seed: int, service: NNService, reward_fn, battle_executor, config: TrainConfig,
-                sample_seed: Optional[int] = None, group_id: int = -1) -> Trajectory:
+                sample_seed: Optional[int] = None) -> Trajectory:
     """Run a complete game episode and collect experience.
 
     `seed` is the game/map seed (-> C++ GameContext, fixes the map/card RNG). `sample_seed`
-    seeds the action-sampling RNG and defaults to `seed`; decoupling them lets GRPO draw a group
-    of divergent trajectories from the SAME map. `group_id` tags the trajectory's group."""
+    seeds the action-sampling RNG and defaults to `seed`; decoupling them lets replicates
+    draw divergent trajectories from the SAME map."""
     if sample_seed is None:
         sample_seed = seed
     # PPO_LOG_SEEDS=1 prints per-episode seed bookends to isolate which seed crashes
@@ -377,9 +352,9 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                             value = 0.0
                         
                         # Convert to probabilities and sample action. sampling_temperature>1
-                        # widens the distribution (more diverse trajectories, e.g. for GRPO
-                        # groups); the stored log_prob is of the tempered behavior policy actually
-                        # sampled from. Default 1.0 is a no-op.
+                        # widens the distribution (more diverse trajectories); the stored
+                        # log_prob is of the tempered behavior policy actually sampled from.
+                        # Default 1.0 is a no-op.
                         logits_tensor = torch.tensor(logits)
                         if config.sampling_temperature != 1.0:
                             logits_tensor = logits_tensor / config.sampling_temperature
@@ -472,7 +447,6 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         [e.metrics for e in experiences], final_metrics, reward_fn,
         config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
         relic_coef=config.shaping_relic_coef, maxhp_coef=config.shaping_maxhp_coef,
-        lowhp_coef=config.shaping_lowhp_coef,
     )
     
     # Add terminal state value (0.0) for GAE bootstrap
@@ -490,17 +464,16 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_metrics=final_metrics,
         final_deck=list(gc.deck),
         final_relics=list(gc.relics),
-        group_id=group_id,
     )
 
 
 def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs) -> List[Trajectory]:
-    """Collect experience for a list of CollectionJob (game_seed, sample_seed, group_id)."""
+    """Collect experience for a list of CollectionJob (game_seed, sample_seed)."""
     trajectories = []
 
     def _run(job):
         return run_episode(job.game_seed, service, reward_fn, battle_executor, config,
-                           sample_seed=job.sample_seed, group_id=job.group_id)
+                           sample_seed=job.sample_seed)
 
     if config.num_workers == 1:
         # Single-threaded execution for easier debugging (deterministic completion order)
@@ -824,8 +797,8 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
 
             # Backward + grad clip + step (shared across algorithms).
             total_loss.backward()
-            # Per-group grad norms (pre-clip): param_groups[0]=policy/trunk, [1]=value head (PPO
-            # single-net). GRPO has no value head -> one param group, so guard the second.
+            # Per-group grad norms (pre-clip): param_groups[0]=policy/trunk, [1]=value head
+            # (single-net). Critic-free algos have one param group, so guard the second.
             pg0 = [p.grad.norm() for p in optimizer.param_groups[0]['params'] if p.grad is not None]
             pg1 = ([p.grad.norm() for p in optimizer.param_groups[1]['params'] if p.grad is not None]
                    if len(optimizer.param_groups) > 1 else [])
@@ -1023,7 +996,7 @@ def main():
     print(f"Using reward function: {args.reward_function}")
 
     # Algorithm strategy (collection plan + advantage estimation + per-batch loss).
-    _ALGOS = {"ppo": PPOAlgorithm, "grpo": GRPOAlgorithm}
+    _ALGOS = {"ppo": PPOAlgorithm}
     if config.algo not in _ALGOS:
         raise ValueError(f"Unknown --algo {config.algo!r}; choose from {sorted(_ALGOS)}")
     algo = _ALGOS[config.algo]()
@@ -1089,7 +1062,7 @@ def main():
         nets = (policy_net, value_net)
         print("Using separate policy and value networks with combined wrapper")
     else:
-        # Create single network; value head only if the algorithm uses a critic (PPO yes, GRPO no)
+        # Create single network; value head only if the algorithm uses a critic
         single_hp_kwargs = {k: v for k, v in model_hp_kwargs.items()}
         single_hp_kwargs['use_value_head'] = algo.requires_value_head
         model_hp = ModelHP(**single_hp_kwargs)
@@ -1121,7 +1094,7 @@ def main():
                 {'params': value_params, 'lr': config.value_lr},
             ], weight_decay=config.weight_decay)
         else:
-            # Critic-free (GRPO): a single param group at policy_lr (no value head to split out).
+            # Critic-free algorithm: a single param group at policy_lr (no value head to split out).
             optimizer = torch.optim.AdamW(net.parameters(), lr=config.policy_lr,
                                           weight_decay=config.weight_decay)
         
@@ -1234,7 +1207,7 @@ def main():
                 # EWMA std used to normalize PPO advantages. Logged so the effective
                 # return-vs-entropy exchange rate (entropy_coef * adv_norm_std) is recoverable,
                 # e.g. for objective-indifference lines in plots. Meaningless for critic-free
-                # algos (GRPO leaves advantages raw and never updates adv_norm).
+                # algos that leave advantages raw and never update adv_norm.
                 'adv_norm_std': float(adv_norm.std),
             }
             
