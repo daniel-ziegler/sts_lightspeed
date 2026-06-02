@@ -164,6 +164,7 @@ class TrainConfig:
     mcts_boss_widening_c: Optional[float] = None      # None = engine's boss-gated default
     mcts_boss_widening_alpha: Optional[float] = None
     log_battle_outcomes: bool = False                 # attach per-battle snapshots to trajectories
+    record_boss_states: bool = False                  # attach replayable pre-boss-battle action prefixes
     # Battle-search eval weights (None = engine's jointly-tuned defaults). Like the search knobs,
     # these are a coupled set -- override all of them together or none.
     mcts_win_bonus: Optional[float] = None
@@ -240,6 +241,7 @@ class Trajectory(NamedTuple):
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
     battle_log: list = []  # per-battle BattleSnapshots (when config.log_battle_outcomes)
+    boss_state_records: list = []  # (floor, prefix_bits) per boss battle (when config.record_boss_states)
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -338,6 +340,13 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         agent.boss_chance_widening_alpha = config.mcts_boss_widening_alpha
     if config.log_battle_outcomes:
         agent.log_battle_outcomes = True
+    # Pre-boss-state recording: the mixed action stream (out-of-combat GameAction bits +
+    # in-battle search::Action bits) up to each boss battle, replayable by eval_states'
+    # loadPreBattleState. _rec is None when recording is off.
+    _rec = [] if config.record_boss_states else None
+    _boss_records = []
+    if config.record_boss_states:
+        agent.record_actions = True
     _ew_overrides = [
         ('win_bonus', config.mcts_win_bonus),
         ('potion_weight', config.mcts_potion_weight),
@@ -364,6 +373,10 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
             if gc.screen_state == sts.ScreenState.BATTLE:
                 if _log_steps:
                     print(f"  [seed {seed}] BATTLE playout start floor={gc.floor_num}", flush=True)
+                if _rec is not None:
+                    _pre_bits = len(agent.game_action_history)
+                    if gc.cur_room == sts.Room.BOSS:
+                        _boss_records.append((gc.floor_num, list(_rec)))
                 # Use MCTS agent for battles in background thread
                 future = battle_executor.submit(agent.playout_battle, gc)
                 
@@ -372,6 +385,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                     # concurrent.futures.TimeoutError, which is a distinct class from the
                     # builtin TimeoutError before Python 3.11 -- catch the right one.
                     future.result(timeout=config.battle_timeout)
+                    if _rec is not None:
+                        _rec.extend(int(x) for x in agent.game_action_history[_pre_bits:])
                 except FuturesTimeoutError:
                     log.warning(f"Battle simulation timed out for seed {seed}. Background thread will continue running.")
                     # End the episode. The outcome will be UNDECIDED.
@@ -451,6 +466,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                         if _log_steps:
                             print(f"  [seed {seed}] EXEC (model) floor={gc.floor_num} action={action_desc}", flush=True)
                         action.execute(gc)
+                        if _rec is not None:
+                            _rec.append(int(action.bits))
                         
                         exp = Experience(
                             choice=exp_data['choice'],
@@ -470,6 +487,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                         if _log_steps:
                             print(f"  [seed {seed}] EXEC (single) floor={gc.floor_num} action={action.getDesc(gc)}", flush=True)
                         action.execute(gc)
+                        if _rec is not None:
+                            _rec.append(int(action.bits))
                 else:
                     if _log_steps:
                         print(f"  [seed {seed}] PICK (no-choice) floor={gc.floor_num}", flush=True)
@@ -478,6 +497,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                     if _log_steps:
                         print(f"  [seed {seed}] EXEC (no-choice) floor={gc.floor_num} action={action.getDesc(gc)}", flush=True)
                     action.execute(gc)
+                    if _rec is not None:
+                        _rec.append(int(action.bits))
                 
         except Exception as e:
             log.error(f"Error in episode {seed}: {e}")
@@ -517,6 +538,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_deck=list(gc.deck),
         final_relics=list(gc.relics),
         battle_log=list(agent.battle_log) if config.log_battle_outcomes else [],
+        boss_state_records=_boss_records,
     )
 
 
