@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import argparse
 import logging
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from typing import List, NamedTuple, Optional, Tuple, get_type_hints, Union
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
@@ -131,6 +131,14 @@ class TrainConfig:
     # PPO hyperparameters
     clip_ratio: float = 0.2
     entropy_coef: float = 0.01
+    # Exponential entropy-coef decay: starting at iteration entropy_coef_decay_start, the
+    # effective coefficient decays geometrically from entropy_coef to entropy_coef_final over
+    # entropy_coef_decay_steps iterations, then holds at entropy_coef_final. decay_steps=0
+    # disables the schedule. decay_start is an ABSOLUTE iteration so a later
+    # --resume-from-step continues the same schedule rather than restarting it.
+    entropy_coef_final: float = 0.0
+    entropy_coef_decay_steps: int = 0
+    entropy_coef_decay_start: int = 0
     value_coef: float = 0.5
     max_grad_norm: float = 5.0
     
@@ -701,6 +709,18 @@ def experiences_to_batches(experiences: List[Experience], advantages: List[float
     return batch_data
 
 
+def effective_entropy_coef(config: TrainConfig, iteration: int) -> float:
+    """Entropy coefficient at `iteration` under the exponential decay schedule (see TrainConfig).
+    Geometric interpolation entropy_coef -> entropy_coef_final over decay_steps iterations from
+    decay_start, clamped to hold at entropy_coef_final afterwards."""
+    if config.entropy_coef_decay_steps <= 0:
+        return config.entropy_coef
+    assert config.entropy_coef_final > 0, "entropy_coef_final must be > 0 when decay is enabled"
+    frac = (iteration - config.entropy_coef_decay_start) / config.entropy_coef_decay_steps
+    frac = min(max(frac, 0.0), 1.0)
+    return config.entropy_coef * (config.entropy_coef_final / config.entropy_coef) ** frac
+
+
 def train_step(nets, optimizer, experiences: List[Experience], advantages: List[float], returns: List[float], config: TrainConfig, algo=None, iteration: int = -1):
     """Perform one training step. `algo` (an Algorithm) supplies the per-minibatch loss; defaults
     to PPO for backward compatibility."""
@@ -1179,9 +1199,13 @@ def main():
                 save_episodes(experiences, advantages, returns, ep_meta, ep_path)
                 print(f"Saved {len(experiences)} decisions to {ep_path}")
             
-            # Perform PPO training step
+            # Perform PPO training step (entropy coef possibly decayed for this iteration)
+            ent_coef = effective_entropy_coef(config, iteration)
+            step_config = replace(config, entropy_coef=ent_coef) if ent_coef != config.entropy_coef else config
+            if config.entropy_coef_decay_steps > 0:
+                print(f"Entropy coef this iteration: {ent_coef:.5f}")
             train_start = time.time()
-            losses = train_step(nets, optimizer, experiences, advantages, returns, config, algo=algo)
+            losses = train_step(nets, optimizer, experiences, advantages, returns, step_config, algo=algo)
             train_time = time.time() - train_start
             
             print(f"Training completed in {train_time:.1f}s")
@@ -1217,6 +1241,8 @@ def main():
                 # e.g. for objective-indifference lines in plots. Meaningless for critic-free
                 # algos that leave advantages raw and never update adv_norm.
                 'adv_norm_std': float(adv_norm.std),
+                # Effective (possibly decayed) entropy coefficient used this iteration.
+                'entropy_coef': ent_coef,
             }
             
             # Write stats to JSONL file based on save path
