@@ -22,41 +22,27 @@ import threading
 
 import optuna
 
-# eval_states float params: name -> (low, high, log)
+# Round 3 (full-strength states): only the boss-gated widening pair is searched; exploration and
+# eval weights stay pinned at the jointly-tuned defaults (FIXED below), and rollouts never drink
+# potions (settled in round 2). On a boss-only state set, eval_states' wideningC/Alpha args ARE
+# the boss widening.
 SPACE = {
-    "exploration":   (0.5, 12.0, True),
-    "wideningC":     (0.3, 8.0, True),
-    "wideningAlpha": (0.1, 1.0, False),
-    "winBonus":      (20.0, 300.0, True),
-    "potionWeight":  (0.0, 30.0, False),
-    "monsterDamage": (0.0, 40.0, False),
-    "aliveWeight":   (0.0, 10.0, False),
-    "energyWaste":   (0.0, 2.0, False),
-    "turnSurvival":  (0.0, 2.0, False),
+    "wideningC":     (0.5, 8.0, True),
+    "wideningAlpha": (0.05, 1.0, False),
 }
-# categorical env knobs: name -> (env_var, [choices])
-# potion modes: 0 = never (rollout incumbent), 1 = dump at rollout start in boss fights,
-# 3 = heuristic opportune timing. (2 = always-dump is excluded: identical to 1 on boss-only sets.)
-ENV_SPACE = {
-    "potionMode": ("STS_ROLLOUT_POTION_MODE", [0, 1, 3]),
-}
-
-# Warm start: best config from the round-1 study (boss_h2_b1000, 71 trials, never-drink rollouts).
-# Enqueued once per allowed potion mode so the mode head-to-head at the optimum runs first.
-WARM_OPTIMUM = {
-    "exploration": 6.875, "wideningC": 6.46, "wideningAlpha": 0.8495,
-    "winBonus": 27.6826, "potionWeight": 8.2564, "monsterDamage": 24.828,
-    "aliveWeight": 2.3223, "energyWaste": 1.2145, "turnSurvival": 1.3359,
-}
-
-# Pre-boss-tuning defaults (general-purpose tuned values), kept in the final validation table
-# as the baseline every candidate must beat on held-out.
-ORIG_DEFAULTS = {
-    "exploration": 9.9, "wideningC": 4.6, "wideningAlpha": 0.37,
-    "winBonus": 53.0, "potionWeight": 11.0, "monsterDamage": 37.0,
+FIXED = {
+    "exploration": 9.9, "winBonus": 53.0, "potionWeight": 11.0, "monsterDamage": 37.0,
     "aliveWeight": 3.4, "energyWaste": 1.75, "turnSurvival": 1.5,
-    "potionMode": 0,
 }
+ENV_SPACE = {}
+
+# Warm starts: the general widening (current default = no boss specialization) and the round-1/2
+# optimum that regressed at deployment strength.
+WARM_GENERAL = {"wideningC": 4.6, "wideningAlpha": 0.37}
+WARM_OLD_OPT = {"wideningC": 6.46, "wideningAlpha": 0.8495}
+
+# Baseline row for the final validation table (== WARM_GENERAL; the value to beat on held-out).
+ORIG_DEFAULTS = dict(WARM_GENERAL)
 
 _logfile = None
 _loglock = threading.Lock()
@@ -64,7 +50,7 @@ _loglock = threading.Lock()
 
 def run_eval(test_bin, state_file, threads, params, env_params, budget, limit, logf=None):
     cmd = [test_bin, "eval_states", str(threads), state_file, str(budget), str(limit)]
-    cmd += [f"{k}={v:.6f}" for k, v in params.items()]
+    cmd += [f"{k}={v:.6f}" for k, v in {**FIXED, **params}.items()]
     env = dict(os.environ)
     for name, (var, _choices) in ENV_SPACE.items():
         env[var] = str(env_params[name])
@@ -136,10 +122,8 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=1, multivariate=True, n_startup_trials=20),
     )
     if len(study.trials) == 0:
-        # One enqueue per allowed potion mode at the round-1 optimum: the mode head-to-head
-        # at the best-known params is evaluated before TPE takes over.
-        for mode in ENV_SPACE["potionMode"][1]:
-            study.enqueue_trial({**WARM_OPTIMUM, "potionMode": mode})
+        study.enqueue_trial(dict(WARM_GENERAL))
+        study.enqueue_trial(dict(WARM_OLD_OPT))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     # Only completed trials count toward the budget; enqueued-but-waiting ones still need to run.
