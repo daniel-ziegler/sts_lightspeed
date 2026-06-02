@@ -30,6 +30,13 @@ def main():
     ap.add_argument('--battle-timeout', type=float, default=300.0,
                     help='per-battle MCTS wall-clock budget (s); raise for high sim counts')
     ap.add_argument('--out-csv', default='runs/eval_hero.csv')
+    ap.add_argument('--boss-widening', choices=['on', 'off'], default='on',
+                    help="off forces boss fights to the general widening (A/B control arm)")
+    ap.add_argument('--legacy-config', action='store_true',
+                    help='use the pre-tuning coupled search config (exploration 4.24, widening '
+                         '1.0/0.5 incl. boss, old eval weights) instead of the engine defaults')
+    ap.add_argument('--battle-csv', default=None,
+                    help='also write one row per battle (boss analysis) to this path')
     args = ap.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -46,8 +53,23 @@ def main():
     # engine's jointly-tuned SearchAgent defaults (knobs + eval weights are a coupled set).
     # Shaping coefs zero -> reward (and the rewards we ignore) match plain victory/progress
     # signal. inf_batch_size defaults are fine.
+    # The pre-tuning coupled era: engine-default knobs of the old engine + old eval weights,
+    # no boss specialization. Overrides --boss-widening (the legacy era has a single widening).
+    legacy = dict(
+        mcts_exploration=3 * 2 ** 0.5,
+        mcts_widening_c=1.0, mcts_widening_alpha=0.5,
+        mcts_boss_widening_c=1.0, mcts_boss_widening_alpha=0.5,
+        mcts_win_bonus=100.0, mcts_potion_weight=10.0, mcts_victory_turn_penalty=0.01,
+        mcts_monster_damage_weight=10.0, mcts_alive_weight=1.0,
+        mcts_energy_waste_weight=0.2, mcts_draw_weight=0.03, mcts_turn_survival_weight=0.2,
+    ) if args.legacy_config else {}
+    if not args.legacy_config and args.boss_widening == 'off':
+        # pin boss widening to the general tuned values (engine default is the boss-gated set)
+        legacy = dict(mcts_boss_widening_c=4.6, mcts_boss_widening_alpha=0.37)
     config = TrainConfig(
         mcts_simulations=args.mcts_sims,
+        log_battle_outcomes=args.battle_csv is not None,
+        **legacy,
         shaping_hp_coef=0.0, shaping_upg_coef=0.0,
         shaping_offset=0.0, shaping_relic_coef=0.0, shaping_maxhp_coef=0.0,
         num_workers=args.num_workers,
@@ -78,6 +100,17 @@ def main():
     if not done:
         writer.writerow(['seed', 'won', 'floor']); fout.flush()
 
+    # Boss encounter ids (MonsterEncounter enum order; see constants/MonsterEncounters.h)
+    BOSS_ENCOUNTERS = {18, 19, 20, 37, 38, 39, 52, 53, 54, 56}
+    bwriter = bfout = None
+    if args.battle_csv:
+        bexists = os.path.exists(args.battle_csv)
+        bfout = open(args.battle_csv, 'a', newline='')
+        bwriter = csv.writer(bfout)
+        if not bexists:
+            bwriter.writerow(['seed', 'battle_idx', 'floor', 'act', 'is_boss',
+                              'post_hp', 'potions', 'won_game', 'final_floor']); bfout.flush()
+
     t0 = time.time()
     print(f"running {len(todo)} games (skipping {len(done)} already done) | "
           f"mcts_sims={args.mcts_sims} | workers={args.num_workers}", flush=True)
@@ -100,6 +133,12 @@ def main():
                     won, floor = -1, -1
                 rows.append((s, won, floor))
                 writer.writerow((s, won, floor)); fout.flush()
+                if bwriter is not None and won != -1:
+                    for i, snap in enumerate(traj.battle_log):
+                        bwriter.writerow((s, i, snap.floor, snap.act,
+                                          int(snap.encounter in BOSS_ENCOUNTERS),
+                                          snap.cur_hp, snap.potion_count, won, floor))
+                    bfout.flush()
                 n = len(rows)
                 wn = sum(1 for _, w, _ in rows if w == 1)
                 err = sum(1 for _, w, _ in rows if w == -1)
@@ -108,6 +147,8 @@ def main():
                       f"elapsed={time.time()-t0:.0f}s",
                       flush=True)
     fout.close()
+    if bfout is not None:
+        bfout.close()
 
     rows_clean = [r for r in rows if r[1] != -1]
     n = len(rows_clean)

@@ -93,6 +93,26 @@ PYBIND11_MODULE(slaythespire, m) {
     m.def("getFixedObservationMaximums", &py::getFixedObservationMaximums, "get the defined maximum values of the observation space");
     m.def("getNNRepresentation", &py::getNNRepresentation, "get the neural network representation of a GameContext");
 
+    pybind11::class_<search::EvalWeights>(m, "EvalWeights")
+        .def(pybind11::init<>())
+        .def_readwrite("win_bonus", &search::EvalWeights::winBonus)
+        .def_readwrite("potion_weight", &search::EvalWeights::potionWeight)
+        .def_readwrite("victory_turn_penalty", &search::EvalWeights::victoryTurnPenalty)
+        .def_readwrite("monster_damage_weight", &search::EvalWeights::monsterDamageWeight)
+        .def_readwrite("alive_weight", &search::EvalWeights::aliveWeight)
+        .def_readwrite("energy_waste_weight", &search::EvalWeights::energyWasteWeight)
+        .def_readwrite("draw_weight", &search::EvalWeights::drawWeight)
+        .def_readwrite("turn_survival_weight", &search::EvalWeights::turnSurvivalWeight);
+
+    pybind11::class_<search::BattleSnapshot>(m, "BattleSnapshot")
+        .def_readonly("floor", &search::BattleSnapshot::floor)
+        .def_readonly("act", &search::BattleSnapshot::act)
+        .def_readonly("cur_hp", &search::BattleSnapshot::curHp)
+        .def_readonly("max_hp", &search::BattleSnapshot::maxHp)
+        .def_readonly("potion_count", &search::BattleSnapshot::potionCount)
+        .def_readonly("deck_size", &search::BattleSnapshot::deckSize)
+        .def_readonly("encounter", &search::BattleSnapshot::encounter);
+
     pybind11::class_<search::SearchAgent> agent(m, "Agent");
     agent.def(pybind11::init<>());
     agent.def_readwrite("simulation_count_base", &search::SearchAgent::simulationCountBase, "number of simulations the agent uses for monte carlo tree search each turn")
@@ -102,6 +122,11 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("exploration_parameter", &search::SearchAgent::explorationParameter, "MCTS UCB exploration constant used per battle")
         .def_readwrite("chance_widening_c", &search::SearchAgent::chanceWideningC, "double progressive widening C for chance nodes")
         .def_readwrite("chance_widening_alpha", &search::SearchAgent::chanceWideningAlpha, "double progressive widening alpha for chance nodes")
+        .def_readwrite("boss_chance_widening_c", &search::SearchAgent::bossChanceWideningC, "double progressive widening C for chance nodes in boss fights")
+        .def_readwrite("boss_chance_widening_alpha", &search::SearchAgent::bossChanceWideningAlpha, "double progressive widening alpha for chance nodes in boss fights")
+        .def_readwrite("eval_weights", &search::SearchAgent::evalWeights, "evaluateEndState weights backed up by the battle search")
+        .def_readwrite("log_battle_outcomes", &search::SearchAgent::logBattleOutcomes, "record a BattleSnapshot after each battle into battle_log")
+        .def_readonly("battle_log", &search::SearchAgent::battleLog, "post-battle snapshots (floor/act/hp/potions/deck/encounter), one per battle")
         .def_readwrite("record_actions", &search::SearchAgent::recordActions, "record taken actions into game_action_history")
         .def_readwrite("game_action_history", &search::SearchAgent::gameActionHistory, "bits of actions taken (in-battle search::Actions via playout_battle)")
         .def("pick_gameaction", &search::SearchAgent::pickOutOfCombatAction)
@@ -110,8 +135,16 @@ PYBIND11_MODULE(slaythespire, m) {
             BattleContext bc;
             bc.init(gc);
 
+            const auto battleEncounter = bc.encounter;
             agent.playoutBattle(bc);
             bc.exitBattle(gc);
+            // Mirror SearchAgent::playout's per-battle snapshot so python-driven games
+            // (run_episode) populate battle_log too.
+            if (agent.logBattleOutcomes) {
+                agent.battleLog.push_back({gc.floorNum, gc.act, gc.curHp, gc.maxHp, gc.potionCount,
+                                           static_cast<int>(gc.deck.size()),
+                                           static_cast<int>(battleEncounter)});
+            }
         }, "playout a battle")
         .def("playout", &search::SearchAgent::playout);
 

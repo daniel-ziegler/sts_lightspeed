@@ -161,6 +161,19 @@ class TrainConfig:
     mcts_exploration: Optional[float] = None
     mcts_widening_c: Optional[float] = None
     mcts_widening_alpha: Optional[float] = None
+    mcts_boss_widening_c: Optional[float] = None      # None = engine's boss-gated default
+    mcts_boss_widening_alpha: Optional[float] = None
+    log_battle_outcomes: bool = False                 # attach per-battle snapshots to trajectories
+    # Battle-search eval weights (None = engine's jointly-tuned defaults). Like the search knobs,
+    # these are a coupled set -- override all of them together or none.
+    mcts_win_bonus: Optional[float] = None
+    mcts_potion_weight: Optional[float] = None
+    mcts_victory_turn_penalty: Optional[float] = None
+    mcts_monster_damage_weight: Optional[float] = None
+    mcts_alive_weight: Optional[float] = None
+    mcts_energy_waste_weight: Optional[float] = None
+    mcts_draw_weight: Optional[float] = None
+    mcts_turn_survival_weight: Optional[float] = None
 
     # Reward shaping (potential-based). We extend the existing telescoping potential
     # Phi(s) with shape(s) = shaping_hp_coef*(cur_hp/max_hp) + shaping_upg_coef*num_upgraded.
@@ -230,6 +243,7 @@ class Trajectory(NamedTuple):
     final_metrics: GameMetrics  # Complete final game state metrics
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
+    battle_log: list = []  # per-battle BattleSnapshots (when config.log_battle_outcomes)
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -322,6 +336,28 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         agent.chance_widening_c = config.mcts_widening_c
     if config.mcts_widening_alpha is not None:
         agent.chance_widening_alpha = config.mcts_widening_alpha
+    if config.mcts_boss_widening_c is not None:
+        agent.boss_chance_widening_c = config.mcts_boss_widening_c
+    if config.mcts_boss_widening_alpha is not None:
+        agent.boss_chance_widening_alpha = config.mcts_boss_widening_alpha
+    if config.log_battle_outcomes:
+        agent.log_battle_outcomes = True
+    _ew_overrides = [
+        ('win_bonus', config.mcts_win_bonus),
+        ('potion_weight', config.mcts_potion_weight),
+        ('victory_turn_penalty', config.mcts_victory_turn_penalty),
+        ('monster_damage_weight', config.mcts_monster_damage_weight),
+        ('alive_weight', config.mcts_alive_weight),
+        ('energy_waste_weight', config.mcts_energy_waste_weight),
+        ('draw_weight', config.mcts_draw_weight),
+        ('turn_survival_weight', config.mcts_turn_survival_weight),
+    ]
+    if any(v is not None for _, v in _ew_overrides):
+        ew = agent.eval_weights
+        for name, v in _ew_overrides:
+            if v is not None:
+                setattr(ew, name, v)
+        agent.eval_weights = ew
     experiences = []
     values = []  # Collect values separately
 
@@ -486,6 +522,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_metrics=final_metrics,
         final_deck=list(gc.deck),
         final_relics=list(gc.relics),
+        battle_log=list(agent.battle_log) if config.log_battle_outcomes else [],
     )
 
 

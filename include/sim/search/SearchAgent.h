@@ -49,12 +49,13 @@ namespace sts::search {
         double chanceWideningAlpha = 0.37;    // tuned default
         EvalWeights evalWeights;
 
-        // Boss fights are long and high-variance, so they want more chance-node widening than the
-        // general (hallway-dominated) defaults. Applied via isBossEncounter in playoutBattle; only
-        // the widening is boss-specific (exploration + eval weights stay general). Validated
-        // boss-specific on held-out heroe2-policy boss states (+~3 SCORE / +1.3pp win vs general).
-        double bossChanceWideningC = 6.46;
-        double bossChanceWideningAlpha = 0.8495;
+        // Boss-specific chance-node widening, applied via isBossEncounter in playoutBattle.
+        // Defaults equal the general widening (no specialization): raising them to 6.46/0.85
+        // helps on mid-strength boss states (+4.6 SCORE held-out @5000 sims) but costs ~3pp
+        // game win for the strong NN agent, whose boss fights are mostly already-won positions
+        // where spreading the budget over more chance outcomes just shallows the search.
+        double bossChanceWideningC = 4.6;
+        double bossChanceWideningAlpha = 0.37;
 
         std::default_random_engine rng;
 

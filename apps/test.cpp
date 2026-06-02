@@ -144,8 +144,8 @@ static int g_print_level = 0;
 static double g_explorationParameter = 9.9;   // tuned default
 static double g_chanceWideningC = 4.6;         // tuned default
 static double g_chanceWideningAlpha = 0.37;    // tuned default
-static double g_bossChanceWideningC = 6.46;       // boss-specific (more widening); see SearchAgent.h
-static double g_bossChanceWideningAlpha = 0.8495;
+static double g_bossChanceWideningC = 4.6;        // boss-specific widening; defaults = general (see SearchAgent.h)
+static double g_bossChanceWideningAlpha = 0.37;
 static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
 static search::EvalWeights g_evalWeights;
 
