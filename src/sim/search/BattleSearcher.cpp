@@ -418,6 +418,14 @@ void search::BattleSearcher::step() {
 }
 
 void search::BattleSearcher::updateFromPlayout(const std::vector<Node *> &stack, const std::vector<Action> &actionStack, const BattleContext &endState) {
+    // Every simulation ends here exactly once: record how deep it got in-tree and how many
+    // chance nodes sat on its path (budget-fragmentation telemetry).
+    stats.depthSum += static_cast<std::int64_t>(stack.size());
+    for (const auto *n : stack) {
+        if (n->isRandomNode) {
+            ++stats.chanceDepthSum;
+        }
+    }
     const auto evaluation = evaluateEndState(endState);
 
     for (auto it = stack.rbegin(); it != stack.rend(); ++it) {

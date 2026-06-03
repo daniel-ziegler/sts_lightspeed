@@ -237,7 +237,9 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
               << " detTrans=" << st.detTranspositions
               << " chanceSampled=" << st.chanceOutcomesSampled
               << " sibReuse=" << st.chanceSiblingReuse
-              << " chanceTrans=" << st.chanceTranspositions << '\n';
+              << " chanceTrans=" << st.chanceTranspositions
+              << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
     std::cout << "threads: " << threadCount
               << " playoutCount: " << playoutCount
               << " depth: " << g_simulationCount
@@ -848,7 +850,9 @@ static int evalStates(int argc, const char *argv[]) {
               << " detTrans=" << st.detTranspositions
               << " chanceSampled=" << st.chanceOutcomesSampled
               << " sibReuse=" << st.chanceSiblingReuse
-              << " chanceTrans=" << st.chanceTranspositions << '\n';
+              << " chanceTrans=" << st.chanceTranspositions
+              << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
     return 0;
 }
 
