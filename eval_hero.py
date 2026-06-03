@@ -32,6 +32,9 @@ def main():
     ap.add_argument('--out-csv', default='runs/eval_hero.csv')
     ap.add_argument('--boss-widening', choices=['on', 'off'], default='on',
                     help="off forces boss fights to the general widening (A/B control arm)")
+    ap.add_argument('--boss-widening-c', type=float, default=None,
+                    help='explicit boss DPW widening C (with --boss-widening-alpha); overrides on/off')
+    ap.add_argument('--boss-widening-alpha', type=float, default=None)
     ap.add_argument('--legacy-config', action='store_true',
                     help='use the pre-tuning coupled search config (exploration 4.24, widening '
                          '1.0/0.5 incl. boss, old eval weights) instead of the engine defaults')
@@ -63,7 +66,11 @@ def main():
         mcts_monster_damage_weight=10.0, mcts_alive_weight=1.0,
         mcts_energy_waste_weight=0.2, mcts_draw_weight=0.03, mcts_turn_survival_weight=0.2,
     ) if args.legacy_config else {}
-    if not args.legacy_config and args.boss_widening == 'off':
+    if not args.legacy_config and args.boss_widening_c is not None:
+        # explicit boss widening candidate (per-battle tuning winner under deployment gate)
+        legacy = dict(mcts_boss_widening_c=args.boss_widening_c,
+                      mcts_boss_widening_alpha=args.boss_widening_alpha)
+    elif not args.legacy_config and args.boss_widening == 'off':
         # pin boss widening to the general tuned values (engine default is the boss-gated set)
         legacy = dict(mcts_boss_widening_c=4.6, mcts_boss_widening_alpha=0.37)
     config = TrainConfig(
