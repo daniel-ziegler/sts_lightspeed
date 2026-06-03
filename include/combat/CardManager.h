@@ -37,7 +37,7 @@ namespace sts {
         fixed_list<CardInstance, MAX_GROUP_SIZE> discardPile;
         fixed_list<CardInstance, MAX_GROUP_SIZE> exhaustPile;
 #else
-        std::vector<CardInstance> drawPile;
+        CardPile drawPile;
         CardPile discardPile;
         CardPile exhaustPile;
 #endif
@@ -50,13 +50,13 @@ namespace sts {
 
         void init(const GameContext &gc, BattleContext &bc); // returns count of innate cards
 
-        void createDeckCardInstanceInDrawPile(const Card &card, int deckIdx, int drawIdx);
-        void createTempCardInDrawPile(int insertIdx, CardInstance c);
+        CardInstance createDeckCardInstance(const Card &card, int deckIdx);
+        void createTempCardInDrawPile(Random &rng, CardInstance c); // shuffled in
         void createTempCardInDiscard(CardInstance c);
         void createTempCardInHand(CardInstance c);
 
         void removeFromDrawPileAtIdx(int idx);
-        CardInstance popFromDrawPile();
+        CardInstance popFromDrawPile(Random &rng);
 
         void removeFromHandAtIdx(int idx); // this method is dangerous if used in the wrong place.
         void removeFromHandById(std::uint16_t uniqueId); // can do more than one card if they have the same uniqueId, does this happen?
@@ -66,12 +66,12 @@ namespace sts {
         void moveToHand(const CardInstance &c);
         void moveToExhaustPile(const CardInstance &c);
 
-        void insertToDrawPile(int drawPileIdx, const CardInstance &c);
         void moveToDrawPileTop(const CardInstance &c);
+        void moveToDrawPileBottom(const CardInstance &c);
         void shuffleIntoDrawPile(Random &rng, const CardInstance &c);
 
         void moveToDiscardPile(const CardInstance &c);
-        void moveDiscardPileIntoToDrawPile();
+        void moveDiscardPileIntoToDrawPile(Random &rng);
 
         // **************
         void notifyAddCardToCombat(const CardInstance &c);

@@ -1,0 +1,2 @@
+w/l: (5, 195) percentWin: 2.5% avgFloorReached: 28.86
+STATS steps=89477000 nodesCreated=76908552 detTrans=5663919 chanceSampled=61809828 sibReuse=23880338 chanceTrans=6944726

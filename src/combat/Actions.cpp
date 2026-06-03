@@ -203,30 +203,17 @@ void _DrawCards::operator()(BattleContext &bc) const {
 }
 
 void _EmptyDeckShuffle::operator()(BattleContext &bc) const {
-    // Move first, then shuffle the draw pile: the discard pile is canonically sorted
-    // (CardPile), so the randomization happens on the destination. Identical draw-order
-    // distribution to shuffling the source.
-    bc.cards.moveDiscardPileIntoToDrawPile();
-    java::Collections::shuffle(
-            bc.cards.drawPile.begin(),
-            bc.cards.drawPile.end(),
-            java::Random(bc.rng.randomLong())
-    );
+    bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
 }
 
 void _ShuffleDrawPile::operator()(BattleContext &bc) const {
-    java::Collections::shuffle(
-            bc.cards.drawPile.begin(),
-            bc.cards.drawPile.end(),
-            java::Random(bc.rng.randomLong())
-    );
+    bc.cards.drawPile.reshuffleSelf(bc.rng);
 }
 
 void _ShuffleTempCardIntoDrawPile::operator()(BattleContext &bc) const {
     CardInstance c(id);
     for (int i = 0; i < count; ++i) {
-        const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-        bc.cards.createTempCardInDrawPile(idx, c);
+        bc.cards.createTempCardInDrawPile(bc.rng, c);
     }
 }
 
@@ -248,8 +235,7 @@ void _MakeTempCardInDrawPile::operator()(BattleContext &bc) const {
     // the random calculation is done in an effect so it be wrong to do it here?
     for (int i = 0; i < amount; ++i) {
         if (shuffleInto) {
-            const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-            bc.cards.createTempCardInDrawPile(idx, c);
+            bc.cards.createTempCardInDrawPile(bc.rng, c);
         }
         // todo else
     }
@@ -508,8 +494,7 @@ void _PutRandomCardsInDrawPile::operator()(BattleContext &bc) const {
         card.cost = 0;
         card.costForTurn = 0;
 
-        const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-        bc.cards.createTempCardInDrawPile(idx, card);
+        bc.cards.createTempCardInDrawPile(bc.rng, card);
     }
 }
 
@@ -910,11 +895,11 @@ void _ApotheosisAction::operator()(BattleContext &bc) const {
         }
     }
 
-    for (auto &c : bc.cards.drawPile) {
+    bc.cards.drawPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {
             c.upgrade();
         }
-    }
+    });
 
     bc.cards.discardPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {

@@ -2540,7 +2540,7 @@ void BattleContext::playTopCardInDrawPile(int monsterTargetIdx, bool exhausts) {
         return;
     }
 
-    CardQueueItem item(cards.popFromDrawPile(), monsterTargetIdx, player.energy);
+    CardQueueItem item(cards.popFromDrawPile(rng), monsterTargetIdx, player.energy);
     item.exhaustOnUse = exhausts;
     item.autoplay = true;
     item.freeToPlay = true; // todo remove the autoplay boolean? added this instead
@@ -3054,7 +3054,7 @@ void BattleContext::chooseForethoughtCard(int handIdx) {
         cards.hand[handIdx].freeToPlayOnce = true;
     }
 
-    cards.insertToDrawPile(0, cards.hand[handIdx]);
+    cards.moveToDrawPileBottom(cards.hand[handIdx]);
     cards.removeFromHandAtIdx(handIdx);
 }
 

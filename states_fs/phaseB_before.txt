@@ -1,0 +1,4 @@
+=== BEFORE phaseB: winrate_mt 200@1000 Tue 02 Jun 2026 09:09:18 PM PDT
+w/l: (7, 193) percentWin: 3.5% avgFloorReached: 30.53
+STATS steps=92714000 nodesCreated=75162221 detTrans=3080589 chanceSampled=115832901 sibReuse=89488579 chanceTrans=1362678
+=== BEFORE CAPTURE DONE Tue 02 Jun 2026 09:11:23 PM PDT

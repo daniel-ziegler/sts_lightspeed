@@ -95,7 +95,11 @@ namespace sts::search {
             hash_combine(hash, c.upgraded);
         }
 
-        // Hash draw pile with position (order is significant for future draws)
+        // Hash draw pile with position (the sorted unknown region hashes canonically; the known
+        // top/bottom stacks are position-significant). The known counts distinguish a known top
+        // [A,B] from an unknown {A,B} — different information sets even with equal contents.
+        hash_combine(hash, bc.cards.drawPile.knownCount());
+        hash_combine(hash, bc.cards.drawPile.knownBottom());
         hash_combine(hash, static_cast<int>(bc.cards.drawPile.size()));
         for (int i = 0; i < static_cast<int>(bc.cards.drawPile.size()); ++i) {
             hash_combine(hash, i);
