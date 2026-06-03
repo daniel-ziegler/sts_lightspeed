@@ -136,6 +136,7 @@ struct AgentMtInfo {
     std::int64_t lossCount = 0;
     std::int64_t floorSum = 0;
     std::int64_t totalSimulations = 0;
+    search::SearchStats stats;
 };
 
 static int g_searchAscension = 0;
@@ -182,6 +183,7 @@ void agentMtRunner(AgentMtInfo *info) {
 
         {
             std::scoped_lock lock(info->m);
+            info->stats.add(agent.searchStats);
             info->floorSum += gc.floorNum;
             if (gc.outcome == sts::GameOutcome::PLAYER_VICTORY) {
                 ++info->winCount;
@@ -229,6 +231,15 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
         << " totalSimulations: " << info.totalSimulations
         << " avgPerFloor: " << (double)info.totalSimulations/info.floorSum << '\n';
 
+    const auto &st = info.stats;
+    std::cout << "STATS steps=" << st.steps
+              << " nodesCreated=" << st.nodesCreated
+              << " detTrans=" << st.detTranspositions
+              << " chanceSampled=" << st.chanceOutcomesSampled
+              << " sibReuse=" << st.chanceSiblingReuse
+              << " chanceTrans=" << st.chanceTranspositions
+              << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
     std::cout << "threads: " << threadCount
               << " playoutCount: " << playoutCount
               << " depth: " << g_simulationCount
@@ -582,7 +593,9 @@ static int evalStates(int argc, const char *argv[]) {
               << " detTrans=" << st.detTranspositions
               << " chanceSampled=" << st.chanceOutcomesSampled
               << " sibReuse=" << st.chanceSiblingReuse
-              << " chanceTrans=" << st.chanceTranspositions << '\n';
+              << " chanceTrans=" << st.chanceTranspositions
+              << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
     return 0;
 }
 

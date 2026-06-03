@@ -2566,7 +2566,7 @@ void BattleContext::exhaustSpecificCardInHand(int idx, std::int16_t uniqueId) {
         foundIdx = idx;
     } else {
         for (int i = 0; i < cards.cardsInHand; ++i) {
-            if (cards.hand[idx].uniqueId == uniqueId) {
+            if (cards.hand[i].uniqueId == uniqueId) {
                foundIdx = i;
                break;
             }

@@ -43,10 +43,13 @@ namespace sts::search {
         std::int64_t chanceOutcomesSampled = 0;  // chance-node widening samples executed
         std::int64_t chanceSiblingReuse = 0;     // sampled outcome collided with an existing sibling
         std::int64_t chanceTranspositions = 0;   // sampled outcome dedup-hit a non-sibling node
+        std::int64_t depthSum = 0;               // in-tree path length at each simulation's end
+        std::int64_t chanceDepthSum = 0;         // chance nodes on the path at each simulation's end
         void add(const SearchStats &o) {
             steps += o.steps; nodesCreated += o.nodesCreated; detTranspositions += o.detTranspositions;
             chanceOutcomesSampled += o.chanceOutcomesSampled; chanceSiblingReuse += o.chanceSiblingReuse;
             chanceTranspositions += o.chanceTranspositions;
+            depthSum += o.depthSum; chanceDepthSum += o.chanceDepthSum;
         }
     };
 
