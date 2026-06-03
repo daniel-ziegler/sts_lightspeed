@@ -139,6 +139,13 @@ class TrainConfig:
     entropy_coef_final: float = 0.0
     entropy_coef_decay_steps: int = 0
     entropy_coef_decay_start: int = 0
+    # Exponential learning-rate decay (same shape as the entropy schedule): from iteration
+    # lr_decay_start, both policy and value lr decay geometrically to lr_final_frac of their
+    # base values over lr_decay_steps iterations, then hold. decay_steps=0 disables.
+    # Anchored at ABSOLUTE iterations so resumes continue the schedule.
+    lr_final_frac: float = 0.1
+    lr_decay_steps: int = 0
+    lr_decay_start: int = 0
     value_coef: float = 0.5
     max_grad_norm: float = 5.0
     
@@ -753,6 +760,16 @@ def experiences_to_batches(experiences: List[Experience], advantages: List[float
     return batch_data
 
 
+def lr_decay_factor(config: TrainConfig, iteration: int) -> float:
+    """Multiplier on the base learning rates at `iteration` (see TrainConfig.lr_decay_*)."""
+    if config.lr_decay_steps <= 0:
+        return 1.0
+    assert config.lr_final_frac > 0, "lr_final_frac must be > 0 when lr decay is enabled"
+    frac = (iteration - config.lr_decay_start) / config.lr_decay_steps
+    frac = min(max(frac, 0.0), 1.0)
+    return config.lr_final_frac ** frac
+
+
 def effective_entropy_coef(config: TrainConfig, iteration: int) -> float:
     """Entropy coefficient at `iteration` under the exponential decay schedule (see TrainConfig).
     Geometric interpolation entropy_coef -> entropy_coef_final over decay_steps iterations from
@@ -1243,11 +1260,17 @@ def main():
                 save_episodes(experiences, advantages, returns, ep_meta, ep_path)
                 print(f"Saved {len(experiences)} decisions to {ep_path}")
             
-            # Perform PPO training step (entropy coef possibly decayed for this iteration)
+            # Perform PPO training step (entropy coef / lr possibly decayed for this iteration)
             ent_coef = effective_entropy_coef(config, iteration)
             step_config = replace(config, entropy_coef=ent_coef) if ent_coef != config.entropy_coef else config
             if config.entropy_coef_decay_steps > 0:
                 print(f"Entropy coef this iteration: {ent_coef:.5f}")
+            lrf = lr_decay_factor(config, iteration)
+            if config.lr_decay_steps > 0:
+                base_lrs = [config.policy_lr, config.value_lr]
+                for gi, group in enumerate(optimizer.param_groups):
+                    group['lr'] = base_lrs[min(gi, len(base_lrs) - 1)] * lrf
+                print(f"LR factor this iteration: {lrf:.4f}")
             train_start = time.time()
             losses = train_step(nets, optimizer, experiences, advantages, returns, step_config, algo=algo)
             train_time = time.time() - train_start
@@ -1287,6 +1310,9 @@ def main():
                 'adv_norm_std': float(adv_norm.std),
                 # Effective (possibly decayed) entropy coefficient used this iteration.
                 'entropy_coef': ent_coef,
+                # Actual learning rates used this iteration (post-decay).
+                'policy_lr': config.policy_lr * lrf,
+                'value_lr': config.value_lr * lrf,
             }
             
             # Write stats to JSONL file based on save path
