@@ -116,7 +116,7 @@ void CardManager::createTempCardInDiscard(CardInstance c) {
 #endif
     notifyAddCardToCombat(c);
     notifyAddToDiscardPile(c);
-    discardPile.push_back(c);
+    discardPile.add(c);
 }
 
 void CardManager::createTempCardInHand(CardInstance c) {
@@ -163,12 +163,12 @@ void CardManager::removeFromHandById(std::uint16_t uniqueId) {
 }
 
 void CardManager::removeFromDiscard(int idx) {
-    notifyRemoveFromDiscardPile(*(discardPile.begin()+idx));
-    discardPile.erase(discardPile.begin()+idx);
+    notifyRemoveFromDiscardPile(discardPile[idx]);
+    discardPile.removeAt(idx);
 }
 
 void CardManager::removeFromExhaustPile(int idx) {
-    exhaustPile.erase(exhaustPile.begin()+idx);
+    exhaustPile.removeAt(idx);
 }
 
 // **************** END Remove Methods ****************
@@ -185,7 +185,7 @@ void CardManager::moveToHand(const CardInstance &c) {
 
 void CardManager::moveToExhaustPile(const CardInstance &c) {
     notifyRemoveFromCombat(c);
-    exhaustPile.push_back(c);
+    exhaustPile.add(c);
 }
 
 
@@ -236,13 +236,13 @@ void CardManager::moveToDiscardPile(const CardInstance &c) {
     }
 #endif
     notifyAddToDiscardPile(c);
-    discardPile.push_back(c);
+    discardPile.add(c);
 }
 
 void CardManager::moveDiscardPileIntoToDrawPile() {
     if (drawPile.empty()) {
         drawPileBloodCardCount = discardPileBloodCardCount;
-        drawPile = discardPile;
+        drawPile = discardPile.takeAll();
 
     } else {
         for (const auto &c : discardPile) {
@@ -386,9 +386,7 @@ void CardManager::resetAttributesAtEndOfTurn() {
         hand[i].setCostForTurn(hand[i].cost);
     }
 
-    for (auto &c : discardPile) {
-        c.setCostForTurn(c.cost);
-    }
+    discardPile.mutateAll([](CardInstance &c) { c.setCostForTurn(c.cost); });
 
     for (auto &c : drawPile) {
         c.setCostForTurn(c.cost);
@@ -476,14 +474,12 @@ void CardManager::onTookDamage() {
         ++i;
     }
 
-    i = 0;
-    foundBloodCards = 0;
-    while (foundBloodCards < discardPileBloodCardCount) {
-        if (discardPile[i].isBloodCard()) {
-            discardPile[i].tookDamage();
-            ++foundBloodCards;
-        }
-        ++i;
+    if (discardPileBloodCardCount > 0) {
+        discardPile.mutateAll([](CardInstance &c) {
+            if (c.isBloodCard()) {
+                c.tookDamage();
+            }
+        });
     }
 }
 
@@ -495,27 +491,16 @@ void upgrade(CardInstance &c, int upgradeAmount) {
 void CardManager::findAndUpgradeSpecialData(const std::int16_t uniqueId, const int upgradeAmount) {
 
     // special checks for most common scenarios
-    if (!discardPile.empty() && discardPile.back().uniqueId == uniqueId) {
-        upgrade(discardPile.back(), upgradeAmount);
-        return;
-    }
-    if (!exhaustPile.empty() && exhaustPile.back().uniqueId == uniqueId) {
-        upgrade(exhaustPile.back(), upgradeAmount);
-        return;
-    }
-
-    for (int i = static_cast<int>(discardPile.size())-2; i >= 0; --i) {
-        auto &c = discardPile[i];
-        if (c.uniqueId == uniqueId) {
-            upgrade(c, upgradeAmount);
+    for (int i = discardPile.size()-1; i >= 0; --i) {
+        if (discardPile[i].uniqueId == uniqueId) {
+            discardPile.mutateAt(i, [=](CardInstance &c) { upgrade(c, upgradeAmount); });
             return;
         }
     }
 
-    for (int i = static_cast<int>(exhaustPile.size())-2; i >= 0; --i) {
-        auto &c = exhaustPile[i];
-        if (c.uniqueId == uniqueId) {
-            upgrade(c, upgradeAmount);
+    for (int i = exhaustPile.size()-1; i >= 0; --i) {
+        if (exhaustPile[i].uniqueId == uniqueId) {
+            exhaustPile.mutateAt(i, [=](CardInstance &c) { upgrade(c, upgradeAmount); });
             return;
         }
     }
@@ -556,19 +541,19 @@ void CardManager::onBuffCorruption() {
         }
     }
 
-    for (auto &c : discardPile) {
+    discardPile.mutateAll([](CardInstance &c) {
         if (c.getType() == CardType::SKILL && c.cost > 0) {
             c.cost = 0;
             c.costForTurn = 0;
         }
-    }
+    });
 
-    for (auto &c : exhaustPile) {
+    exhaustPile.mutateAll([](CardInstance &c) {
         if (c.getType() == CardType::SKILL && c.cost > 0) {
             c.cost = 0;
             c.costForTurn = 0;
         }
-    }
+    });
 
 
 }

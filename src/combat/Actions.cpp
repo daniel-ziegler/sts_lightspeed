@@ -203,13 +203,15 @@ void _DrawCards::operator()(BattleContext &bc) const {
 }
 
 void _EmptyDeckShuffle::operator()(BattleContext &bc) const {
+    // Move first, then shuffle the draw pile: the discard pile is canonically sorted
+    // (CardPile), so the randomization happens on the destination. Identical draw-order
+    // distribution to shuffling the source.
+    bc.cards.moveDiscardPileIntoToDrawPile();
     java::Collections::shuffle(
-            bc.cards.discardPile.begin(),
-            bc.cards.discardPile.end(),
+            bc.cards.drawPile.begin(),
+            bc.cards.drawPile.end(),
             java::Random(bc.rng.randomLong())
     );
-
-    bc.cards.moveDiscardPileIntoToDrawPile();
 }
 
 void _ShuffleDrawPile::operator()(BattleContext &bc) const {
@@ -914,17 +916,17 @@ void _ApotheosisAction::operator()(BattleContext &bc) const {
         }
     }
 
-    for (auto &c : bc.cards.discardPile) {
+    bc.cards.discardPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {
             c.upgrade();
         }
-    }
+    });
 
-    for (auto &c : bc.cards.exhaustPile) {
+    bc.cards.exhaustPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {
             c.upgrade();
         }
-    }
+    });
 }
 
 void _DropkickAction::operator()(BattleContext &bc) const {
