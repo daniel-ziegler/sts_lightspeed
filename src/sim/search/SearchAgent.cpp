@@ -5,6 +5,7 @@
 #include "sim/search/SearchAgent.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include <sim/search/ExpertKnowledge.h>
 #include <game/Game.h>
@@ -87,6 +88,16 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
     searcher.chanceWideningAlpha = boss ? bossChanceWideningAlpha : chanceWideningAlpha;
     searcher.evalWeights = evalWeights;
 
+    // STS_HIDE_DRAW_ORDER: information-value measurement mode. Before each decision's search,
+    // reshuffle the searcher's root COPY of the draw pile (reality untouched), so the search
+    // cannot exploit the true order it would otherwise inherit from bc -- single-determinization
+    // PIMC. Skipped on card-select inputs (their action encodings index the draw pile) and
+    // disables tree reuse (a reused subtree would leak the previous sample's order).
+    static const bool hideDrawOrder = std::getenv("STS_HIDE_DRAW_ORDER") != nullptr;
+    // STS_NO_TREE_REUSE: control arm for the above (hiding also forfeits reuse; this isolates it)
+    static const bool noTreeReuse = std::getenv("STS_NO_TREE_REUSE") != nullptr;
+    Random hideRng(bc.seed + 7777 + bc.floorNum);
+
     // Cap reuse-driven pool growth so the dedup table's load factor stays low. Beyond this we do
     // a full setRoot, which recycles all nodes into the pool and drops the dedup map.
     constexpr std::size_t reusePoolCap = 32 * 1024;
@@ -94,6 +105,16 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
     const sts::search::BattleSearcher::Edge *prevBestEdge = nullptr;
 
     while (bc.outcome == Outcome::UNDECIDED) {
+        if (hideDrawOrder && bc.inputState == InputState::PLAYER_NORMAL) {
+            BattleContext hidden = bc;
+            java::Collections::shuffle(hidden.cards.drawPile.begin(), hidden.cards.drawPile.end(),
+                                       java::Random(hideRng.randomLong()));
+            searcher.setRoot(hidden);
+            prevBestEdge = nullptr;
+        } else if (hideDrawOrder || noTreeReuse) {
+            searcher.setRoot(bc);   // card-select decisions index the real draw pile: search it as-is
+            prevBestEdge = nullptr;
+        }
         if (prevBestEdge != nullptr) {
             // Locate the new root in the existing tree. Rerooting adopts the node's stored
             // state, and the next decision's action indices execute on the REAL bc — so the
