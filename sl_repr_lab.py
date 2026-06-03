@@ -98,7 +98,7 @@ def map_info(r):
         reach[i] = True
         stack.extend(succ[i])
     return dict(
-        xs=xs, ys=ys, rts=rts, n=n, opts=opts, ydest=ydest,
+        xs=xs, ys=ys, rts=rts, n=n, opts=opts, ydest=ydest, succ=succ,
         minE=minE, maxE=maxE, dR=dR, reach=reach,
         cur=(int(r['obs.mapX']), int(r['obs.mapY'])),
     )
@@ -106,19 +106,21 @@ def map_info(r):
 
 # ---------------------------------------------------------------- representations
 
-def _map_element_space(extra: dict):
+def _map_element_space(extra: dict, drop=()):
     base = {
         'room': EnumSpace(sts.Room),
         'is_current': EnumSpace(nw.IsCurrentNode),
         'pos': FixedVecSpace([7, 16]),
         'path_xs': FixedVecSpace([7, 7, 7]),
     }
+    for k in drop:
+        del base[k]
     base.update(extra)
     return SequenceSpace(DictAddSpace(base))
 
 
-def _obs_space_with_map(extra: dict):
-    return DictSpace({**obs_space.spaces, 'map_nodes': _map_element_space(extra)})
+def _obs_space_with_map(extra: dict, drop=()):
+    return DictSpace({**obs_space.spaces, 'map_nodes': _map_element_space(extra, drop)})
 
 
 def _choice_space_with_paths(paths_elem):
@@ -185,6 +187,31 @@ def build_repr(name):
             bt['map_nodes']['value']['agg'] = agg
         return _obs_space_with_map({'agg': FixedVecSpace([8, 8, 16])}), choice_space, aug
 
+    if name == 'R5b':  # R4 + aggregates scaled to [0,1] (avoid drowning the embedding sum)
+        o_sp4, c_sp4, aug4 = build_repr('R4')
+        o_sp = DictSpace({**o_sp4.spaces, 'map_nodes': _map_element_space({
+            'rel': FixedVecSpace([15, 31]), 'reachable': EnumSpace(Flag2),
+            'agg': FixedVecSpace([2, 2, 2])})})
+        def aug(bt, infos):
+            aug4(bt, infos)
+            agg = torch.zeros(len(infos), MAX_MAP_NODES, 3, dtype=torch.float32)
+            for i, mi in enumerate(infos):
+                for j in range(mi['n']):
+                    agg[i, j, 0] = mi['minE'][j] / DIST_CAP
+                    agg[i, j, 1] = mi['maxE'][j] / DIST_CAP
+                    agg[i, j, 2] = min(mi['dR'][j], DIST_CAP) / DIST_CAP
+            bt['map_nodes']['value']['agg'] = agg
+        return o_sp, c_sp4, aug
+
+    if name == 'R6':  # R4 without path_xs (is the raw edge encoding still needed?)
+        _, c_sp4, aug4 = build_repr('R4')
+        o_sp = _obs_space_with_map({'rel': FixedVecSpace([15, 31]), 'reachable': EnumSpace(Flag2)},
+                                   drop=('path_xs',))
+        def aug(bt, infos):
+            aug4(bt, infos)
+            del bt['map_nodes']['value']['path_xs']
+        return o_sp, c_sp4, aug
+
     raise ValueError(name)
 
 
@@ -217,6 +244,32 @@ def task_spec(name):
         return 'reg', lambda r, mi: float(max(mi['maxE'][o] for o in mi['opts']))
     if name == 'dist_rest':
         return 'reg', lambda r, mi: float(min(DIST_CAP, 1 + min(mi['dR'][o] for o in mi['opts'])))
+
+    def route(score_fn):
+        """CE: pick the option with the lowest score (lowest x breaks ties); all-tie rows excluded."""
+        def f(r, mi):
+            scores = [score_fn(mi, o) for o in mi['opts']]
+            if len(set(scores)) < 2:
+                return None
+            best = min(scores)
+            cand = [k for k, s in enumerate(scores) if s == best]
+            xs = [int(x) for x in r['paths_offered']]
+            return min(cand, key=lambda k: xs[k])
+        return f
+
+    if name == 'route_rest':
+        return 'ce', route(lambda mi, o: min(DIST_CAP, 1 + mi['dR'][o]))
+    if name == 'route_avoid_elite':
+        return 'ce', route(lambda mi, o: mi['minE'][o])
+    if name == 'elites_within_3':
+        ELITE3 = int(sts.Room.ELITE)
+        def f(r, mi):
+            seen, frontier = set(mi['opts']), set(mi['opts'])
+            for _ in range(2):  # opts are step 1; expand to step 3
+                frontier = {j for i in frontier for j in mi['succ'][i]} - seen
+                seen |= frontier
+            return float(sum(1 for i in seen if mi['rts'][i] == ELITE3))
+        return 'reg', f
     raise ValueError(name)
 
 
@@ -287,6 +340,9 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
     y = torch.tensor(labels, dtype=torch.long if kind == 'ce' else torch.float32)
     val = np.array([is_valid_seed(rows[i]['seed']) for i in keep])
     tr = torch.tensor(keep[~val]); va = torch.tensor(keep[val])
+    if args.data_frac < 1.0:  # low-data regime: subsample TRAIN only (valid stays full)
+        g0 = torch.Generator().manual_seed(12345)
+        tr = tr[torch.randperm(len(tr), generator=g0)[:max(1, int(len(tr) * args.data_frac))]]
     y_by_row = torch.zeros(len(rows), dtype=y.dtype)
     y_by_row[torch.tensor(keep)] = y
 
@@ -299,7 +355,7 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
         baseline = (y_by_row[va] - mu).abs().mean().item()  # predict-train-mean MAE
         epochs = args.epochs_reg
 
-    torch.manual_seed(0)
+    torch.manual_seed(args.torch_seed)
     o_sp, c_sp, _ = build_repr(repr_name)
     net = ProbeNN(o_sp, c_sp, args.dim, args.n_layers).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -322,7 +378,7 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
                 tot += len(idx)
         return (hits / tot, None) if kind == 'ce' else (ae / tot, se / tot)
 
-    g = torch.Generator().manual_seed(0)
+    g = torch.Generator().manual_seed(args.torch_seed)
     print(f"\n=== {repr_name} x {task_name} [{kind}]: {len(tr)} train / {len(va)} valid, "
           f"baseline {baseline:.4f} ===", flush=True)
     t0 = time.time()
@@ -348,7 +404,8 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
     print(f"[{repr_name}/{task_name}] FINAL {m1:.4f} (best {best:.4f}, baseline {baseline:.4f}, "
           f"{wall:.0f}s)", flush=True)
     writer.writerow([repr_name, task_name, kind, len(tr), len(va), epochs,
-                     round(baseline, 4), round(m1, 4), round(best, 4), round(wall)])
+                     round(baseline, 4), round(m1, 4), round(best, 4), round(wall),
+                     args.torch_seed, args.data_frac])
     fout.flush()
     del net
     if device.type == 'cuda':
@@ -368,6 +425,8 @@ def main():
     ap.add_argument('--dim', type=int, default=256)
     ap.add_argument('--n-layers', type=int, default=4)
     ap.add_argument('--out-csv', default='sl_repr_results.csv')
+    ap.add_argument('--torch-seed', type=int, default=0)
+    ap.add_argument('--data-frac', type=float, default=1.0)
     args = ap.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -388,7 +447,7 @@ def main():
     writer = csv.writer(fout)
     if not exists:
         writer.writerow(['repr', 'task', 'kind', 'n_train', 'n_valid', 'epochs',
-                         'baseline', 'final', 'best', 'wall_s'])
+                         'baseline', 'final', 'best', 'wall_s', 'torch_seed', 'data_frac'])
 
     import copy
     bt_base = collate_fn(rows)  # collate once; each repr augments a deep copy
