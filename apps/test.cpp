@@ -311,6 +311,7 @@ namespace drawdist {
 
             Tally initTally, reshuffleTally;
             Tally woundTallies[2];  // [markerCount-1]: wound draw-position histograms
+            Tally bareTally;        // shuffle-in with no prior knowledge (top-promotion path)
             bool headbuttExact = true, innatesFirst = true, woundNeverFirst = true;
             bool bottomExact = true;  // Forethought: bottom card drawn dead last
             int bottomWoundBelow = 0;  // shuffle-in landing below a known bottom (drawn after it)
@@ -368,6 +369,28 @@ namespace drawdist {
                             }
                         } else if (c.uniqueId < deckSize) {
                             bc.cards.moveToDiscardPile(c);  // markers/wound stay out of later rounds
+                        }
+                    }
+                }
+
+                // scenario F: shuffle-in with no prior order knowledge. Legacy never inserts at
+                // the very top, so the wound is never the next draw; its position must be
+                // uniform over [1, deck].
+                {
+                    bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
+                    CardInstance wound(CardId::WOUND);
+                    wound.uniqueId = static_cast<std::int16_t>(deckSize + 2);
+                    bc.cards.shuffleIntoDrawPile(bc.rng, wound);
+                    const int pileN = bc.cards.drawPile.size();
+                    for (int pos = 0; pos < pileN; ++pos) {
+                        const auto c = bc.cards.popFromDrawPile(bc.rng);
+                        if (c.uniqueId == wound.uniqueId) {
+                            bareTally.record(pos, 0);
+                            if (pos == 0) {
+                                woundNeverFirst = false;
+                            }
+                        } else if (c.uniqueId < deckSize) {
+                            bc.cards.moveToDiscardPile(c);
                         }
                     }
                 }
@@ -440,11 +463,24 @@ namespace drawdist {
             const bool initOk = df < 1 || chi2Ok(maxChi2, df);
             const bool reshufOk = chi2Ok(maxChi2Reshuffle, deckSize - 1);
             const bool woundOk = chi2Ok(woundChi2[0], woundDf[0]) && chi2Ok(woundChi2[1], woundDf[1]);
+            // scenario F: wound uniform over [1, deck] (pile = deck + wound; promoted top first)
+            double bareChi2 = 0;
+            {
+                const double expect = static_cast<double>(trials) / deckSize;
+                for (int pos = 1; pos <= deckSize; ++pos) {
+                    int obs = 0;
+                    if (pos < static_cast<int>(bareTally.counts.size()) && !bareTally.counts[pos].empty()) {
+                        obs = bareTally.counts[pos][0];
+                    }
+                    bareChi2 += (obs - expect) * (obs - expect) / expect;
+                }
+            }
+            const bool bareOk = chi2Ok(bareChi2, deckSize - 1);
             // wound-below-bottom = legacy gap 0 of the deck+1 pre-insert gaps: 5-sigma binomial
             const double pBelow = 1.0 / (deckSize + 1);
             const double belowSig = std::sqrt(trials * pBelow * (1 - pBelow));
             const bool bottomFreqOk = std::abs(bottomWoundBelow - trials * pBelow) < 5 * belowSig + 1;
-            const bool ok = initOk && reshufOk && woundOk && headbuttExact && innatesFirst
+            const bool ok = initOk && reshufOk && woundOk && bareOk && headbuttExact && innatesFirst
                     && woundNeverFirst && bottomExact && bottomFreqOk;
             if (!ok) ++failures;
 
@@ -453,6 +489,7 @@ namespace drawdist {
                       << " | initMaxChi2=" << maxChi2 << " (df " << df << (initOk ? " OK" : " FAIL") << ")"
                       << " reshufMaxChi2=" << maxChi2Reshuffle << " (df " << deckSize - 1 << (reshufOk ? " OK" : " FAIL") << ")"
                       << " woundChi2={" << woundChi2[0] << "," << woundChi2[1] << "}" << (woundOk ? " OK" : " FAIL")
+                      << " bareChi2=" << bareChi2 << (bareOk ? " OK" : " FAIL")
                       << " innatesFirst=" << (innatesFirst ? "OK" : "FAIL")
                       << " headbuttTop=" << (headbuttExact ? "OK" : "FAIL")
                       << " woundNeverFirst=" << (woundNeverFirst ? "OK" : "FAIL")

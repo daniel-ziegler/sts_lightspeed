@@ -64,13 +64,19 @@ distribution over draw sequences is identical (exchangeability), and the player'
 set is identical at every decision point. This is a representation change, not a semantics
 change — recorded here to head off confusion.
 
-## 5. Shuffled-in cards can surface immediately (legacy gap quirk)
+## 5. Shuffle-in top-promotion: exact distribution, early knowledge timing
 
 The legacy engine (mirroring the game) inserts a shuffled-in card at a uniform gap that
-*excludes the very top of the pile* — the inserted card is never the next card drawn. Folding
-the insertion into the exchangeable unknown region loses that one-draw exclusion: the card is
-drawn next with probability 1/(U+1) where legacy gives 0 (probability mass shifts by at most
-1/(U+1) on a single draw, then the distributions coincide). Representing the exclusion exactly
-would require a "not on top" marker that decays after one draw — belief machinery out of
-proportion to a status-card-sized effect. When a known top exists (K ≥ 1) the exclusion is
-automatic (the known top is popped first) and the model is exact.
+*excludes the very top of the pile* — the inserted card is never the next card drawn. To
+represent this exactly, a shuffle-in with no known top first samples one unknown card and
+promotes it to the known top (it was the pre-insert top: uniform over the unknown region from
+the player's view), then the inserted card joins the unknown region below it. The joint
+distribution over draw sequences is exact, and the chance node merely *moves* — insert-time
+promotion (U outcomes) replaces the following draw's sampling (which becomes a deterministic
+pop).
+
+**The inaccuracy** is knowledge timing only: the player learns their next draw at insert time
+rather than at the draw itself, so decisions between the shuffle-in and the next draw are
+slightly clairvoyant about one card — mild and bounded (the same card would be revealed one
+observation later anyway). When a known top already exists (K ≥ 1) the exclusion is automatic
+and no promotion happens.

@@ -89,16 +89,19 @@ namespace sts {
             }
         }
 
-        // Shuffle a card into the pile at a position the player does not choose. Gaps whose
-        // location the player could track afterwards are determinized as chance outcomes: the
-        // K-1 gaps strictly within the known top, and the B gaps within/below the known bottom
-        // (a card under the bottom stack is drawn dead last — trackable). The boundary gaps
-        // directly adjacent to the known stacks are NOT player-distinguishable from the unknown
-        // interior, so they fold into "joins the unknown region" — exchangeability then
-        // reproduces the legacy uniform position exactly (outcome marginals and the induced
-        // draw distribution match legacy; clairvoyance is limited to within-stack landings,
-        // SEARCH_MODEL_INACCURACIES.md #1). With B == 0 and K < 2 there are no trackable gaps
-        // and the insert is deterministic for the player: no rng, no chance node.
+        // Shuffle a card into the pile at a position the player does not choose. The legacy gap
+        // choice never lands the card on the very top, so the pre-insert top remains the next
+        // draw: with no known top we first sample one unknown card and promote it to known top
+        // (the player effectively learns their next draw one observation early — a mild,
+        // player-favorable timing shift, but the joint distribution over draw sequences is
+        // exact; the chance node simply moves here from the following draw, which becomes a
+        // deterministic pop). The inserted card then joins the pile below that top: gaps whose
+        // location the player could track afterwards are determinized as chance outcomes (the
+        // K-1 gaps strictly within the known top, the B gaps within/below the known bottom —
+        // SEARCH_MODEL_INACCURACIES.md #1), while the boundary gaps adjacent to the known
+        // stacks are NOT player-distinguishable from the unknown interior and fold into "joins
+        // the unknown region", whose exchangeability reproduces the legacy positional
+        // distribution exactly.
         void shuffleIn(Random &rng, const CardInstance &c) {
             if (orderObserved) {
                 // legacy concrete insertion (gap [0, N-1]; never the very top)
@@ -107,8 +110,18 @@ namespace sts {
                 ++knownTopCount;
                 return;
             }
+            if (knownTopCount == 0 && unknownCount() > 0) {
+                // promote the pre-insert top: uniform sample from the unknown region
+                const int idx = knownBottomCount
+                        + (unknownCount() == 1 ? 0 : rng.random(unknownCount() - 1));
+                const CardInstance top = cards[idx];
+                cards.erase(cards.begin() + idx);
+                cards.push_back(top);
+                knownTopCount = 1;
+            }
             if (knownBottomCount == 0 && knownTopCount < 2) {
                 add(c);
+                normalizeSingleton();
                 return;
             }
             const int g = rng.random(size() - 1);
