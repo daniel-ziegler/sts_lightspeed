@@ -47,7 +47,10 @@ iter_370 (training high-water 0.766) evals 0.688 — winner's curse confirmed; i
 (0.725). Headline tier (1000 identical seeds, tuned engine, McNemar):
 **hient-425 0.729 vs heroe2-240 0.663 (+6.6pp, p=7e-4)**; vs heroe2-270 0.711 (+1.8pp, p=0.36,
 n.s. — heroe2-270 is much stronger under the tuned engine than its old-engine evals suggested).
-10k-sim tier (500 paired seeds × 3 ckpts) in flight.
+10k-sim tier (500 paired seeds): **hient-425 0.768** vs heroe2-270 0.744 (+2.4pp, p=0.34) vs
+heroe2-240 0.714 (+5.4pp, p=0.034). Verdict: hient-425 nominally best at both sim counts,
+decisively > heroe2-240; statistically a peer of heroe2-270. Closes the cheat-mode era;
+hient paused at iter_440 (resumable), box idle for honest-era work.
 
 **LR decay schedule added** (`2763271`): geometric to `lr_final_frac` over `lr_decay_steps`
 from absolute `lr_decay_start`; actual lrs logged per-iter. For the next hero run.
