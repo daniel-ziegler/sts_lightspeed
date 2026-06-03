@@ -51,7 +51,11 @@ always-distinct concrete orders to 5-card multisets that collide heavily.
 **B. Discard + exhaust sorting (small, independent).** Physically sorted at mutation. Dynamics-
 neutral (full shuffle erases order; the uniqueId fast-path at CardManager.cpp:498 falls back to
 scan). Not byte-identical (same rng over a different input order) — validate distributionally +
-SCORE-neutral + unification stats ↑.
+SCORE-neutral + unification stats ↑. ⚠ Audit finding (PILE_AUDIT.md): index-based card-select
+recordings (Headbutt/Exhume/draw-to-hand) make Phase B ALREADY replay-incompatible with old
+recordings — state-set regeneration is required from B onward, and per-battle before/after SCORE
+comparisons must use distribution-matched regenerated sets (same recipe/seeds) rather than
+identical files.
 
 **C. Draw pile knownTop + unknown multiset (core).** Representation, all table-row changes above,
 Frozen Eye mode, `drawKnownTop` in equalForSearch/hash. Unit-level: distribution-equivalence
