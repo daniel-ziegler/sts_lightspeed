@@ -95,18 +95,27 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
 
     while (bc.outcome == Outcome::UNDECIDED) {
         if (prevBestEdge != nullptr) {
-            // Locate the new root in the existing tree.
+            // Locate the new root in the existing tree. Rerooting adopts the node's stored
+            // state, and the next decision's action indices execute on the REAL bc — so the
+            // match must be exact including hand order (equalForSearch treats the hand as a
+            // multiset, which is sound inside the tree but not at the tree/reality boundary).
             using Node = sts::search::BattleSearcher::Node;
+            auto exactMatch = [&bc](const Node *n) {
+                return n->state.equalForSearch(bc) &&
+                       std::equal(n->state.cards.hand.begin(),
+                                  n->state.cards.hand.begin() + n->state.cards.cardsInHand,
+                                  bc.cards.hand.begin());
+            };
             Node* candidate = nullptr;
             Node* edgeChild = prevBestEdge->node;
             if (edgeChild != nullptr && !edgeChild->isRandomNode) {
-                if (edgeChild->state.equalForSearch(bc)) {
+                if (exactMatch(edgeChild)) {
                     candidate = edgeChild;
                 }
             } else if (edgeChild != nullptr) {
                 // Chance node: find the outcome whose realized state matches bc.
                 for (auto &oe : edgeChild->edges) {
-                    if (oe.node != nullptr && oe.node->state.equalForSearch(bc)) {
+                    if (oe.node != nullptr && exactMatch(oe.node)) {
                         candidate = oe.node;
                         break;
                     }

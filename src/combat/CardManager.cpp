@@ -554,7 +554,31 @@ bool CardManager::operator==(const CardManager &rhs) const {
            std::equal(hand.begin(), hand.begin() + cardsInHand, rhs.hand.begin()) &&  // slots past cardsInHand are stale
            limbo == rhs.limbo &&
            stasisCards == rhs.stasisCards &&
-           // TODO make unordered
+           drawPile == rhs.drawPile &&
+           discardPile == rhs.discardPile &&
+           exhaustPile == rhs.exhaustPile &&
+           handNormalityCount == rhs.handNormalityCount &&
+           handPainCount == rhs.handPainCount &&
+           strikeCount == rhs.strikeCount &&
+           handBloodCardCount == rhs.handBloodCardCount &&
+           drawPileBloodCardCount == rhs.drawPileBloodCardCount &&
+           discardPileBloodCardCount == rhs.discardPileBloodCardCount;
+}
+
+bool CardManager::equalForSearch(const CardManager &rhs) const {
+    if (cardsInHand != rhs.cardsInHand) {
+        return false;
+    }
+    // hand as a multiset: sort scratch copies into canonical order, then compare exactly
+    std::array<CardInstance, MAX_HAND_SIZE> lhsHand, rhsHand;
+    std::copy(hand.begin(), hand.begin() + cardsInHand, lhsHand.begin());
+    std::copy(rhs.hand.begin(), rhs.hand.begin() + cardsInHand, rhsHand.begin());
+    std::sort(lhsHand.begin(), lhsHand.begin() + cardsInHand);
+    std::sort(rhsHand.begin(), rhsHand.begin() + cardsInHand);
+    return std::equal(lhsHand.begin(), lhsHand.begin() + cardsInHand, rhsHand.begin()) &&
+           nextUniqueCardId == rhs.nextUniqueCardId &&
+           limbo == rhs.limbo &&
+           stasisCards == rhs.stasisCards &&
            drawPile == rhs.drawPile &&
            discardPile == rhs.discardPile &&
            exhaustPile == rhs.exhaustPile &&
