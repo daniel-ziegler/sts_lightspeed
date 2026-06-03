@@ -6,12 +6,15 @@ See COORD.md for the MCTS-session side.
 ## ⚠ Standing caveat: draw-order clairvoyance (discovered 2026-06-03)
 
 The deployed battle search inherits the concrete draw-pile order at every decision root —
-**all absolute win rates below are inflated by ~+34pp of information value** (root-hiding probe:
-heroe2-270 @1000 sims drops 69.4% → 35.2% honest). Relative comparisons within cheat mode
-(paired A/Bs, schedule effects) likely keep their direction but are conditioned on the cheat.
-Honest line = CardPile belief search (56.2% honest, branch `boss-eval`). Open decisions:
-move RL collection to honest battles (expect a large apparent drop that is NOT a regression);
-retune search knobs under honest dynamics. All entries below predate honest mode unless noted.
+**all absolute win rates below are inflated** (root-hiding probe: heroe2-270 @1000 sims drops
+69.4% → 35.2% honest; CardPile belief search recovers 56.2%). Note these honest figures are
+LOWER BOUNDS on honest-era performance: they evaluate a policy trained on clairvoyant battles
+with cheat-tuned search knobs — the ~34pp is the information value to this cheat-adapted
+system, not the intrinsic cost of honesty. Relative comparisons within cheat mode (paired
+A/Bs, schedule effects) likely keep their direction but are conditioned on the cheat.
+Open decisions: move RL collection to honest battles (expect a large apparent drop that is
+NOT a regression); retune search knobs under honest dynamics; honest-era retraining will
+recover an unknown chunk of the gap. All entries below predate honest mode unless noted.
 
 ---
 
