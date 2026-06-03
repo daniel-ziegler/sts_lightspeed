@@ -98,6 +98,11 @@ namespace sts {
         void clear(); // clear all card piles and reset counters
         
         bool operator==(const CardManager &rhs) const;
+
+        // operator== with the hand compared as a multiset: hand order is not gameplay-
+        // meaningful, so search-state dedup must unify permutations (the searcher continues
+        // from the surviving node's concrete order — a legal equivalent continuation).
+        [[nodiscard]] bool equalForSearch(const CardManager &rhs) const;
     };
 
     std::ostream &operator <<(std::ostream &os, const CardManager &c);

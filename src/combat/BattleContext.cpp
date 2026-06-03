@@ -3152,7 +3152,8 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
 }
 
 bool BattleContext::equalForSearch(const BattleContext &rhs) const {
-    // Same as operator== but excludes rng, loopCount, and sum (RNG + debug-only).
+    // Same as operator== but excludes rng, loopCount, and sum (RNG + debug-only), and compares
+    // the hand as a multiset (order is not gameplay-meaningful; permutations must dedup).
     return (
         seed == rhs.seed &&
         turn == rhs.turn &&
@@ -3173,7 +3174,7 @@ bool BattleContext::equalForSearch(const BattleContext &rhs) const {
         potions == rhs.potions &&
         player == rhs.player &&
         monsters == rhs.monsters &&
-        cards == rhs.cards &&
+        cards.equalForSearch(rhs.cards) &&  // hand as multiset (order not gameplay-meaningful)
         curCardQueueItem == rhs.curCardQueueItem &&
         miscBits == rhs.miscBits
     );
