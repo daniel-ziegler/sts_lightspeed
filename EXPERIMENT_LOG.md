@@ -20,6 +20,27 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ## 2026-06-03
 
+**Repr lab CONCLUDED (3 rounds, 73 cells, `sl_repr_lab.py` + results CSVs).** Final picture:
+- *Grounding (take-elite/rest CE)*: baseline = seed lottery ({0.50..0.999} across replicates);
+  every relational arm saturates at 1.000 every seed.
+- *Routing (pick option minimizing dist-to-rest / avoiding elites)*: R0 0.918 → R4 0.968 →
+  **R5b 0.999**. Dropping path_xs (R6) costs 3–4pp: keep it.
+- *Queries*: dist-to-rest MAE 0.17 (R0) → 0.007 (R4/R5b); max-elites 0.169 → 0.005 (R5b);
+  depth-3 elite count 0.116 → 0.005.
+- *Low-data (⅛ ≈ 900 examples)*: **R0 at chance on everything; R4 still saturates** — the
+  RL-relevance clincher (RL's signal is weaker still).
+- *Embedding family*: **sinusoids are load-bearing** — learned tables at equal structure (R7)
+  crater (elite 0.98→0.57, dist 0.17→0.66); even on R4 features they cost 19pp routing (R4L).
+  R5's oracle pathology was unscaled magnitudes in additive token sums (R5b scaling fixes it;
+  R5L tables also work but trail R5b).
+- *Aux losses* (free self-supervised labels): dest_room aux lifts R0 routing 91.8→95.5 and
+  pins elite ≈0.998 without any repr change; queries aux +2pp; combining doesn't stack.
+
+**Production recommendation (honest-era run):** adopt R5b encoding — path option += destination
+room type; map nodes += ego-relative (dx,dy) + reachable flag + [0,1]-scaled (minE, maxE,
+distRest) aggregates; keep path_xs and sinusoids; fix boss→categorical in fixed_obs; scale
+discipline for any added feature. Add dest_room (+ optionally queries) aux heads to RL training.
+
 **Hient vs heroe2, paired held-out evals (cheat-mode).** Plateau called at iter ~440
 (band 0.70±0.04, 75 iters past high-water). Checkpoint screen (400 paired seeds @1k sims):
 iter_370 (training high-water 0.766) evals 0.688 — winner's curse confirmed; iter_425 wins
