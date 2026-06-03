@@ -23,6 +23,7 @@ namespace sts::search {
 
     struct SearchAgent {
         std::int64_t simulationCountTotal = 0;
+        search::SearchStats searchStats;   // summed over this agent's battles
         std::vector<int> gameActionHistory;
 
         bool recordActions = false;

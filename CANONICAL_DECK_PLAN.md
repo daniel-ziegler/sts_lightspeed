@@ -75,3 +75,11 @@ interaction cases explicitly).
   remains unaddressed (separate canonicalization project; known ceiling on wins here).
 - Rare recording divergence (~0.1% of collection games, unexplained) — scanner stays in the
   collection flow; unrelated but shares the replay machinery.
+
+## Additional risk note (found during Phase A)
+Multi-threaded eval_states battle outcomes are not perfectly run-to-run deterministic (rare
+per-battle divergence under thread contention; single-threaded runs are exact). Pre-existing,
+magnitude ~1e-4 of aggregate stats; per-battle SCORE on boss states masks most of it (post-heal
+HP). Baseline STATS comparisons therefore quote 8-thread full-set numbers for scale and a
+1-thread limit-300 exact reference for regression checking. Root cause unidentified (suspect a
+benign engine-global data race); worth its own investigation eventually.

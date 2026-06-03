@@ -153,6 +153,7 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
         takeAction(bc, bestEdge->action);
         prevBestEdge = bestEdge;   // valid for next iter's reroot lookup (no setRoot between here and there)
     }
+    searchStats.add(searcher.stats);
 }
 
 void search::SearchAgent::stepThroughSolution(BattleContext &bc, std::vector<search::Action> &actions) {

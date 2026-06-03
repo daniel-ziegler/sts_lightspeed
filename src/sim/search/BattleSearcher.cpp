@@ -191,6 +191,7 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
     std::size_t i = hash & stateToNodeMask;
     while (stateToNode[i].node != nullptr) {
         if (stateToNode[i].hash == hash && stateToNode[i].node->state.equalForSearch(state)) {
+            lastNodeWasCreated = false;
             return stateToNode[i].node;
         }
         i = (i + 1) & stateToNodeMask;
@@ -199,6 +200,8 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
     Node* newNode = allocNode();
     newNode->state = std::move(state);
     stateToNode[i] = {hash, newNode};
+    lastNodeWasCreated = true;
+    ++stats.nodesCreated;
     return newNode;
 }
 
@@ -248,6 +251,7 @@ void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
 }
 
 void search::BattleSearcher::step() {
+    ++stats.steps;
     searchStack.clear();
     searchStack.push_back(root);
     actionStack.clear();
@@ -363,9 +367,11 @@ void search::BattleSearcher::step() {
             chance->outcomesGenerated = 1;
             edge.node = chance;
 
+            ++stats.chanceOutcomesSampled;
             Edge outcomeEdge;
             outcomeEdge.action = Action{};
             outcomeEdge.node = getOrCreateNode(std::move(next));
+            if (!lastNodeWasCreated) ++stats.chanceTranspositions;  // fresh chance node: no siblings yet
             outcomeEdge.rngAdvanceSteps = 0;
             chance->edges.push_back(outcomeEdge);
             stagedOutcomeEdge = &chance->edges.back();
@@ -381,6 +387,7 @@ void search::BattleSearcher::step() {
         // only when the node already existed and `next` was left intact.
         next.rng = preActionRng;
         Node* child = getOrCreateNode(std::move(next));
+        if (!lastNodeWasCreated) ++stats.detTranspositions;
         edge.node = child;
 
         if (onPath(child)) {
@@ -528,12 +535,15 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         out.rng = Random(chance.randomnessBase + N);
         chance.stochasticAction.execute(out);
 
+        ++stats.chanceOutcomesSampled;
         Node* child = getOrCreateNode(std::move(out));  // out unused afterward; safe to move
         for (auto &e : chance.edges) {
             if (e.node == child) {
+                ++stats.chanceSiblingReuse;
                 return &e;  // resampled an outcome we already have
             }
         }
+        if (!lastNodeWasCreated) ++stats.chanceTranspositions;
 
         Edge e;
         e.action = Action{};

@@ -455,6 +455,7 @@ static std::vector<GameStateRecord> loadRecords(const std::string &path, int lim
 }
 
 struct EvalStatesInfo {
+    search::SearchStats stats;
     std::mutex m;
     const std::vector<GameStateRecord> *records = nullptr;
     std::size_t next = 0;
@@ -510,6 +511,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
 
         {
             std::scoped_lock lock(info->m);
+            info->stats.add(agent.searchStats);
             info->scoreSum += score;
             if (!dead) {
                 ++info->winCount;
@@ -574,6 +576,13 @@ static int evalStates(int argc, const char *argv[]) {
     const double winRate = info.n > 0 ? static_cast<double>(info.winCount) / info.n : 0.0;
     const double avgHp = info.winCount > 0 ? info.hpSum / info.winCount : 0.0;
     std::cout << "SCORE " << meanScore << ' ' << winRate << ' ' << avgHp << ' ' << info.n << std::endl;
+    const auto &st = info.stats;
+    std::cout << "STATS steps=" << st.steps
+              << " nodesCreated=" << st.nodesCreated
+              << " detTrans=" << st.detTranspositions
+              << " chanceSampled=" << st.chanceOutcomesSampled
+              << " sibReuse=" << st.chanceSiblingReuse
+              << " chanceTrans=" << st.chanceTranspositions << '\n';
     return 0;
 }
 
