@@ -41,7 +41,9 @@ from network import (
     collate_fn, obs_space, choice_space, TransformerBlock, RMSNorm, ModelHP,
     MAX_DECK_SIZE, MAX_FIXED_ACTIONS, MAX_MAP_NODES,
 )
-from inputs import DictSpace, DictAddSpace, SequenceSpace, FixedVecSpace, EnumSpace, EmbedCache
+from inputs import (
+    DictSpace, DictAddSpace, SequenceSpace, FixedVecSpace, EnumSpace, EmbedCache, ScalarSpace,
+)
 
 PATHS_OFFSET = MAX_DECK_SIZE + 3 + sts.MAX_POTION_CAPACITY + MAX_FIXED_ACTIONS
 INF_DIST = 99
@@ -51,6 +53,38 @@ DIST_CAP = 15
 class Flag2(IntEnum):
     NO = 0
     YES = 1
+
+
+class LearnedVecEmbedding(nn.Module):
+    """Sum of per-component learned lookup tables for small-integer feature vectors --
+    the direct alternative to sinusoid+projection for low-cardinality coordinates."""
+
+    def __init__(self, dim, specs):
+        super().__init__()
+        self.specs = specs  # list of (offset, cardinality); index = clamp(value + offset)
+        self.tables = nn.ModuleList([nn.Embedding(c, dim) for _, c in specs])
+        for t in self.tables:
+            nn.init.normal_(t.weight, std=0.02)
+
+    def forward(self, xs):
+        out = None
+        for i, (off, c) in enumerate(self.specs):
+            idx = (xs[..., i].long() + off).clamp(0, c - 1)
+            e = self.tables[i](idx)
+            out = e if out is None else out + e
+        return out
+
+
+class LearnedVecSpace(ScalarSpace):
+    def __init__(self, specs):
+        self.specs = specs
+        super().__init__()
+
+    def build_embed(self, dim, cache):
+        return cache.build(self, dim, lambda: LearnedVecEmbedding(dim, self.specs))
+
+    def sample(self, rng):
+        return np.array([int(rng.integers(0, c)) - off for off, c in self.specs])
 
 
 # ---------------------------------------------------------------- map ground truth
@@ -212,6 +246,43 @@ def build_repr(name):
             del bt['map_nodes']['value']['path_xs']
         return o_sp, c_sp4, aug
 
+    # Learned-table arms: same tensors/structure, lookup embeddings instead of sinusoids
+    # for the small-integer coordinate features.
+    _POS_L = LearnedVecSpace([(0, 7), (0, 16)])
+    _PXS_L = LearnedVecSpace([(1, 8), (1, 8), (1, 8)])      # path_xs in -1..6
+    _REL_L = LearnedVecSpace([(6, 13), (15, 31)])           # dx in -6..6, dy in -15..15
+    _X_L = LearnedVecSpace([(0, 7)])
+
+    if name == 'R7':  # baseline structure, learned embeddings only
+        o_sp = _obs_space_with_map({'pos': _POS_L, 'path_xs': _PXS_L}, drop=('pos', 'path_xs'))
+        c_sp = _choice_space_with_paths(_X_L)
+        return o_sp, c_sp, lambda bt, infos: None
+
+    if name == 'R4L':  # R4 features, learned embeddings
+        _, _, aug4 = build_repr('R4')
+        o_sp = _obs_space_with_map({'pos': _POS_L, 'path_xs': _PXS_L, 'rel': _REL_L,
+                                    'reachable': EnumSpace(Flag2)}, drop=('pos', 'path_xs'))
+        c_sp = _choice_space_with_paths(
+            DictAddSpace({'x': _X_L, 'room': EnumSpace(sts.Room)}))
+        return o_sp, c_sp, aug4
+
+    if name == 'R5L':  # R4L + aggregates as learned tables (vs R5 sinusoid / R5b scaled)
+        o_sp4l, c_sp4l, aug4 = build_repr('R4L')
+        o_sp = _obs_space_with_map({'pos': _POS_L, 'path_xs': _PXS_L, 'rel': _REL_L,
+                                    'reachable': EnumSpace(Flag2),
+                                    'agg': LearnedVecSpace([(0, 8), (0, 8), (0, 16)])},
+                                   drop=('pos', 'path_xs'))
+        def aug(bt, infos):
+            aug4(bt, infos)
+            agg = torch.zeros(len(infos), MAX_MAP_NODES, 3, dtype=torch.int32)
+            for i, mi in enumerate(infos):
+                for j in range(mi['n']):
+                    agg[i, j, 0] = mi['minE'][j]
+                    agg[i, j, 1] = mi['maxE'][j]
+                    agg[i, j, 2] = min(mi['dR'][j], DIST_CAP)
+            bt['map_nodes']['value']['agg'] = agg
+        return o_sp, c_sp4l, aug
+
     raise ValueError(name)
 
 
@@ -291,6 +362,10 @@ class ProbeNN(nn.Module):
         nn.init.uniform_(self.choice_logits.weight, -0.01, 0.01)
         nn.init.zeros_(self.choice_logits.bias)
         self.reg_head = nn.Linear(H.dim, 1, bias=True)
+        # Auxiliary heads: per-path-option destination room classifier (grounding circuit)
+        # and pooled (dist_rest, max_elites) regressors (aggregation circuit).
+        self.aux_room = nn.Linear(H.dim, len(sts.Room), bias=True)
+        self.aux_reg = nn.Linear(H.dim, 2, bias=True)
 
     def forward(self, batch):
         choices = batch['choices']
@@ -301,12 +376,16 @@ class ProbeNN(nn.Module):
         for l in self.layers:
             x = l(x, m)
         xn = self.norm(x)
-        logits = self.choice_logits(xn[:, obs_m.size(1):, :]).squeeze(-1).float()
+        action_xs = xn[:, obs_m.size(1):, :]
+        logits = self.choice_logits(action_xs).squeeze(-1).float()
         logits = logits.masked_fill(ch_m, float('-inf'))
         valid = (~m).unsqueeze(-1).float()
         pooled = (xn * valid).sum(1) / valid.sum(1).clamp(min=1)
         reg = self.reg_head(pooled).squeeze(-1).float()
-        return logits, reg
+        path_tokens = action_xs[:, PATHS_OFFSET:PATHS_OFFSET + 7, :]
+        aux_room = self.aux_room(path_tokens).float()       # [B, 7, n_rooms]
+        aux_reg = self.aux_reg(pooled).float()              # [B, 2]
+        return logits, reg, aux_room, aux_reg
 
 
 # ---------------------------------------------------------------- protocol
@@ -327,8 +406,24 @@ def is_valid_seed(seed, frac=0.15):
     return (((int(seed) * 1327217885) & 0xFFFFFFFF) / 0xFFFFFFFF) < frac
 
 
+def aux_targets(rows, infos, device):
+    """Self-supervised aux labels: per-option destination room (-100 = unoffered slot) and
+    state-level (dist_rest, max_elites). All computable from the obs alone (free in RL)."""
+    n = len(rows)
+    room = torch.full((n, 7), -100, dtype=torch.long)
+    reg = torch.zeros(n, 2)
+    for i, mi in enumerate(infos):
+        for k, o in enumerate(mi['opts'][:7]):
+            room[i, k] = mi['rts'][o]
+        reg[i, 0] = min(DIST_CAP, 1 + min(mi['dR'][o] for o in mi['opts']))
+        reg[i, 1] = max(mi['maxE'][o] for o in mi['opts'])
+    return room, reg
+
+
 def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
     kind, fn = task_spec(task_name)
+    aux = [a for a in args.aux.split(',') if a]
+    aux_room_y, aux_reg_y = (aux_targets(rows, infos, device) if aux else (None, None))
     labels, keep = [], []
     for i, (r, mi) in enumerate(zip(rows, infos)):
         lab = fn(r, mi)
@@ -368,7 +463,7 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
         with torch.no_grad():
             for i in range(0, len(va), args.batch_size):
                 idx = va[i:i + args.batch_size]
-                logits, reg = net(to_device(index_batch(bt, idx), device))
+                logits, reg, _, _ = net(to_device(index_batch(bt, idx), device))
                 yy = y_by_row[idx].to(device)
                 if kind == 'ce':
                     hits += (logits.argmax(-1) == yy).sum().item()
@@ -388,9 +483,15 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
         perm = tr[torch.randperm(len(tr), generator=g)]
         for i in range(0, len(perm), args.batch_size):
             idx = perm[i:i + args.batch_size]
-            logits, reg = net(to_device(index_batch(bt, idx), device))
+            logits, reg, a_room, a_reg = net(to_device(index_batch(bt, idx), device))
             yy = y_by_row[idx].to(device)
             loss = F.cross_entropy(logits, yy) if kind == 'ce' else F.mse_loss(reg, yy)
+            if 'dest_room' in aux:
+                ar = aux_room_y[idx].to(device)
+                loss = loss + args.aux_weight * F.cross_entropy(
+                    a_room.reshape(-1, a_room.shape[-1]), ar.reshape(-1), ignore_index=-100)
+            if 'queries' in aux:
+                loss = loss + args.aux_weight * F.mse_loss(a_reg, aux_reg_y[idx].to(device))
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             opt.step(); sched.step()
@@ -405,7 +506,7 @@ def run_cell(repr_name, task_name, rows, infos, bt, args, device, writer, fout):
           f"{wall:.0f}s)", flush=True)
     writer.writerow([repr_name, task_name, kind, len(tr), len(va), epochs,
                      round(baseline, 4), round(m1, 4), round(best, 4), round(wall),
-                     args.torch_seed, args.data_frac])
+                     args.torch_seed, args.data_frac, args.aux])
     fout.flush()
     del net
     if device.type == 'cuda':
@@ -427,6 +528,8 @@ def main():
     ap.add_argument('--out-csv', default='sl_repr_results.csv')
     ap.add_argument('--torch-seed', type=int, default=0)
     ap.add_argument('--data-frac', type=float, default=1.0)
+    ap.add_argument('--aux', default='', help="comma list of {dest_room, queries}")
+    ap.add_argument('--aux-weight', type=float, default=0.3)
     args = ap.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -447,7 +550,7 @@ def main():
     writer = csv.writer(fout)
     if not exists:
         writer.writerow(['repr', 'task', 'kind', 'n_train', 'n_valid', 'epochs',
-                         'baseline', 'final', 'best', 'wall_s', 'torch_seed', 'data_frac'])
+                         'baseline', 'final', 'best', 'wall_s', 'torch_seed', 'data_frac', 'aux'])
 
     import copy
     bt_base = collate_fn(rows)  # collate once; each repr augments a deep copy
