@@ -23,17 +23,19 @@ import glob
 import os
 
 # Current/relevant runs only (older experiments -- the shape_* upg-coefficient sweep, the hero
-# lr/entropy forks, the grpo_b variants -- are concluded; their stats remain in lambda_results/
-# if ever needed again):
+# lr/entropy forks, the GRPO runs -- are concluded; their stats remain in lambda_results/ if
+# ever needed again). NOTE: all runs except honest1 trained on the CLAIRVOYANT engine (see
+# EXPERIMENT_LOG.md) -- their win rates are inflated and not comparable to honest-era curves.
 #   hero      PPO from-scratch baseline (v1: iters 1-99) + continuation (v2: 100-177)
-#   heroe2    PPO num_epochs=2 fork -- the best policy (0.706 @ 10k-sim eval), paused @ iter 270
-#   grpo_a    GRPO (critic-free RLOO), from scratch
-#   ppo_hient PPO epochs=2, entropy_coef 0.05 ┐
-#   ppo_ent10 PPO epochs=2, entropy_coef 0.10 ├ entropy bracket: can PPO hold GRPO-like entropy?
+#   heroe2    PPO num_epochs=2 fork -- cheat-era runner-up (0.744 @ 10k-sim paired eval)
+#   ppo_hient PPO epochs=2, entropy_coef 0.05 + decay -- cheat-era champion (0.768 @ 10k)
+#   ppo_ent10 PPO epochs=2, entropy_coef 0.10 ┐ entropy bracket
 #   ppo_ent25 PPO epochs=2, entropy_coef 0.25 ┘ (0.25 over-flattened; killed)
+#   honest1   honest-era from-scratch hero: honest CardPile engine, R5b encoding, dest-room aux
 stats_files = []
-for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl', 'grpo_a.pt.stats.jsonl',
-           'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl'):
+for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl',
+           'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl',
+           'honest1.pt.stats.jsonl'):
     _fp = f'lambda_results/{_p}'
     if os.path.exists(_fp):
         stats_files.append(_fp)
@@ -41,8 +43,9 @@ for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl', 'grpo_a.pt.stats.json
 # Color palette for different runs
 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
 # Per-group color overrides (takes precedence over the palette). Use to highlight headline runs.
-GROUP_COLORS = {'hero': 'black', 'heroe2': 'darkorange', 'grpo_a': 'magenta',
-                'ppo_hient': 'royalblue', 'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet'}
+GROUP_COLORS = {'hero': 'black', 'heroe2': 'darkorange',
+                'ppo_hient': 'royalblue', 'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet',
+                'honest1': 'crimson'}
 GROUP_LW = {k: 2.8 for k in GROUP_COLORS}   # all headline runs
 
 def load_run_data(filename):
@@ -290,15 +293,18 @@ plt.tight_layout()
 plt.show()
 
 # %%
-# From-scratch GRPO vs from-scratch PPO at matched WALL TIME (the fair learning-speed view —
-# the iteration axis hides that the algorithms do different amounts of work per iteration).
-# PPO baseline = hero v1 (iters 1-99, before the iter-100 hyperparameter change). Caveat: the
-# GRPO runs share the box with each other (16 of 30 workers each) while hero v1 had it alone
-# (20 workers), so GRPO wall times are inflated by contention.
+# honest1 vs cheat-era from-scratch runs at matched WALL TIME. Win rates are NOT directly
+# comparable across eras (the cheat-era engine was draw-order clairvoyant, worth ~tens of pp);
+# floor progress is closer to comparable. This view shows learning-curve SHAPE and whether the
+# R5b encoding + aux scaffold buys faster early learning despite the harder honest battles.
 _LR = 'lambda_results'
 hero_file = f'{_LR}/hero.pt.stats.jsonl'
-GRPO_RUNS = [
-    ('grpo_a (RLOO, lr 1e-4)', f'{_LR}/grpo_a.pt.stats.jsonl', 'magenta'),
+CHEAT_BASELINES = [
+    ('hero v1 (cheat era, from scratch)', f'{_LR}/hero.pt.stats.jsonl', 'black', 99),
+    ('ppo_hient (cheat era, from scratch)', f'{_LR}/ppo_hient.pt.stats.jsonl', 'royalblue', 195),
+]
+HONEST_RUNS = [
+    ('honest1 (honest engine, R5b+aux)', f'{_LR}/honest1.pt.stats.jsonl', 'crimson'),
 ]
 
 def _wall_hours(run, max_iter=None):
@@ -307,49 +313,47 @@ def _wall_hours(run, max_iter=None):
     times = (run['collect_times'][keep] + run['train_times'][keep])
     return np.cumsum(times) / 3600, keep
 
-ppo_scratch = load_run_data(hero_file)
-grpo_runs = [(lbl, load_run_data(f), c) for lbl, f, c in GRPO_RUNS]
-if ppo_scratch is not None and any(r is not None for _, r, _ in grpo_runs):
+honest_runs = [(lbl, load_run_data(f), c) for lbl, f, c in HONEST_RUNS]
+if any(r is not None for _, r, _ in honest_runs):
     fig, (ax_win, ax_floor) = plt.subplots(1, 2, figsize=(14, 5))
-    px, pkeep = _wall_hours(ppo_scratch, max_iter=99)  # hero v1 = the from-scratch portion
     for ax, field, ylabel in ((ax_win, 'win_rates', 'Win rate'), (ax_floor, 'avg_floors', 'Avg floor')):
-        py = ppo_scratch[field][pkeep]
-        ax.plot(px, py, color='black', alpha=0.18, linewidth=1)
-        ax.plot(px, _smooth(py), color='black', linewidth=2.4, label='PPO from scratch (hero v1)')
-        for lbl, run, c in grpo_runs:
+        for lbl, f, c, mx in CHEAT_BASELINES:
+            run = load_run_data(f)
+            if run is None:
+                continue
+            px, pkeep = _wall_hours(run, max_iter=mx)  # from-scratch portion only
+            py = run[field][pkeep]
+            ax.plot(px, py, color=c, alpha=0.14, linewidth=1)
+            ax.plot(px, _smooth(py), color=c, linewidth=1.8, linestyle='--', label=lbl)
+        for lbl, run, c in honest_runs:
             if run is None:
                 continue
             gx, gkeep = _wall_hours(run)
             gy = run[field][gkeep]
             ax.plot(gx, gy, color=c, alpha=0.18, linewidth=1)
-            ax.plot(gx, _smooth(gy), color=c, linewidth=2.4, label=lbl)
+            ax.plot(gx, _smooth(gy), color=c, linewidth=2.6, label=lbl)
         ax.set_xlabel('Wall time (hours)'); ax.set_ylabel(ylabel)
-        ax.set_title(f'{ylabel} vs wall time — from-scratch GRPO vs PPO')
+        ax.set_title(f'{ylabel} vs wall time — honest1 vs cheat-era from-scratch (win rates not era-comparable)')
         ax.grid(True, alpha=0.3); ax.legend(fontsize=8, loc='best')
     plt.tight_layout()
     plt.show()
 else:
-    print("GRPO wall-time figure skipped (missing stats files)")
+    print("honest wall-time figure skipped (missing stats files)")
 
 # %%
 # Entropy phase plots: each run's training trajectory through (x, entropy) space as a faint
 # EMA-smoothed line, ending at a strong dot for its current/final state, for x = avg floor and
-# x = win rate. PPO runs sharpen (entropy falls) as they improve; the critic-free GRPO runs
-# improve while staying far more stochastic.
+# x = win rate.
 #
-# Dashed segments through the GRPO dots are objective-indifference lines. GRPO's advantages are
-# raw return differences (no normalization), so its objective is exactly E[return] +
-# entropy_coef*H: the optimizer trades entropy_coef nats per unit of return. Each run's empirical
-# d(reward)/dx (fit over the run; includes the win bonus and shaping) converts that to the x-axis:
-# points along the dashed line score equally under the training objective. The slopes are steep
-# (near-vertical at this aspect ratio), so segments are sized by a fixed *vertical* extent and
-# axis limits are pinned to the data. PPO lines need adv_norm_std (now logged by rl_train) since
-# its advantages are EWMA-normalized: effective exchange rate = entropy_coef * adv_norm_std.
-# Effective entropy/return exchange rate per run, in RAW-return units (the axis the plot uses):
-#   GRPO uses raw advantages          -> effective coef = entropy_coef
-#   PPO normalizes advantages by std  -> effective coef = entropy_coef * adv_norm_std
-ENTROPY_COEF = {'grpo_a': 0.01, 'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25}
-PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25'}  # divide advantages by the (logged) adv_norm_std
+# Dashed segments through the dots are objective-indifference lines: points along a line score
+# equally under that run's training objective E[return] + coef_eff*H. Each run's empirical
+# d(reward)/dx (fit over the run; includes the win bonus and shaping) converts the exchange rate
+# to the x-axis. Segments are sized by a fixed *vertical* extent and axis limits are pinned to
+# the data. PPO normalizes advantages by the (logged) adv_norm_std, so the effective per-return
+# coefficient is entropy_coef * adv_norm_std (times the decisions-per-trajectory factor applied
+# in the loop below). Runs with a decaying entropy_coef use the logged per-iteration value.
+ENTROPY_COEF = {'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25, 'honest1': 0.05}
+PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25', 'honest1'}  # adv / (logged) adv_norm_std
 
 def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     """unit_scale: indifference slope is annotated per (unit_scale of x), e.g. 0.01 win rate."""
