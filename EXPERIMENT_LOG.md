@@ -18,6 +18,17 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-04
+
+**honest1 launched** — first honest-era hero run (new Lambda box 192.9.243.58, A10/30 cores,
+persistent vol ~/sts-ca). From scratch on rerandomize2 @c6b4d84: honest CardPile engine with
+tuned defaults (expl 25, widening 3.70/0.52, EvalWeights unchanged; +ActionQueue/Transmutation/
+ethereal fixes), R5b encoding + dest-room aux (coef 0.1), PPO epochs 2, 256 games, batch 192,
+lr 3e-5/1e-4, entropy 0.05 flat (decay + lr decay held in reserve for the post-climb phase),
+1000 sims, --seed 1, --save-episodes from iter 1, 30 workers (collect ~104s/iter — ~2x faster
+than the old box). Reference points: honest heroe2-270 @engine defaults = 62.5%; early win
+rates will look far below cheat-era curves by construction.
+
 ## 2026-06-03
 
 **R5b encoding + aux loss in production** (`33bd7db`): repr-lab winner ported to
