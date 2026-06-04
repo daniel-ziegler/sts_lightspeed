@@ -84,18 +84,30 @@ namespace sts::search {
             hash_combine(hash, static_cast<int>(m.moveHistory[0]));
         }
 
-        // Hash cards in hand (INCLUDING POSITION to prevent invalid deduplication)
+        // Hash the hand as a multiset: sort a scratch copy into canonical order so permutations
+        // hash identically (equalForSearch compares the hand as a multiset to match). Cards
+        // tied on the hashed fields contribute identically in either order, so the canonical
+        // order's hidden-field tiebreaks cannot split equal states.
         hash_combine(hash, bc.cards.cardsInHand);
-        for (int i = 0; i < bc.cards.cardsInHand; ++i) {
-            const auto& c = bc.cards.hand[i];
-            hash_combine(hash, i); // Hash position to preserve ordering
-            hash_combine(hash, static_cast<int>(c.id));
-            hash_combine(hash, c.cost);
-            hash_combine(hash, c.costForTurn);
-            hash_combine(hash, c.upgraded);
+        {
+            std::array<CardInstance, CardManager::MAX_HAND_SIZE> sortedHand;
+            std::copy(bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand,
+                      sortedHand.begin());
+            std::sort(sortedHand.begin(), sortedHand.begin() + bc.cards.cardsInHand);
+            for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+                const auto& c = sortedHand[i];
+                hash_combine(hash, static_cast<int>(c.id));
+                hash_combine(hash, c.cost);
+                hash_combine(hash, c.costForTurn);
+                hash_combine(hash, c.upgraded);
+            }
         }
 
-        // Hash draw pile with position (order is significant for future draws)
+        // Hash draw pile with position (the sorted unknown region hashes canonically; the known
+        // top/bottom stacks are position-significant). The known counts distinguish a known top
+        // [A,B] from an unknown {A,B} — different information sets even with equal contents.
+        hash_combine(hash, bc.cards.drawPile.knownCount());
+        hash_combine(hash, bc.cards.drawPile.knownBottom());
         hash_combine(hash, static_cast<int>(bc.cards.drawPile.size()));
         for (int i = 0; i < static_cast<int>(bc.cards.drawPile.size()); ++i) {
             hash_combine(hash, i);
@@ -191,6 +203,7 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
     std::size_t i = hash & stateToNodeMask;
     while (stateToNode[i].node != nullptr) {
         if (stateToNode[i].hash == hash && stateToNode[i].node->state.equalForSearch(state)) {
+            lastNodeWasCreated = false;
             return stateToNode[i].node;
         }
         i = (i + 1) & stateToNodeMask;
@@ -199,6 +212,8 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
     Node* newNode = allocNode();
     newNode->state = std::move(state);
     stateToNode[i] = {hash, newNode};
+    lastNodeWasCreated = true;
+    ++stats.nodesCreated;
     return newNode;
 }
 
@@ -248,6 +263,7 @@ void search::BattleSearcher::searchForMicros(int64_t maxMicros) {
 }
 
 void search::BattleSearcher::step() {
+    ++stats.steps;
     searchStack.clear();
     searchStack.push_back(root);
     actionStack.clear();
@@ -363,9 +379,11 @@ void search::BattleSearcher::step() {
             chance->outcomesGenerated = 1;
             edge.node = chance;
 
+            ++stats.chanceOutcomesSampled;
             Edge outcomeEdge;
             outcomeEdge.action = Action{};
             outcomeEdge.node = getOrCreateNode(std::move(next));
+            if (!lastNodeWasCreated) ++stats.chanceTranspositions;  // fresh chance node: no siblings yet
             outcomeEdge.rngAdvanceSteps = 0;
             chance->edges.push_back(outcomeEdge);
             stagedOutcomeEdge = &chance->edges.back();
@@ -381,6 +399,7 @@ void search::BattleSearcher::step() {
         // only when the node already existed and `next` was left intact.
         next.rng = preActionRng;
         Node* child = getOrCreateNode(std::move(next));
+        if (!lastNodeWasCreated) ++stats.detTranspositions;
         edge.node = child;
 
         if (onPath(child)) {
@@ -407,6 +426,14 @@ void search::BattleSearcher::step() {
 }
 
 void search::BattleSearcher::updateFromPlayout(const std::vector<Node *> &stack, const std::vector<Action> &actionStack, const BattleContext &endState) {
+    // Every simulation ends here exactly once: record how deep it got in-tree and how many
+    // chance nodes sat on its path (budget-fragmentation telemetry).
+    stats.depthSum += static_cast<std::int64_t>(stack.size());
+    for (const auto *n : stack) {
+        if (n->isRandomNode) {
+            ++stats.chanceDepthSum;
+        }
+    }
     const auto evaluation = evaluateEndState(endState);
 
     for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
@@ -528,12 +555,15 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         out.rng = Random(chance.randomnessBase + N);
         chance.stochasticAction.execute(out);
 
+        ++stats.chanceOutcomesSampled;
         Node* child = getOrCreateNode(std::move(out));  // out unused afterward; safe to move
         for (auto &e : chance.edges) {
             if (e.node == child) {
+                ++stats.chanceSiblingReuse;
                 return &e;  // resampled an outcome we already have
             }
         }
+        if (!lastNodeWasCreated) ++stats.chanceTranspositions;
 
         Edge e;
         e.action = Action{};

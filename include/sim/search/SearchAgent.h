@@ -23,6 +23,7 @@ namespace sts::search {
 
     struct SearchAgent {
         std::int64_t simulationCountTotal = 0;
+        search::SearchStats searchStats;   // summed over this agent's battles
         std::vector<int> gameActionHistory;
 
         bool recordActions = false;
@@ -44,18 +45,22 @@ namespace sts::search {
         int stepsNoSolution = 5;
         int stepsWithSolution = 15;
 
-        double explorationParameter = 9.9;   // tuned default
-        double chanceWideningC = 4.6;         // tuned default
-        double chanceWideningAlpha = 0.37;    // tuned default
+        // Tuned for the honest (canonical CardPile) engine, whose draw chance nodes give value
+        // estimates much noisier than the old clairvoyant engine's: the search needs far more
+        // exploration before committing. Deployment-validated on 1000-seed paired eval_hero
+        // blocks: exploration 9.9 -> 54-58%, 18.5 -> 60.7%, 25 -> 62.5%, 35 -> 56.3% (peak
+        // bracketed near 25). Widening from the coarse honest tune's top region; widening
+        // sensitivity at deployment is much weaker than exploration's.
+        double explorationParameter = 25.0;
+        double chanceWideningC = 3.7028;
+        double chanceWideningAlpha = 0.52389;
         EvalWeights evalWeights;
 
         // Boss-specific chance-node widening, applied via isBossEncounter in playoutBattle.
-        // Defaults equal the general widening (no specialization): raising them to 6.46/0.85
-        // helps on mid-strength boss states (+4.6 SCORE held-out @5000 sims) but costs ~3pp
-        // game win for the strong NN agent, whose boss fights are mostly already-won positions
-        // where spreading the budget over more chance outcomes just shallows the search.
-        double bossChanceWideningC = 4.6;
-        double bossChanceWideningAlpha = 0.37;
+        // Defaults equal the general widening (no specialization yet for the honest engine;
+        // the clairvoyant-era boss studies are not transferable).
+        double bossChanceWideningC = 3.7028;
+        double bossChanceWideningAlpha = 0.52389;
 
         std::default_random_engine rng;
 

@@ -34,6 +34,25 @@ namespace sts::search {
         double turnSurvivalWeight = 1.5;
     };
 
+    // Deterministic search-graph telemetry: counts are exact properties of the search
+    // (machine/thread independent), summable across searchers.
+    struct SearchStats {
+        std::int64_t steps = 0;                  // simulations run
+        std::int64_t nodesCreated = 0;           // new nodes allocated via dedup misses
+        std::int64_t detTranspositions = 0;      // deterministic-edge expansion hit an existing node
+        std::int64_t chanceOutcomesSampled = 0;  // chance-node widening samples executed
+        std::int64_t chanceSiblingReuse = 0;     // sampled outcome collided with an existing sibling
+        std::int64_t chanceTranspositions = 0;   // sampled outcome dedup-hit a non-sibling node
+        std::int64_t depthSum = 0;               // in-tree path length at each simulation's end
+        std::int64_t chanceDepthSum = 0;         // chance nodes on the path at each simulation's end
+        void add(const SearchStats &o) {
+            steps += o.steps; nodesCreated += o.nodesCreated; detTranspositions += o.detTranspositions;
+            chanceOutcomesSampled += o.chanceOutcomesSampled; chanceSiblingReuse += o.chanceSiblingReuse;
+            chanceTranspositions += o.chanceTranspositions;
+            depthSum += o.depthSum; chanceDepthSum += o.chanceDepthSum;
+        }
+    };
+
     // to find a solution to a battle with tree pruning
     struct BattleSearcher {
         class Edge;
@@ -113,6 +132,9 @@ namespace sts::search {
 
         // Graph search deduplication
         Node* getOrCreateNode(BattleContext &&state);
+        bool lastNodeWasCreated = false;   // whether the last getOrCreateNode allocated a new node
+
+        SearchStats stats;
 
         double evaluateEdge(const Node &parent, int edgeIdx, double logParentVisits);
         int selectBestEdgeToSearch(const Node &cur);

@@ -2540,7 +2540,7 @@ void BattleContext::playTopCardInDrawPile(int monsterTargetIdx, bool exhausts) {
         return;
     }
 
-    CardQueueItem item(cards.popFromDrawPile(), monsterTargetIdx, player.energy);
+    CardQueueItem item(cards.popFromDrawPile(rng), monsterTargetIdx, player.energy);
     item.exhaustOnUse = exhausts;
     item.autoplay = true;
     item.freeToPlay = true; // todo remove the autoplay boolean? added this instead
@@ -2566,7 +2566,7 @@ void BattleContext::exhaustSpecificCardInHand(int idx, std::int16_t uniqueId) {
         foundIdx = idx;
     } else {
         for (int i = 0; i < cards.cardsInHand; ++i) {
-            if (cards.hand[idx].uniqueId == uniqueId) {
+            if (cards.hand[i].uniqueId == uniqueId) {
                foundIdx = i;
                break;
             }
@@ -3054,7 +3054,7 @@ void BattleContext::chooseForethoughtCard(int handIdx) {
         cards.hand[handIdx].freeToPlayOnce = true;
     }
 
-    cards.insertToDrawPile(0, cards.hand[handIdx]);
+    cards.moveToDrawPileBottom(cards.hand[handIdx]);
     cards.removeFromHandAtIdx(handIdx);
 }
 
@@ -3152,7 +3152,8 @@ bool BattleContext::operator==(const BattleContext &rhs) const {
 }
 
 bool BattleContext::equalForSearch(const BattleContext &rhs) const {
-    // Same as operator== but excludes rng, loopCount, and sum (RNG + debug-only).
+    // Same as operator== but excludes rng, loopCount, and sum (RNG + debug-only), and compares
+    // the hand as a multiset (order is not gameplay-meaningful; permutations must dedup).
     return (
         seed == rhs.seed &&
         turn == rhs.turn &&
@@ -3173,7 +3174,7 @@ bool BattleContext::equalForSearch(const BattleContext &rhs) const {
         potions == rhs.potions &&
         player == rhs.player &&
         monsters == rhs.monsters &&
-        cards == rhs.cards &&
+        cards.equalForSearch(rhs.cards) &&  // hand as multiset (order not gameplay-meaningful)
         curCardQueueItem == rhs.curCardQueueItem &&
         miscBits == rhs.miscBits
     );

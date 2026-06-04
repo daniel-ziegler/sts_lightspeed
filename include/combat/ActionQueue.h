@@ -90,11 +90,17 @@ namespace sts {
         front = 0;
     }
 
+    // Overflow policy: drop the new action. A full queue only occurs in pathological-but-legal
+    // states (e.g. Transmutation-sized cascades); silently overwriting ring entries would
+    // corrupt already-queued actions, which is strictly worse than losing the newest one.
     template <int capacity>
     void ActionQueue<capacity>::pushFront(const Action &a) {
 #ifdef sts_asserts
         assert(size != capacity);
 #endif
+        if (size >= capacity) {
+            return;
+        }
         --front;
         ++size;
         if (front < 0) {
@@ -110,6 +116,9 @@ namespace sts {
             assert(false);
         }
 #endif
+        if (size >= capacity) {
+            return;
+        }
         if (back >= capacity) {
             back = 0;
         }

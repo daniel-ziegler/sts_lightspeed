@@ -136,16 +136,17 @@ struct AgentMtInfo {
     std::int64_t lossCount = 0;
     std::int64_t floorSum = 0;
     std::int64_t totalSimulations = 0;
+    search::SearchStats stats;
 };
 
 static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
-static double g_explorationParameter = 9.9;   // tuned default
-static double g_chanceWideningC = 4.6;         // tuned default
-static double g_chanceWideningAlpha = 0.37;    // tuned default
-static double g_bossChanceWideningC = 4.6;        // boss-specific widening; defaults = general (see SearchAgent.h)
-static double g_bossChanceWideningAlpha = 0.37;
+static double g_explorationParameter = 25.0;   // honest-engine tuned default (see SearchAgent.h)
+static double g_chanceWideningC = 3.7028;
+static double g_chanceWideningAlpha = 0.52389;
+static double g_bossChanceWideningC = 3.7028;     // boss-specific widening; defaults = general
+static double g_bossChanceWideningAlpha = 0.52389;
 static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
 static search::EvalWeights g_evalWeights;
 
@@ -182,6 +183,7 @@ void agentMtRunner(AgentMtInfo *info) {
 
         {
             std::scoped_lock lock(info->m);
+            info->stats.add(agent.searchStats);
             info->floorSum += gc.floorNum;
             if (gc.outcome == sts::GameOutcome::PLAYER_VICTORY) {
                 ++info->winCount;
@@ -229,12 +231,278 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
         << " totalSimulations: " << info.totalSimulations
         << " avgPerFloor: " << (double)info.totalSimulations/info.floorSum << '\n';
 
+    const auto &st = info.stats;
+    std::cout << "STATS steps=" << st.steps
+              << " nodesCreated=" << st.nodesCreated
+              << " detTrans=" << st.detTranspositions
+              << " chanceSampled=" << st.chanceOutcomesSampled
+              << " sibReuse=" << st.chanceSiblingReuse
+              << " chanceTrans=" << st.chanceTranspositions
+              << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
     std::cout << "threads: " << threadCount
               << " playoutCount: " << playoutCount
               << " depth: " << g_simulationCount
         << " asc: " << g_searchAscension
         << " elapsed: " << duration
         << std::endl;
+}
+
+// Distribution checks for the canonical draw-pile representation: deferred randomness must
+// induce the same draw-sequence distributions the legacy concrete-shuffle engine produced.
+// For each seed: navigate to the first battle, then run per-trial scenarios from a fresh
+// CardManager::init with an independent rng. Reports per-position chi^2 vs the exact uniform
+// expectation plus deterministic invariants (innates first, Headbutt top exact).
+namespace drawdist {
+
+    // chi^2 acceptance threshold: mean df + 6 sigma (df, 2df) — loose single-test bound, we
+    // only want to catch gross non-uniformity, not borderline noise.
+    bool chi2Ok(double chi2, int df) {
+        return chi2 <= df + 6.0 * std::sqrt(2.0 * df) + 1.0;
+    }
+
+    struct Tally {
+        // counts[drawPosition][uniqueId]
+        std::vector<std::vector<int>> counts;
+        void record(int pos, int uid) {
+            if (pos >= static_cast<int>(counts.size())) counts.resize(pos + 1);
+            auto &row = counts[pos];
+            if (uid >= static_cast<int>(row.size())) row.resize(uid + 1, 0);
+            ++row[uid];
+        }
+    };
+
+    // chi^2 of one position's empirical distribution vs uniform over `candidates` uids.
+    double posChi2(const std::vector<int> &row, const std::vector<int> &candidates, int trials) {
+        const double expect = static_cast<double>(trials) / candidates.size();
+        double chi2 = 0;
+        for (int uid : candidates) {
+            const int obs = uid < static_cast<int>(row.size()) ? row[uid] : 0;
+            chi2 += (obs - expect) * (obs - expect) / expect;
+        }
+        return chi2;
+    }
+
+    void run(std::uint64_t startSeed, int numSeeds, int trials) {
+        int failures = 0;
+        for (std::uint64_t seed = startSeed; seed < startSeed + numSeeds; ++seed) {
+            GameContext gc(CharacterClass::IRONCLAD, seed, 0);
+            search::SimpleAgent nav;
+            while (gc.outcome == GameOutcome::UNDECIDED && gc.screenState != ScreenState::BATTLE) {
+                nav.stepOutOfCombat(gc);
+            }
+            if (gc.outcome != GameOutcome::UNDECIDED) {
+                continue;
+            }
+            BattleContext bc0;
+            bc0.init(gc);
+
+            // identify innates/bottled (they form the known top at init)
+            std::vector<int> innateUids, normalUids;
+            for (int deckIdx = 0; deckIdx < gc.deck.size(); ++deckIdx) {
+                bool isBottled = std::find(gc.deck.bottleIdxs.begin(), gc.deck.bottleIdxs.end(), deckIdx)
+                        != gc.deck.bottleIdxs.end();
+                if (gc.deck.cards[deckIdx].isInnate() || isBottled) {
+                    innateUids.push_back(deckIdx);
+                } else {
+                    normalUids.push_back(deckIdx);
+                }
+            }
+            const int deckSize = gc.deck.size();
+            const int innateCount = static_cast<int>(innateUids.size());
+
+            Tally initTally, reshuffleTally;
+            Tally woundTallies[2];  // [markerCount-1]: wound draw-position histograms
+            Tally bareTally;        // shuffle-in with no prior knowledge (top-promotion path)
+            bool headbuttExact = true, innatesFirst = true, woundNeverFirst = true;
+            bool bottomExact = true;  // Forethought: bottom card drawn dead last
+            int bottomWoundBelow = 0;  // shuffle-in landing below a known bottom (drawn after it)
+
+            for (int t = 0; t < trials; ++t) {
+                // scenario A: draw out the full pile from battle init
+                BattleContext bc = bc0;
+                bc.rng = Random(seed * 1000003ULL + t);
+                bc.cards.clear();
+                bc.cards.init(gc, bc);
+                for (int pos = 0; pos < deckSize; ++pos) {
+                    const auto c = bc.cards.popFromDrawPile(bc.rng);
+                    initTally.record(pos, c.uniqueId);
+                    if (pos < innateCount &&
+                        std::find(innateUids.begin(), innateUids.end(), c.uniqueId) == innateUids.end()) {
+                        innatesFirst = false;
+                    }
+                    bc.cards.moveToDiscardPile(c);
+                }
+
+                // scenario B: reshuffle the (sorted) discard back in, draw out again
+                bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
+                for (int pos = 0; pos < deckSize; ++pos) {
+                    const auto c = bc.cards.popFromDrawPile(bc.rng);
+                    reshuffleTally.record(pos, c.uniqueId);
+                    bc.cards.moveToDiscardPile(c);
+                }
+
+                // scenarios C/D: known top of 1 or 2 cards (Headbutt-style) + shuffle-in.
+                // Wound draw position must be uniform over [markerCount? no: 1, pileSize-1] —
+                // exactly the legacy distribution (it can land between known cards but never
+                // above the top one).
+                for (int markerCount = 1; markerCount <= 2; ++markerCount) {
+                    bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
+                    std::int16_t topUid = -1;
+                    for (int m = 0; m < markerCount; ++m) {
+                        CardInstance marker(CardId::ANGER);
+                        topUid = static_cast<std::int16_t>(deckSize + m);
+                        marker.uniqueId = topUid;
+                        bc.cards.moveToDrawPileTop(marker);
+                    }
+                    CardInstance wound(CardId::WOUND);
+                    wound.uniqueId = static_cast<std::int16_t>(deckSize + 2);
+                    bc.cards.shuffleIntoDrawPile(bc.rng, wound);
+                    const int pileN = bc.cards.drawPile.size();
+                    for (int pos = 0; pos < pileN; ++pos) {
+                        const auto c = bc.cards.popFromDrawPile(bc.rng);
+                        if (pos == 0 && c.uniqueId != topUid) {
+                            headbuttExact = false;  // known top must pop first, deterministically
+                        }
+                        if (c.uniqueId == wound.uniqueId) {
+                            woundTallies[markerCount - 1].record(pos, 0);
+                            if (pos == 0) {
+                                woundNeverFirst = false;  // legacy gaps exclude the very top
+                            }
+                        } else if (c.uniqueId < deckSize) {
+                            bc.cards.moveToDiscardPile(c);  // markers/wound stay out of later rounds
+                        }
+                    }
+                }
+
+                // scenario F: shuffle-in with no prior order knowledge. Legacy never inserts at
+                // the very top, so the wound is never the next draw; its position must be
+                // uniform over [1, deck].
+                {
+                    bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
+                    CardInstance wound(CardId::WOUND);
+                    wound.uniqueId = static_cast<std::int16_t>(deckSize + 2);
+                    bc.cards.shuffleIntoDrawPile(bc.rng, wound);
+                    const int pileN = bc.cards.drawPile.size();
+                    for (int pos = 0; pos < pileN; ++pos) {
+                        const auto c = bc.cards.popFromDrawPile(bc.rng);
+                        if (c.uniqueId == wound.uniqueId) {
+                            bareTally.record(pos, 0);
+                            if (pos == 0) {
+                                woundNeverFirst = false;
+                            }
+                        } else if (c.uniqueId < deckSize) {
+                            bc.cards.moveToDiscardPile(c);
+                        }
+                    }
+                }
+
+                // scenario E: known bottom (Forethought) + shuffle-in. The bottom marker is
+                // drawn dead last, except when the shuffled-in wound lands below it (legacy
+                // gap 0, prob 1/N) — then the wound is last and the marker second-to-last.
+                {
+                    bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
+                    CardInstance marker(CardId::ANGER);
+                    marker.uniqueId = static_cast<std::int16_t>(deckSize);
+                    bc.cards.moveToDrawPileBottom(marker);
+                    CardInstance wound(CardId::WOUND);
+                    wound.uniqueId = static_cast<std::int16_t>(deckSize + 2);
+                    bc.cards.shuffleIntoDrawPile(bc.rng, wound);
+                    const int pileN = bc.cards.drawPile.size();
+                    int markerPos = -1, woundPos = -1;
+                    for (int pos = 0; pos < pileN; ++pos) {
+                        const auto c = bc.cards.popFromDrawPile(bc.rng);
+                        if (c.uniqueId == marker.uniqueId) markerPos = pos;
+                        if (c.uniqueId == wound.uniqueId) woundPos = pos;
+                        if (c.uniqueId < deckSize) {
+                            bc.cards.moveToDiscardPile(c);
+                        }
+                    }
+                    if (woundPos == pileN - 1) {
+                        ++bottomWoundBelow;
+                        if (markerPos != pileN - 2) bottomExact = false;
+                    } else if (markerPos != pileN - 1) {
+                        bottomExact = false;
+                    }
+                }
+            }
+
+            // evaluate: positions [innateCount, deckSize) uniform over normals (positions
+            // [0, innateCount) are covered by the innatesFirst invariant)
+            double maxChi2 = 0;
+            const int df = static_cast<int>(normalUids.size()) - 1;
+            for (int pos = innateCount; pos < deckSize; ++pos) {
+                maxChi2 = std::max(maxChi2, posChi2(initTally.counts[pos], normalUids, trials));
+            }
+            double maxChi2Reshuffle = 0;
+            std::vector<int> allUids(deckSize);
+            for (int i = 0; i < deckSize; ++i) allUids[i] = i;
+            for (int pos = 0; pos < deckSize; ++pos) {
+                maxChi2Reshuffle = std::max(maxChi2Reshuffle,
+                                            posChi2(reshuffleTally.counts[pos], allUids, trials));
+            }
+
+            // wound position must be uniform over [1, pileN-1] (legacy-exact), pileN = deck +
+            // markers + wound
+            double woundChi2[2];
+            int woundDf[2];
+            for (int m = 0; m < 2; ++m) {
+                const int pileN = deckSize + (m + 1) + 1;
+                const double expect = static_cast<double>(trials) / (pileN - 1);
+                double chi2 = 0;
+                for (int pos = 1; pos < pileN; ++pos) {
+                    int obs = 0;
+                    if (pos < static_cast<int>(woundTallies[m].counts.size())
+                        && !woundTallies[m].counts[pos].empty()) {
+                        obs = woundTallies[m].counts[pos][0];
+                    }
+                    chi2 += (obs - expect) * (obs - expect) / expect;
+                }
+                woundChi2[m] = chi2;
+                woundDf[m] = pileN - 2;
+            }
+
+            const bool initOk = df < 1 || chi2Ok(maxChi2, df);
+            const bool reshufOk = chi2Ok(maxChi2Reshuffle, deckSize - 1);
+            const bool woundOk = chi2Ok(woundChi2[0], woundDf[0]) && chi2Ok(woundChi2[1], woundDf[1]);
+            // scenario F: wound uniform over [1, deck] (pile = deck + wound; promoted top first)
+            double bareChi2 = 0;
+            {
+                const double expect = static_cast<double>(trials) / deckSize;
+                for (int pos = 1; pos <= deckSize; ++pos) {
+                    int obs = 0;
+                    if (pos < static_cast<int>(bareTally.counts.size()) && !bareTally.counts[pos].empty()) {
+                        obs = bareTally.counts[pos][0];
+                    }
+                    bareChi2 += (obs - expect) * (obs - expect) / expect;
+                }
+            }
+            const bool bareOk = chi2Ok(bareChi2, deckSize - 1);
+            // wound-below-bottom = legacy gap 0 of the deck+1 pre-insert gaps: 5-sigma binomial
+            const double pBelow = 1.0 / (deckSize + 1);
+            const double belowSig = std::sqrt(trials * pBelow * (1 - pBelow));
+            const bool bottomFreqOk = std::abs(bottomWoundBelow - trials * pBelow) < 5 * belowSig + 1;
+            const bool ok = initOk && reshufOk && woundOk && bareOk && headbuttExact && innatesFirst
+                    && woundNeverFirst && bottomExact && bottomFreqOk;
+            if (!ok) ++failures;
+
+            std::cout << "seed " << seed
+                      << " deck=" << deckSize << " innate=" << innateCount
+                      << " | initMaxChi2=" << maxChi2 << " (df " << df << (initOk ? " OK" : " FAIL") << ")"
+                      << " reshufMaxChi2=" << maxChi2Reshuffle << " (df " << deckSize - 1 << (reshufOk ? " OK" : " FAIL") << ")"
+                      << " woundChi2={" << woundChi2[0] << "," << woundChi2[1] << "}" << (woundOk ? " OK" : " FAIL")
+                      << " bareChi2=" << bareChi2 << (bareOk ? " OK" : " FAIL")
+                      << " innatesFirst=" << (innatesFirst ? "OK" : "FAIL")
+                      << " headbuttTop=" << (headbuttExact ? "OK" : "FAIL")
+                      << " woundNeverFirst=" << (woundNeverFirst ? "OK" : "FAIL")
+                      << " bottomLast=" << (bottomExact ? "OK" : "FAIL")
+                      << " woundBelowBottom=" << bottomWoundBelow << "/" << trials
+                      << (bottomFreqOk ? " OK" : " FAIL")
+                      << std::endl;
+        }
+        std::cout << (failures == 0 ? "ALL OK" : "FAILURES: " + std::to_string(failures)) << std::endl;
+    }
+
 }
 
 int mcts(int argc, const char *argv[]) {
@@ -455,6 +723,7 @@ static std::vector<GameStateRecord> loadRecords(const std::string &path, int lim
 }
 
 struct EvalStatesInfo {
+    search::SearchStats stats;
     std::mutex m;
     const std::vector<GameStateRecord> *records = nullptr;
     std::size_t next = 0;
@@ -510,6 +779,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
 
         {
             std::scoped_lock lock(info->m);
+            info->stats.add(agent.searchStats);
             info->scoreSum += score;
             if (!dead) {
                 ++info->winCount;
@@ -574,6 +844,15 @@ static int evalStates(int argc, const char *argv[]) {
     const double winRate = info.n > 0 ? static_cast<double>(info.winCount) / info.n : 0.0;
     const double avgHp = info.winCount > 0 ? info.hpSum / info.winCount : 0.0;
     std::cout << "SCORE " << meanScore << ' ' << winRate << ' ' << avgHp << ' ' << info.n << std::endl;
+    const auto &st = info.stats;
+    std::cout << "STATS steps=" << st.steps
+              << " nodesCreated=" << st.nodesCreated
+              << " detTrans=" << st.detTranspositions
+              << " chanceSampled=" << st.chanceOutcomesSampled
+              << " sibReuse=" << st.chanceSiblingReuse
+              << " chanceTrans=" << st.chanceTranspositions
+              << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
     return 0;
 }
 
@@ -794,6 +1073,9 @@ int main(int argc, const char* argv[]) {
             applyGlobalParam(argv[i]);
         }
         agentMt(threadCount, startSeed, playoutCount);
+    } else if (command == "verify_draw_dist") {
+        // verify_draw_dist <startSeed> <numSeeds> <trialsPerSeed>
+        drawdist::run(std::stoull(argv[2]), std::stoi(argv[3]), std::stoi(argv[4]));
     } else if (command == "playground") {
         Action a = Actions::MakeTempCardInHand(CardInstance(CardId::DEFEND_RED), 1);
         std::cout << a << '\n';

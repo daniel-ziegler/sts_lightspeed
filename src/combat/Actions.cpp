@@ -203,28 +203,17 @@ void _DrawCards::operator()(BattleContext &bc) const {
 }
 
 void _EmptyDeckShuffle::operator()(BattleContext &bc) const {
-    java::Collections::shuffle(
-            bc.cards.discardPile.begin(),
-            bc.cards.discardPile.end(),
-            java::Random(bc.rng.randomLong())
-    );
-
-    bc.cards.moveDiscardPileIntoToDrawPile();
+    bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
 }
 
 void _ShuffleDrawPile::operator()(BattleContext &bc) const {
-    java::Collections::shuffle(
-            bc.cards.drawPile.begin(),
-            bc.cards.drawPile.end(),
-            java::Random(bc.rng.randomLong())
-    );
+    bc.cards.drawPile.reshuffleSelf(bc.rng);
 }
 
 void _ShuffleTempCardIntoDrawPile::operator()(BattleContext &bc) const {
     CardInstance c(id);
     for (int i = 0; i < count; ++i) {
-        const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-        bc.cards.createTempCardInDrawPile(idx, c);
+        bc.cards.createTempCardInDrawPile(bc.rng, c);
     }
 }
 
@@ -246,8 +235,7 @@ void _MakeTempCardInDrawPile::operator()(BattleContext &bc) const {
     // the random calculation is done in an effect so it be wrong to do it here?
     for (int i = 0; i < amount; ++i) {
         if (shuffleInto) {
-            const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-            bc.cards.createTempCardInDrawPile(idx, c);
+            bc.cards.createTempCardInDrawPile(bc.rng, c);
         }
         // todo else
     }
@@ -506,8 +494,7 @@ void _PutRandomCardsInDrawPile::operator()(BattleContext &bc) const {
         card.cost = 0;
         card.costForTurn = 0;
 
-        const int idx = bc.cards.drawPile.empty() ? 0 : bc.rng.random(static_cast<int>(bc.cards.drawPile.size()-1));
-        bc.cards.createTempCardInDrawPile(idx, card);
+        bc.cards.createTempCardInDrawPile(bc.rng, card);
     }
 }
 
@@ -539,16 +526,26 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
         return;
     }
 
-    for (int i = 0; i < effectAmount; ++i) {
-        const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
-        CardInstance c(cid, upgraded);
-        c.setCostForTurn(0);
-        bc.addToBot( Actions::MakeTempCardInHand(c, 1) );
-    }
+    // One queued action creating all X cards: per-point actions can exceed the ActionQueue's
+    // capacity (X is unbounded, e.g. Ice Cream energy hoarding), and creating the cards here
+    // directly would skip ahead of already-queued actions. The random rolls happen when the
+    // queued action executes.
+    bc.addToBot( Actions::TransmutationCardsInHand(effectAmount, upgraded) );
 
    if (useEnergy) {
        bc.player.useEnergy(bc.player.energy);
    }
+}
+
+void _TransmutationCardsInHand::operator()(BattleContext &bc) const {
+    for (int i = 0; i < count; ++i) {
+        const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
+        CardInstance c(cid, upgraded);
+        c.setCostForTurn(0);
+        c.uniqueId = static_cast<std::int16_t>(bc.cards.nextUniqueCardId++);
+        bc.cards.notifyAddCardToCombat(c);
+        bc.moveToHandHelper(c);
+    }
 }
 
 void _ViolenceAction::operator()(BattleContext &bc) const {
@@ -908,23 +905,23 @@ void _ApotheosisAction::operator()(BattleContext &bc) const {
         }
     }
 
-    for (auto &c : bc.cards.drawPile) {
+    bc.cards.drawPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {
             c.upgrade();
         }
-    }
+    });
 
-    for (auto &c : bc.cards.discardPile) {
+    bc.cards.discardPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {
             c.upgrade();
         }
-    }
+    });
 
-    for (auto &c : bc.cards.exhaustPile) {
+    bc.cards.exhaustPile.mutateAll([](CardInstance &c) {
         if (c.canUpgrade()) {
             c.upgrade();
         }
-    }
+    });
 }
 
 void _DropkickAction::operator()(BattleContext &bc) const {
