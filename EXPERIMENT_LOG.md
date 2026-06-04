@@ -20,6 +20,14 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ## 2026-06-03
 
+**R5b encoding + aux loss in production** (`33bd7db`): repr-lab winner ported to
+network.py/rl_train.py — dest room on path options, ego-rel/reachable/scaled-aggregate node
+features (exact collate-time DP, cross-checked vs lab on 300 rows; reachability frontier
+includes Winged-Boots extra options), boss→categorical, dest-room aux head
+(aux_dest_room_coef=0.1, logged as aux_room_loss). Breaks checkpoint compat (tag
+`cheat-era-final` for old nets). Ready for the honest-era from-scratch run alongside the
+entropy + lr decay schedules; awaiting honest-dynamics knob retune (MCTS session).
+
 **Repr lab CONCLUDED (3 rounds, 73 cells, `sl_repr_lab.py` + results CSVs).** Final picture:
 - *Grounding (take-elite/rest CE)*: baseline = seed lottery ({0.50..0.999} across replicates);
   every relational arm saturates at 1.000 every seed.
