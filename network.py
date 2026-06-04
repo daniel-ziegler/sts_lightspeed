@@ -31,6 +31,10 @@ MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
 MAX_MAP_NODES = 100
 MAX_GOLD = 1000
 MAX_PATH_CHOICES = 7  # all possible columns from the start
+# Flat-logit offset of the paths section: collate_fn pads the choice sections to fixed widths
+# (cards MAX_DECK_SIZE, relics 3, potions MAX_POTION_CAPACITY, fixed MAX_FIXED_ACTIONS) and
+# DictSpace consumes them in declaration order, so path-option tokens start here.
+CHOICE_PATHS_OFFSET = MAX_DECK_SIZE + 3 + sts.MAX_POTION_CAPACITY + MAX_FIXED_ACTIONS
 
 
 class ActionType(IntEnum):
@@ -319,19 +323,44 @@ relic_space = EnumSpace(sts.RelicId)
 potion_space = EnumSpace(sts.Potion)
 upgrade_space = IntSpace(MAX_UPGRADE)
 
+
+class IsReachable(IntEnum):
+    """Whether a map node is reachable from the current position's forward frontier."""
+    NO = 0
+    YES = 1
+
+
+# Cap for the dist-to-rest aggregate; also the [0,1] scale divisor for all map aggregates.
+# Map aggregate features are SCALED into [0,1]: unscaled magnitudes inside the DictAdd token
+# sum drown the other components (measured: unscaled aggregates cost ~40pp on unrelated tasks).
+MAP_AGG_CAP = 15
+
+# Boss id is categorical; the remaining fixed-observation scalars stay sinusoidal.
+_FIXED_OBS_MAXES = list(sts.getFixedObservationMaximums())
+_BOSS_OBS_IDX = 4
+_FIXED_OBS_SCALAR_MAXES = [m for i, m in enumerate(_FIXED_OBS_MAXES) if i != _BOSS_OBS_IDX]
+
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(card_space, upgrade_space)),
     'relics': SequenceSpace(relic_space),
     'potions': SequenceSpace(potion_space),
     'fixed_obs': ScalarToSequenceSpace(DictAddSpace({
-        'fixed_observation': FixedVecSpace(sts.getFixedObservationMaximums()),
+        'fixed_observation': FixedVecSpace(_FIXED_OBS_SCALAR_MAXES),
+        'boss': IntSpace(10),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
+    # Per-node map features. Beyond the raw structure (room/pos/edges), nodes carry
+    # ego-relative coords, a reachability flag, and scaled DAG aggregates (min/max elites
+    # ahead, dist to nearest rest) -- these make path grounding and map queries learnable
+    # at weak signal strength (see EXPERIMENT_LOG.md, repr lab).
     'map_nodes': SequenceSpace(DictAddSpace({
         'room': EnumSpace(sts.Room),
         'is_current': EnumSpace(IsCurrentNode),
         'pos': FixedVecSpace([7, 16]),
         'path_xs': FixedVecSpace([7, 7, 7]),  # can accept -1
+        'rel': FixedVecSpace([15, 31]),       # (dx, dy) from current position
+        'reachable': EnumSpace(IsReachable),
+        'agg': FixedVecSpace([2, 2, 2]),      # (min_elites, max_elites, dist_rest) / MAP_AGG_CAP
     })),
 })
 
@@ -346,7 +375,12 @@ choice_space = DictSpace({
         'relic': relic_space,
         'info': EnumSpace(EventFixedInfo),
     })),
-    'paths': SequenceSpace(FixedVecSpace([7])),
+    # Each path option carries its destination's room type alongside the x coordinate, so
+    # option grounding is a lookup instead of a learned multi-hop attention program.
+    'paths': SequenceSpace(DictAddSpace({
+        'x': FixedVecSpace([7]),
+        'room': EnumSpace(sts.Room),
+    })),
 })
 
 
@@ -411,6 +445,10 @@ class NN(nn.Module):
         self.choice_logits = nn.Linear(H.dim, 1, bias=True)
         nn.init.uniform_(self.choice_logits.weight, -0.01, 0.01)
         nn.init.zeros_(self.choice_logits.bias)
+
+        # Auxiliary head: per-path-option destination-room classifier. Self-supervised
+        # grounding scaffold (labels come free from the map obs at collate time).
+        self.aux_room_head = nn.Linear(H.dim, len(sts.Room), bias=True)
         
         # Add value-specific layers if specified
         if H.num_value_layers > 0:
@@ -424,10 +462,13 @@ class NN(nn.Module):
             nn.init.zeros_(self.value_head.bias)
 
 
-    def forward(self, batch: dict):
+    def forward(self, batch: dict, return_aux: bool = False):
         """
         Process a batch of inputs through the network.
-        
+
+        With return_aux=True, additionally returns aux_room_logits
+        [batch, MAX_PATH_CHOICES, n_rooms] for the destination-room auxiliary loss.
+
         Args:
             batch: Dictionary containing observation data and choices data.
                    The 'choices' key is popped and processed separately as action logits.
@@ -494,7 +535,12 @@ class NN(nn.Module):
         action_xs = xn[:, obs_mask.size(1):, :]
         choice_logits = self.choice_logits(action_xs).squeeze(-1).float()
         choice_logits = choice_logits.masked_fill(choice_mask, float('-inf'))
-        
+
+        aux_room_logits = None
+        if return_aux:
+            path_tokens = action_xs[:, CHOICE_PATHS_OFFSET:CHOICE_PATHS_OFFSET + MAX_PATH_CHOICES, :]
+            aux_room_logits = self.aux_room_head(path_tokens).float()
+
         # Compute value if value head is enabled
         if self.H.use_value_head:
             # Use separate value layers if specified
@@ -522,8 +568,12 @@ class NN(nn.Module):
             seq_lengths = (~pos_mask).sum(dim=1, keepdim=True).float()  # [batch_size, 1]
             pooled = value_xn.masked_fill(pos_mask.unsqueeze(-1), 0).sum(dim=1) / seq_lengths  # [batch_size, dim]
             values = self.value_head(pooled).squeeze(-1).float()  # [batch_size]
+            if return_aux:
+                return choice_logits.clone(), values.clone(), aux_room_logits
             return choice_logits.clone(), values.clone()
         else:
+            if return_aux:
+                return choice_logits.clone(), aux_room_logits
             return choice_logits.clone()
     
     @property
@@ -638,6 +688,68 @@ class SlayDataset(torch.utils.data.Dataset):
         }
 
 
+def map_dag_features(x):
+    """Exact map-DAG features for one flattened observation: per-node (min_elites, max_elites,
+    dist_rest) aggregates, reachability from the current frontier, and the destination room of
+    each offered path option.
+
+    Frontier = successors of the current node, or all y=0 roots at act start (mapY < 0).
+    dist_rest counts steps from the node itself (0 if the node is a rest site) and is capped
+    at MAP_AGG_CAP, which is also the [0,1] scale divisor used by the caller.
+    Returns (minE, maxE, dR, reach, dest_rooms) as python lists.
+    """
+    xs = [int(v) for v in x['obs.map.xs']]
+    ys = [int(v) for v in x['obs.map.ys']]
+    rts = [int(v) for v in x['obs.map.roomTypes']]
+    pxs = x['obs.map.pathXs']
+    idx = {(xc, yc): j for j, (xc, yc) in enumerate(zip(xs, ys))}
+    n = len(xs)
+    succ = [[] for _ in range(n)]
+    for j in range(n):
+        for e in pxs[j]:
+            e = int(e)
+            k = idx.get((e, ys[j] + 1))
+            if e >= 0 and k is not None:
+                succ[j].append(k)
+    ELITE, REST = int(sts.Room.ELITE), int(sts.Room.REST)
+    minE, maxE, dR = [0] * n, [0] * n, [MAP_AGG_CAP] * n
+    for j in sorted(range(n), key=lambda j: -ys[j]):
+        e = 1 if rts[j] == ELITE else 0
+        minE[j] = e + (min(minE[k] for k in succ[j]) if succ[j] else 0)
+        maxE[j] = e + (max(maxE[k] for k in succ[j]) if succ[j] else 0)
+        if rts[j] == REST:
+            dR[j] = 0
+        elif succ[j]:
+            dR[j] = min(MAP_AGG_CAP, 1 + min(dR[k] for k in succ[j]))
+
+    cur = idx.get((int(x['obs.mapX']), int(x['obs.mapY'])))
+    if cur is not None:
+        frontier = list(succ[cur])
+    else:  # act start: every y=0 node is enterable
+        frontier = [j for j in range(n) if ys[j] == 0]
+    # Offered path options can exceed the current node's edges (Winged Boots ignores them);
+    # the true frontier is their union.
+    ydest_f = int(x['obs.mapY']) + 1
+    for px in x['paths_offered']:
+        k = idx.get((int(px), ydest_f))
+        if k is not None and k not in frontier:
+            frontier.append(k)
+    reach = [False] * n
+    stack = list(frontier)
+    while stack:
+        j = stack.pop()
+        if not reach[j]:
+            reach[j] = True
+            stack.extend(succ[j])
+
+    ydest = int(x['obs.mapY']) + 1
+    dest_rooms = []
+    for px in x['paths_offered']:
+        k = idx.get((int(px), ydest))
+        dest_rooms.append(rts[k] if k is not None else 0)
+    return minE, maxE, dR, reach, dest_rooms
+
+
 def collate_fn(batch):
     # Extract observation and choices data
     chosen_idx_list = []
@@ -658,7 +770,8 @@ def collate_fn(batch):
             'mask': torch.ones((len(batch), sts.MAX_POTION_CAPACITY), dtype=torch.bool)
         },
         'fixed_obs': {
-            'fixed_observation': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32),
+            'fixed_observation': torch.zeros((len(batch), len(_FIXED_OBS_SCALAR_MAXES)), dtype=torch.int32),
+            'boss': torch.zeros((len(batch),), dtype=torch.int32),
             'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
         },
         'map_nodes': {
@@ -667,6 +780,9 @@ def collate_fn(batch):
                 'is_current': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
                 'pos': torch.full((len(batch), MAX_MAP_NODES, 2), 0, dtype=torch.int32),  # [x, y]
                 'path_xs': torch.full((len(batch), MAX_MAP_NODES, 3), -1, dtype=torch.int32),   # left, straight, right
+                'rel': torch.full((len(batch), MAX_MAP_NODES, 2), 0, dtype=torch.int32),  # (dx, dy) from current
+                'reachable': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
+                'agg': torch.zeros((len(batch), MAX_MAP_NODES, 3), dtype=torch.float32),  # scaled DAG aggregates
             },
             'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
         },
@@ -697,10 +813,15 @@ def collate_fn(batch):
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         },
         'paths': {
-            'value': torch.full((len(batch), MAX_PATH_CHOICES, 1), -1, dtype=torch.int32),
+            'value': {
+                'x': torch.full((len(batch), MAX_PATH_CHOICES, 1), -1, dtype=torch.int32),
+                'room': torch.full((len(batch), MAX_PATH_CHOICES), 0, dtype=torch.int32),
+            },
             'mask': torch.ones((len(batch), MAX_PATH_CHOICES), dtype=torch.bool)
         },
     }
+    # Per-option destination room labels for the auxiliary grounding loss (-100 = no option).
+    aux_dest_room = torch.full((len(batch), MAX_PATH_CHOICES), -100, dtype=torch.long)
     
     # Fill the batched tensors with assertions to ensure data fits
     for i, x in enumerate(batch):
@@ -724,8 +845,11 @@ def collate_fn(batch):
         batch_obs['potions']['value'][i, :potions_len] = torch.tensor(potions, dtype=torch.int32)
         batch_obs['potions']['mask'][i, :potions_len] = torch.zeros(potions_len, dtype=torch.bool)
         
-        # Set fixed observation components
-        batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
+        # Set fixed observation components (boss id split out as a categorical)
+        fo = list(x['obs.fixed_observation'])
+        boss = fo.pop(_BOSS_OBS_IDX)
+        batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(fo, dtype=torch.int32)
+        batch_obs['fixed_obs']['boss'][i] = int(boss)
         batch_obs['fixed_obs']['screen_state'][i] = x['screen_state']
         
         # Set map observation components
@@ -738,13 +862,19 @@ def collate_fn(batch):
         nodes_len = len(map_xs)
         assert nodes_len <= MAX_MAP_NODES, f"Map nodes count {nodes_len} exceeds maximum {MAX_MAP_NODES}"
         
-        # Create node data: (room_type, is_current, x, y, path_xs)
+        # Create node data: raw structure + ego-relative coords, reachability, DAG aggregates
+        minE, maxE, dR, reach, dest_rooms = map_dag_features(x)
         for j in range(nodes_len):
             is_current = 1 if (map_xs[j] == map_x_pos and map_ys[j] == map_y_pos) else 0
             batch_obs['map_nodes']['value']['room'][i, j] = torch.tensor(int(map_room_types[j]), dtype=torch.int32)
             batch_obs['map_nodes']['value']['is_current'][i, j] = torch.tensor(is_current, dtype=torch.int32)
             batch_obs['map_nodes']['value']['pos'][i, j] = torch.tensor([map_xs[j], map_ys[j]], dtype=torch.int32)
             batch_obs['map_nodes']['value']['path_xs'][i, j] = torch.tensor(map_path_xs[j], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['rel'][i, j] = torch.tensor(
+                [int(map_xs[j]) - int(map_x_pos), int(map_ys[j]) - int(map_y_pos)], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['reachable'][i, j] = 1 if reach[j] else 0
+            batch_obs['map_nodes']['value']['agg'][i, j] = torch.tensor(
+                [minE[j] / MAP_AGG_CAP, maxE[j] / MAP_AGG_CAP, dR[j] / MAP_AGG_CAP], dtype=torch.float32)
         batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
         
         # Build choices data inline
@@ -774,7 +904,10 @@ def collate_fn(batch):
         paths_offered = x['paths_offered']
         choice_paths_len = len(paths_offered)
         assert choice_paths_len <= MAX_PATH_CHOICES, f"Choice paths count {choice_paths_len} exceeds maximum {MAX_PATH_CHOICES}"  # max 3 paths from any node
-        batch_choices['paths']['value'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
+        if choice_paths_len > 0:
+            batch_choices['paths']['value']['x'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
+            batch_choices['paths']['value']['room'][i, :choice_paths_len] = torch.tensor(dest_rooms, dtype=torch.int32)
+            aux_dest_room[i, :choice_paths_len] = torch.tensor(dest_rooms, dtype=torch.long)
         batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         fixed_actions = x['fixed_actions']
@@ -801,6 +934,7 @@ def collate_fn(batch):
         'choices': batch_choices,
         'chosen_idx': torch.tensor(chosen_idx_list, dtype=torch.int64),
         'outcome': torch.tensor(outcome_list, dtype=torch.float32),
+        'aux_dest_room': aux_dest_room,
     }
 
 def move_to_device(obj, device):

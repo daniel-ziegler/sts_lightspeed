@@ -146,6 +146,10 @@ class TrainConfig:
     lr_final_frac: float = 0.1
     lr_decay_steps: int = 0
     lr_decay_start: int = 0
+    # Weight of the self-supervised destination-room auxiliary loss (per-path-option room
+    # classification; labels free from the map obs). Scaffolds the option-grounding circuit
+    # at RL signal strength (see EXPERIMENT_LOG.md repr lab). 0 disables.
+    aux_dest_room_coef: float = 0.1
     value_coef: float = 0.5
     max_grad_norm: float = 5.0
     
@@ -838,6 +842,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
     total_policy_grad_norm = 0
     total_value_grad_norm = 0
     total_clipfrac = 0
+    total_aux_room = 0.0
     # Stats for explained variance calculation
     target_stats = Stats()
     residual_stats = Stats()
@@ -850,6 +855,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
             batch_size = len(collated_batch['chosen_idx'])
 
             # Forward pass
+            aux_room_logits = None
             if config.separate_networks:
                 # Get policy logits from policy network
                 new_logits = policy_net(collated_batch)
@@ -861,16 +867,24 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
                 else:
                     new_values = torch.zeros(batch_size, device=device)
             else:
-                # Single network with value head
-                output = net(collated_batch)
-                if isinstance(output, tuple):
+                # Single network with value head; aux head active when the aux loss is enabled
+                want_aux = config.aux_dest_room_coef > 0
+                output = net(collated_batch, return_aux=True) if want_aux else net(collated_batch)
+                if want_aux:
+                    if len(output) == 3:
+                        new_logits, new_values, aux_room_logits = output
+                    else:
+                        new_logits, aux_room_logits = output
+                        new_values = torch.zeros(batch_size, device=device)
+                elif isinstance(output, tuple):
                     new_logits, new_values = output
                 else:
                     new_logits = output
                     new_values = torch.zeros(batch_size, device=device)
-            
+
             # Per-minibatch loss from the algorithm strategy.
-            total_loss, aux = algo.compute_loss(collated_batch, (new_logits, new_values), config)
+            total_loss, aux = algo.compute_loss(
+                collated_batch, (new_logits, new_values, aux_room_logits), config)
 
             # Explained-variance accumulation (value-based algos provide ev_target/ev_pred).
             if 'ev_target' in aux:
@@ -907,6 +921,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
             total_policy_grad_norm += policy_grad_norm
             total_value_grad_norm += value_grad_norm
             total_clipfrac += aux['clipfrac'].item()
+            total_aux_room += aux['aux_room_loss'].item() if 'aux_room_loss' in aux else 0.0
             num_batches += 1
     
     # Calculate explained variance using Stats helper classes
@@ -927,6 +942,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
         'policy_grad_norm': total_policy_grad_norm / num_batches if num_batches > 0 else 0,
         'value_grad_norm': total_value_grad_norm / num_batches if num_batches > 0 else 0,
         'clipfrac': total_clipfrac / num_batches if num_batches > 0 else 0,
+        'aux_room_loss': total_aux_room / num_batches if num_batches > 0 else 0,
         'explained_variance': explained_variance,
     }
 
@@ -1302,6 +1318,7 @@ def main():
                 'policy_grad_norm': losses.get('policy_grad_norm', 0),
                 'value_grad_norm': losses.get('value_grad_norm', 0),
                 'clipfrac': losses.get('clipfrac', 0),
+                'aux_room_loss': losses.get('aux_room_loss', 0),
                 'explained_variance': losses.get('explained_variance', 0),
                 # EWMA std used to normalize PPO advantages. Logged so the effective
                 # return-vs-entropy exchange rate (entropy_coef * adv_norm_std) is recoverable,
