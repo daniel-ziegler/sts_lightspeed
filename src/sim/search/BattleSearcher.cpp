@@ -210,7 +210,10 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
     }
 
     Node* newNode = allocNode();
-    newNode->state = std::move(state);
+    // Swap rather than move-assign: the caller's scratch buffer inherits this recycled node's
+    // old pile/edge vector capacities instead of being emptied, so the steady-state expansion
+    // loop performs no heap allocation at all.
+    std::swap(newNode->state, state);
     stateToNode[i] = {hash, newNode};
     lastNodeWasCreated = true;
     ++stats.nodesCreated;
@@ -357,7 +360,7 @@ void search::BattleSearcher::step() {
         // First traversal of this action: execute on a copy of the current state. The rng is
         // pre-seeded to Random(base + 0) so that, if the action turns out to be stochastic,
         // this execution is exactly chance outcome 0 and can be kept rather than redone.
-        BattleContext next = cur->state;
+        BattleContext &next = (expandScratch = cur->state);
         const Random preActionRng = next.rng;
         Random baseGen = preActionRng;
         const auto randomnessBase = static_cast<std::uint64_t>(baseGen.randomLong());
@@ -551,7 +554,7 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         // Widen: reseed from the canonical pre-action state, re-execute, dedup by state.
         // Sequential N gives i.i.d. samples because Random hashes its seed (murmurHash3).
         const std::uint64_t N = chance.outcomesGenerated++;
-        BattleContext out = chance.parent->state;
+        BattleContext &out = (widenScratch = chance.parent->state);
         out.rng = Random(chance.randomnessBase + N);
         chance.stochasticAction.execute(out);
 
