@@ -142,11 +142,11 @@ struct AgentMtInfo {
 static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
-static double g_explorationParameter = 9.9;   // tuned default
-static double g_chanceWideningC = 4.6;         // tuned default
-static double g_chanceWideningAlpha = 0.37;    // tuned default
-static double g_bossChanceWideningC = 4.6;        // boss-specific widening; defaults = general (see SearchAgent.h)
-static double g_bossChanceWideningAlpha = 0.37;
+static double g_explorationParameter = 25.0;   // honest-engine tuned default (see SearchAgent.h)
+static double g_chanceWideningC = 3.7028;
+static double g_chanceWideningAlpha = 0.52389;
+static double g_bossChanceWideningC = 3.7028;     // boss-specific widening; defaults = general
+static double g_bossChanceWideningAlpha = 0.52389;
 static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
 static search::EvalWeights g_evalWeights;
 
