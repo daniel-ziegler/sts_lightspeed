@@ -20,6 +20,14 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ## 2026-06-04
 
+**R5b encoding validated in RL — honest1 learns a real routing policy.** Conditional logit on
+honest1's iter-90..101 dumps (32.8k informative path decisions): REST +1.51±0.03 (4.5x odds vs
+MONSTER, z=56), SHOP +1.34 (z=43), EVENT +0.64 (z=41), ELITE +0.22 (z=8), and hp_frac x REST
+-1.72±0.13 (z=-13; strong rest-when-hurt). The cheat-era policy with 3x the training never
+exceeded ±0.1 nats (all n.s.). aux_room_loss collapsed to ~0.003 by iter 6 (grounding circuit
+instant, as the lab predicted). honest1 win-curve pace ~matches the best cheat-era recipe per
+iteration (0.43 @ iter 96 honest vs hient ~0.42 cheating) at ~2x the wall speed.
+
 **honest1 launched** — first honest-era hero run (new Lambda box 192.9.243.58, A10/30 cores,
 persistent vol ~/sts-ca). From scratch on rerandomize2 @c6b4d84: honest CardPile engine with
 tuned defaults (expl 25, widening 3.70/0.52, EvalWeights unchanged; +ActionQueue/Transmutation/
