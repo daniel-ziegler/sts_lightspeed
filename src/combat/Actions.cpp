@@ -526,11 +526,16 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
         return;
     }
 
+    // Create the cards directly rather than queueing one action per energy point: X can
+    // legitimately exceed the action queue's capacity (e.g. Ice Cream energy hoarding), and a
+    // full ActionQueue cannot hold per-point actions.
     for (int i = 0; i < effectAmount; ++i) {
         const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
         CardInstance c(cid, upgraded);
         c.setCostForTurn(0);
-        bc.addToBot( Actions::MakeTempCardInHand(c, 1) );
+        c.uniqueId = static_cast<std::int16_t>(bc.cards.nextUniqueCardId++);
+        bc.cards.notifyAddCardToCombat(c);
+        bc.moveToHandHelper(c);
     }
 
    if (useEnergy) {
