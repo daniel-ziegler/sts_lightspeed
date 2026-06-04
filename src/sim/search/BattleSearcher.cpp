@@ -84,23 +84,23 @@ namespace sts::search {
             hash_combine(hash, static_cast<int>(m.moveHistory[0]));
         }
 
-        // Hash the hand as a multiset: sort a scratch copy into canonical order so permutations
-        // hash identically (equalForSearch compares the hand as a multiset to match). Cards
-        // tied on the hashed fields contribute identically in either order, so the canonical
-        // order's hidden-field tiebreaks cannot split equal states.
+        // Hash the hand as a multiset: combine per-card hashes COMMUTATIVELY (sum) so
+        // permutations hash identically without sorting a scratch copy (this is the hot path:
+        // every getOrCreateNode hashes). equalForSearch compares the hand as a multiset to
+        // match; extra cross-multiset collisions from the commutative fold are resolved there.
         hash_combine(hash, bc.cards.cardsInHand);
         {
-            std::array<CardInstance, CardManager::MAX_HAND_SIZE> sortedHand;
-            std::copy(bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand,
-                      sortedHand.begin());
-            std::sort(sortedHand.begin(), sortedHand.begin() + bc.cards.cardsInHand);
+            std::uint64_t handAcc = 0;
             for (int i = 0; i < bc.cards.cardsInHand; ++i) {
-                const auto& c = sortedHand[i];
-                hash_combine(hash, static_cast<int>(c.id));
-                hash_combine(hash, c.cost);
-                hash_combine(hash, c.costForTurn);
-                hash_combine(hash, c.upgraded);
+                const auto& c = bc.cards.hand[i];
+                std::uint64_t ch = 0;
+                hash_combine(ch, static_cast<int>(c.id));
+                hash_combine(ch, c.cost);
+                hash_combine(ch, c.costForTurn);
+                hash_combine(ch, c.upgraded);
+                handAcc += ch;
             }
+            hash_combine(hash, handAcc);
         }
 
         // Hash draw pile with position (the sorted unknown region hashes canonically; the known

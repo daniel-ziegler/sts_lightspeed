@@ -12,6 +12,12 @@ file (GLOB_RECURSE sts_lightspeed_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_FLAGS  "-Wno-shift-count-overflow -O3 -flto=auto")
+# Opt-in: ~1% cycles on the search workload. OFF by default because the resulting binaries are
+# not portable across hosts (we routinely scp test binaries between boxes).
+option(STS_MARCH_NATIVE "build with -march=native (host-specific binary)" OFF)
+if (STS_MARCH_NATIVE)
+    string(APPEND CMAKE_CXX_FLAGS " -march=native")
+endif()
 
 add_subdirectory(json)
 add_subdirectory(pybind11)
