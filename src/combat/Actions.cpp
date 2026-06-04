@@ -526,10 +526,19 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
         return;
     }
 
-    // Create the cards directly rather than queueing one action per energy point: X can
-    // legitimately exceed the action queue's capacity (e.g. Ice Cream energy hoarding), and a
-    // full ActionQueue cannot hold per-point actions.
-    for (int i = 0; i < effectAmount; ++i) {
+    // One queued action creating all X cards: per-point actions can exceed the ActionQueue's
+    // capacity (X is unbounded, e.g. Ice Cream energy hoarding), and creating the cards here
+    // directly would skip ahead of already-queued actions. The random rolls happen when the
+    // queued action executes.
+    bc.addToBot( Actions::TransmutationCardsInHand(effectAmount, upgraded) );
+
+   if (useEnergy) {
+       bc.player.useEnergy(bc.player.energy);
+   }
+}
+
+void _TransmutationCardsInHand::operator()(BattleContext &bc) const {
+    for (int i = 0; i < count; ++i) {
         const auto cid = sts::getTrulyRandomColorlessCardInCombat(bc.rng);
         CardInstance c(cid, upgraded);
         c.setCostForTurn(0);
@@ -537,10 +546,6 @@ void _TransmutationAction::operator()(BattleContext &bc) const {
         bc.cards.notifyAddCardToCombat(c);
         bc.moveToHandHelper(c);
     }
-
-   if (useEnergy) {
-       bc.player.useEnergy(bc.player.energy);
-   }
 }
 
 void _ViolenceAction::operator()(BattleContext &bc) const {

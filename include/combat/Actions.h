@@ -92,6 +92,7 @@ namespace sts {
     X(InfernalBladeAction) \
     X(JackOfAllTradesAction, bool,upgraded) \
     X(TransmutationAction, bool,upgraded, int,energy, bool,useEnergy) \
+    X(TransmutationCardsInHand, int,count, bool,upgraded) \
     X(ViolenceAction, int,count) \
     X(BetterDiscardPileToHandAction, int,amount, CardSelectTask,task) \
     X(ArmamentsAction) \
