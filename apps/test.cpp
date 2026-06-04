@@ -242,7 +242,9 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
               << " sibReuse=" << st.chanceSiblingReuse
               << " chanceTrans=" << st.chanceTranspositions
               << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
-              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0)
+              << " hashNearMiss=" << st.hashMatchUnequal
+              << " uidMerges=" << st.uidBlindMerges << '\n';
     std::cout << "threads: " << threadCount
               << " playoutCount: " << playoutCount
               << " depth: " << g_simulationCount
@@ -855,7 +857,8 @@ static int evalStates(int argc, const char *argv[]) {
               << " sibReuse=" << st.chanceSiblingReuse
               << " chanceTrans=" << st.chanceTranspositions
               << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
-              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0)
+              << " hashNearMiss=" << st.hashMatchUnequal << '\n';
     return 0;
 }
 

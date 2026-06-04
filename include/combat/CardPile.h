@@ -230,6 +230,7 @@ namespace sts {
         // different information sets. Dynamics code never needs them.
         [[nodiscard]] int knownCount() const { return knownTopCount; }
         [[nodiscard]] int knownBottom() const { return knownBottomCount; }
+        [[nodiscard]] bool orderIsObserved() const { return orderObserved; }
 
         // Apply f to one card / every card, then restore the sort invariant. Only the unknown
         // region is re-sorted: known top/bottom positions are meaningful and survive value
