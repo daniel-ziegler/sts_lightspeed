@@ -231,6 +231,9 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
         << " totalSimulations: " << info.totalSimulations
         << " avgPerFloor: " << (double)info.totalSimulations/info.floorSum << '\n';
 
+    std::cout << "REROOT exact=" << search::g_rerootExact.load()
+              << " permuted=" << search::g_rerootPermuted.load()
+              << " miss=" << search::g_rerootMiss.load() << '\n';
     const auto &st = info.stats;
     std::cout << "STATS steps=" << st.steps
               << " nodesCreated=" << st.nodesCreated
