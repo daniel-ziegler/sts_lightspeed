@@ -35,6 +35,11 @@ def main():
     ap.add_argument('--boss-widening-c', type=float, default=None,
                     help='explicit boss DPW widening C (with --boss-widening-alpha); overrides on/off')
     ap.add_argument('--boss-widening-alpha', type=float, default=None)
+    ap.add_argument('--exploration', type=float, default=None,
+                    help='override search exploration (deployment gate for tuned knob candidates; '
+                         'rides on the engine-default eval weights)')
+    ap.add_argument('--widening-c', type=float, default=None)
+    ap.add_argument('--widening-alpha', type=float, default=None)
     ap.add_argument('--legacy-config', action='store_true',
                     help='use the pre-tuning coupled search config (exploration 4.24, widening '
                          '1.0/0.5 incl. boss, old eval weights) instead of the engine defaults')
@@ -66,7 +71,14 @@ def main():
         mcts_monster_damage_weight=10.0, mcts_alive_weight=1.0,
         mcts_energy_waste_weight=0.2, mcts_draw_weight=0.03, mcts_turn_survival_weight=0.2,
     ) if args.legacy_config else {}
-    if not args.legacy_config and args.boss_widening_c is not None:
+    if args.exploration is not None:
+        # general-knob candidate: boss widening pinned to the same values (no boss gate yet
+        # for the honest engine)
+        legacy = dict(mcts_exploration=args.exploration,
+                      mcts_widening_c=args.widening_c, mcts_widening_alpha=args.widening_alpha,
+                      mcts_boss_widening_c=args.widening_c,
+                      mcts_boss_widening_alpha=args.widening_alpha)
+    elif not args.legacy_config and args.boss_widening_c is not None:
         # explicit boss widening candidate (per-battle tuning winner under deployment gate)
         legacy = dict(mcts_boss_widening_c=args.boss_widening_c,
                       mcts_boss_widening_alpha=args.boss_widening_alpha)
