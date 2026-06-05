@@ -94,7 +94,6 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
     constexpr std::size_t reusePoolCap = 32 * 1024;
 
     const sts::search::BattleSearcher::Edge *prevBestEdge = nullptr;
-    bool rootIsPermuted = false;   // root state == bc up to hand order; emitted actions remap
 
     while (bc.outcome == Outcome::UNDECIDED) {
         if (prevBestEdge != nullptr) {
@@ -134,17 +133,10 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
             g_rerootExact += (candidate != nullptr);
             g_rerootPermuted += (candidate == nullptr && permutedCandidate != nullptr);
             g_rerootMiss += (candidate == nullptr && permutedCandidate == nullptr);
-            // Permutation-tolerant reuse: a node matching bc up to hand order is a valid root
-            // for searching (each node continues self-consistently from its own state), as long
-            // as the action finally emitted to the REAL battle has its hand index translated.
-            // Only normal play decisions qualify: their actions reference the hand by index
-            // (or not at all), and uniqueIds give an exact 1:1 remap between the permuted hands.
-            rootIsPermuted = false;
-            if (candidate == nullptr && permutedCandidate != nullptr
-                && bc.inputState == InputState::PLAYER_NORMAL) {
-                candidate = permutedCandidate;
-                rootIsPermuted = true;
-            }
+            // permutedCandidate is counted but NOT used: rerooting into a node matching only up
+            // to hand order (with uid-remapped action emission) gated NEGATIVE at deployment
+            // (60.6% vs 62.7% control, 1000 paired seeds) -- reusing those stale subtrees loses
+            // more than the fresh-search budget it saves.
             if (candidate != nullptr && searcher.allNodes.size() < reusePoolCap) {
                 searcher.rerootAt(candidate);
             } else {
@@ -183,19 +175,7 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
             printConciseAction(bc, bestEdge->action);
         }
 
-        Action emitted = bestEdge->action;
-        if (rootIsPermuted && emitted.getActionType() == ActionType::CARD) {
-            // translate the hand index from the root node's hand ordering to the real battle's
-            const auto &rootHand = searcher.root->state.cards;
-            const auto uid = rootHand.hand[emitted.getSourceIdx()].uniqueId;
-            for (int i = 0; i < bc.cards.cardsInHand; ++i) {
-                if (bc.cards.hand[i].uniqueId == uid) {
-                    emitted = Action(ActionType::CARD, i, emitted.getTargetIdx());
-                    break;
-                }
-            }
-        }
-        takeAction(bc, emitted);
+        takeAction(bc, bestEdge->action);
         prevBestEdge = bestEdge;   // valid for next iter's reroot lookup (no setRoot between here and there)
     }
     searchStats.add(searcher.stats);
