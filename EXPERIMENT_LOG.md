@@ -18,6 +18,13 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-05
+
+**honest1: annealing engaged @155 (entropy 0.05→0.0025 + lr→0.1×, 200 iters each); engine
+upgraded to `51156d0` @190** (perf round + uid-blind transposition dedup, perm-reroot reverted
+after gate failure; quality-neutral, ~12% faster search — MCTS-session gates). Win crossed 0.5
+@181 honest. Box build now uses -march=native via the new STS_MARCH_NATIVE opt-in.
+
 ## 2026-06-04
 
 **R5b encoding validated in RL — honest1 learns a real routing policy.** Conditional logit on
