@@ -20,6 +20,14 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ## 2026-06-05
 
+**Engine throughput A/B on live honest1 (collect s/iter @ 256 games):** `c6b4d84` ~265s (win
+0.50) → `51156d0` ~380-460s (win 0.53-0.68; march=native ruled out by a no-march rebuild arm)
+→ **`d1189ce` ~285-320s (win 0.63-0.70) ← deployed.** Verdict: the uid-relabeling dedup
+(`38205a3`) regresses wall time ~30-40% on strong-policy deep-game collection despite its
+weak-policy telemetry showing +12%; the d1189ce alloc/sort round is genuinely fast. Flagged in
+COORD for re-gating on strong states. honest1 quality unaffected throughout (0.703 @ iter 251,
+new high; entropy 0.61, coef 0.013, lr 1.1e-5).
+
 **honest1: annealing engaged @155 (entropy 0.05→0.0025 + lr→0.1×, 200 iters each); engine
 upgraded to `51156d0` @190** (perf round + uid-blind transposition dedup, perm-reroot reverted
 after gate failure; quality-neutral, ~12% faster search — MCTS-session gates). Win crossed 0.5
