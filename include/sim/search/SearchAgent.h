@@ -14,6 +14,8 @@
 #include <random>
 #include <cmath>
 
+#include <atomic>
+namespace sts::search { extern std::atomic<long> g_rerootExact, g_rerootPermuted, g_rerootMiss; }
 namespace sts::search {
 
     // Post-battle snapshot for studying which per-battle features predict full-game wins.

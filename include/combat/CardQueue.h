@@ -50,6 +50,25 @@ namespace sts {
         int frontIdx = 0;
         std::array<CardQueueItem, capacity> arr;
 
+        // Copy only the live ring segment: the rest of arr is stale and never read, and this
+        // queue rides along on every BattleContext copy (operator== already compares the live
+        // segment only, so normalizing front to 0 is invisible).
+        CardQueue() = default;
+        CardQueue(const CardQueue &rhs) : size(rhs.size), backIdx(rhs.size), frontIdx(0) {
+            for (int i = 0; i < rhs.size; ++i) {
+                arr[i] = rhs.arr[(rhs.frontIdx + i) % capacity];
+            }
+        }
+        CardQueue &operator=(const CardQueue &rhs) {
+            size = rhs.size;
+            backIdx = rhs.size;
+            frontIdx = 0;
+            for (int i = 0; i < rhs.size; ++i) {
+                arr[i] = rhs.arr[(rhs.frontIdx + i) % capacity];
+            }
+            return *this;
+        }
+
         void clear();
         void pushFront(CardQueueItem item);
         void pushBack(CardQueueItem item);

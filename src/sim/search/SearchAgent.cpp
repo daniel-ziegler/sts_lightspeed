@@ -5,6 +5,8 @@
 #include "sim/search/SearchAgent.h"
 
 #include <algorithm>
+#include <atomic>
+namespace sts::search { std::atomic<long> g_rerootExact{0}, g_rerootPermuted{0}, g_rerootMiss{0}; }
 
 #include <sim/search/ExpertKnowledge.h>
 #include <game/Game.h>
@@ -107,20 +109,34 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
                                   bc.cards.hand.begin());
             };
             Node* candidate = nullptr;
+            Node* permutedCandidate = nullptr;
             Node* edgeChild = prevBestEdge->node;
             if (edgeChild != nullptr && !edgeChild->isRandomNode) {
                 if (exactMatch(edgeChild)) {
                     candidate = edgeChild;
+                } else if (edgeChild->state.equalForSearch(bc)) {
+                    permutedCandidate = edgeChild;
                 }
             } else if (edgeChild != nullptr) {
                 // Chance node: find the outcome whose realized state matches bc.
                 for (auto &oe : edgeChild->edges) {
-                    if (oe.node != nullptr && exactMatch(oe.node)) {
+                    if (oe.node == nullptr) continue;
+                    if (exactMatch(oe.node)) {
                         candidate = oe.node;
                         break;
                     }
+                    if (permutedCandidate == nullptr && oe.node->state.equalForSearch(bc)) {
+                        permutedCandidate = oe.node;
+                    }
                 }
             }
+            g_rerootExact += (candidate != nullptr);
+            g_rerootPermuted += (candidate == nullptr && permutedCandidate != nullptr);
+            g_rerootMiss += (candidate == nullptr && permutedCandidate == nullptr);
+            // permutedCandidate is counted but NOT used: rerooting into a node matching only up
+            // to hand order (with uid-remapped action emission) gated NEGATIVE at deployment
+            // (60.6% vs 62.7% control, 1000 paired seeds) -- reusing those stale subtrees loses
+            // more than the fresh-search budget it saves.
             if (candidate != nullptr && searcher.allNodes.size() < reusePoolCap) {
                 searcher.rerootAt(candidate);
             } else {

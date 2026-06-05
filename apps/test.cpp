@@ -231,6 +231,9 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
         << " totalSimulations: " << info.totalSimulations
         << " avgPerFloor: " << (double)info.totalSimulations/info.floorSum << '\n';
 
+    std::cout << "REROOT exact=" << search::g_rerootExact.load()
+              << " permuted=" << search::g_rerootPermuted.load()
+              << " miss=" << search::g_rerootMiss.load() << '\n';
     const auto &st = info.stats;
     std::cout << "STATS steps=" << st.steps
               << " nodesCreated=" << st.nodesCreated
@@ -239,7 +242,9 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
               << " sibReuse=" << st.chanceSiblingReuse
               << " chanceTrans=" << st.chanceTranspositions
               << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
-              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0)
+              << " hashNearMiss=" << st.hashMatchUnequal
+              << " uidMerges=" << st.uidBlindMerges << '\n';
     std::cout << "threads: " << threadCount
               << " playoutCount: " << playoutCount
               << " depth: " << g_simulationCount
@@ -852,7 +857,8 @@ static int evalStates(int argc, const char *argv[]) {
               << " sibReuse=" << st.chanceSiblingReuse
               << " chanceTrans=" << st.chanceTranspositions
               << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
-              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
+              << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0)
+              << " hashNearMiss=" << st.hashMatchUnequal << '\n';
     return 0;
 }
 

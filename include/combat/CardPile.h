@@ -230,13 +230,16 @@ namespace sts {
         // different information sets. Dynamics code never needs them.
         [[nodiscard]] int knownCount() const { return knownTopCount; }
         [[nodiscard]] int knownBottom() const { return knownBottomCount; }
+        [[nodiscard]] bool orderIsObserved() const { return orderObserved; }
 
         // Apply f to one card / every card, then restore the sort invariant. Only the unknown
         // region is re-sorted: known top/bottom positions are meaningful and survive value
-        // mutation.
+        // mutation. Mutations usually leave the order intact (per-turn cost resets are no-ops
+        // most of the time), so check sortedness first — linear vs n log n on the common path.
         template <typename F> void mutateAt(int idx, F &&f) {
             f(cards[idx]);
-            if (!inKnownTop(idx) && !inKnownBottom(idx)) {
+            if (!inKnownTop(idx) && !inKnownBottom(idx)
+                && !std::is_sorted(unknownBegin(), unknownEnd())) {
                 std::sort(unknownBegin(), unknownEnd());
             }
         }
@@ -244,7 +247,9 @@ namespace sts {
             for (auto &c : cards) {
                 f(c);
             }
-            std::sort(unknownBegin(), unknownEnd());
+            if (!std::is_sorted(unknownBegin(), unknownEnd())) {
+                std::sort(unknownBegin(), unknownEnd());
+            }
         }
 
         bool operator==(const CardPile &rhs) const = default;

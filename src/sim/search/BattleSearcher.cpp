@@ -3,6 +3,7 @@
 //
 
 #include "sim/search/BattleSearcher.h"
+#include <atomic>
 #include "sim/search/ExpertKnowledge.h"
 
 #include <algorithm>
@@ -84,23 +85,23 @@ namespace sts::search {
             hash_combine(hash, static_cast<int>(m.moveHistory[0]));
         }
 
-        // Hash the hand as a multiset: sort a scratch copy into canonical order so permutations
-        // hash identically (equalForSearch compares the hand as a multiset to match). Cards
-        // tied on the hashed fields contribute identically in either order, so the canonical
-        // order's hidden-field tiebreaks cannot split equal states.
+        // Hash the hand as a multiset: combine per-card hashes COMMUTATIVELY (sum) so
+        // permutations hash identically without sorting a scratch copy (this is the hot path:
+        // every getOrCreateNode hashes). equalForSearch compares the hand as a multiset to
+        // match; extra cross-multiset collisions from the commutative fold are resolved there.
         hash_combine(hash, bc.cards.cardsInHand);
         {
-            std::array<CardInstance, CardManager::MAX_HAND_SIZE> sortedHand;
-            std::copy(bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand,
-                      sortedHand.begin());
-            std::sort(sortedHand.begin(), sortedHand.begin() + bc.cards.cardsInHand);
+            std::uint64_t handAcc = 0;
             for (int i = 0; i < bc.cards.cardsInHand; ++i) {
-                const auto& c = sortedHand[i];
-                hash_combine(hash, static_cast<int>(c.id));
-                hash_combine(hash, c.cost);
-                hash_combine(hash, c.costForTurn);
-                hash_combine(hash, c.upgraded);
+                const auto& c = bc.cards.hand[i];
+                std::uint64_t ch = 0;
+                hash_combine(ch, static_cast<int>(c.id));
+                hash_combine(ch, c.cost);
+                hash_combine(ch, c.costForTurn);
+                hash_combine(ch, c.upgraded);
+                handAcc += ch;
             }
+            hash_combine(hash, handAcc);
         }
 
         // Hash draw pile with position (the sorted unknown region hashes canonically; the known
@@ -194,6 +195,165 @@ search::BattleSearcher::Node* search::BattleSearcher::allocNode() {
     return allNodes.back().get();
 }
 
+
+namespace sts::search {
+
+    // ---- uid-relabeling-blind state equality (dedup only; reroot stays uid-exact) ----
+    //
+    // Two states that differ only by a consistent relabeling of card uniqueIds have identical
+    // future dynamics: uids only flow through copies and by-uid lookups, new uids come from the
+    // (compared) nextUniqueCardId counter, and no rng or game rule reads uid values. Such states
+    // are matched by building a uid bijection incrementally: positional zones (known pile
+    // regions, limbo, stasis, queues) must match card-for-card, unordered regions match as
+    // value-sorted multisets (ties pair arbitrarily -- equal values make any pairing valid
+    // unless a queued uid reference disagrees, which the bijection check catches conservatively).
+    namespace {
+        constexpr int UID_DOM = 4096;
+        thread_local std::uint32_t uidEpoch = 0;
+        thread_local std::array<std::uint32_t, UID_DOM> uidFwdEpoch{}, uidRevEpoch{};
+        thread_local std::array<std::int16_t, UID_DOM> uidFwdVal, uidRevVal;
+
+        bool tryMapUid(std::int16_t a, std::int16_t b) {
+            if (a < 0 || b < 0 || a >= UID_DOM || b >= UID_DOM) {
+                return a == b;   // INVALID/out-of-domain: require identity (conservative)
+            }
+            const bool fa = uidFwdEpoch[a] == uidEpoch;
+            const bool fb = uidRevEpoch[b] == uidEpoch;
+            if (fa || fb) {
+                return fa && fb && uidFwdVal[a] == b;
+            }
+            uidFwdEpoch[a] = uidEpoch; uidFwdVal[a] = b;
+            uidRevEpoch[b] = uidEpoch; uidRevVal[b] = static_cast<std::int16_t>(a);
+            return true;
+        }
+
+        bool blindValueEq(const CardInstance &a, const CardInstance &b) {
+            return a.id == b.id && a.specialData == b.specialData && a.cost == b.cost
+                && a.costForTurn == b.costForTurn && a.upgraded == b.upgraded
+                && a.freeToPlayOnce == b.freeToPlayOnce && a.retain == b.retain;
+        }
+        bool blindLess(const CardInstance &a, const CardInstance &b) {
+            if (a.id != b.id) return a.id < b.id;
+            if (a.specialData != b.specialData) return a.specialData < b.specialData;
+            if (a.cost != b.cost) return a.cost < b.cost;
+            if (a.costForTurn != b.costForTurn) return a.costForTurn < b.costForTurn;
+            if (a.upgraded != b.upgraded) return a.upgraded < b.upgraded;
+            if (a.freeToPlayOnce != b.freeToPlayOnce) return a.freeToPlayOnce < b.freeToPlayOnce;
+            return a.retain < b.retain;
+        }
+        bool matchCard(const CardInstance &a, const CardInstance &b) {
+            return blindValueEq(a, b) && tryMapUid(a.uniqueId, b.uniqueId);
+        }
+        bool matchMultiset(std::vector<CardInstance> &sa, std::vector<CardInstance> &sb) {
+            if (sa.size() != sb.size()) return false;
+            std::sort(sa.begin(), sa.end(), blindLess);
+            std::sort(sb.begin(), sb.end(), blindLess);
+            for (std::size_t i = 0; i < sa.size(); ++i) {
+                if (!matchCard(sa[i], sb[i])) return false;
+            }
+            return true;
+        }
+        bool matchPile(const CardPile &x, const CardPile &y) {
+            if (x.size() != y.size() || x.knownCount() != y.knownCount()
+                || x.knownBottom() != y.knownBottom()
+                || x.orderIsObserved() != y.orderIsObserved()) {
+                return false;
+            }
+            const int n = x.size(), B = x.knownBottom(), K = x.knownCount();
+            for (int i = 0; i < B; ++i) {                 // known bottom: positional
+                if (!matchCard(x[i], y[i])) return false;
+            }
+            for (int i = n - K; i < n; ++i) {             // known top: positional
+                if (!matchCard(x[i], y[i])) return false;
+            }
+            thread_local std::vector<CardInstance> sa, sb;
+            sa.assign(x.begin() + B, x.end() - K);
+            sb.assign(y.begin() + B, y.end() - K);
+            return matchMultiset(sa, sb);
+        }
+        bool matchQueueItem(const CardQueueItem &a, const CardQueueItem &b) {
+            return a.target == b.target && a.isEndTurn == b.isEndTurn
+                && a.triggerOnUse == b.triggerOnUse && a.ignoreEnergyTotal == b.ignoreEnergyTotal
+                && a.energyOnUse == b.energyOnUse && a.freeToPlay == b.freeToPlay
+                && a.randomTarget == b.randomTarget && a.autoplay == b.autoplay
+                && a.regretCardCount == b.regretCardCount && a.purgeOnUse == b.purgeOnUse
+                && a.exhaustOnUse == b.exhaustOnUse && matchCard(a.card, b.card);
+        }
+    }
+
+    bool dedupEqualUidBlind(const BattleContext &a, const BattleContext &b) {
+        // non-card scalar state must match exactly (mirrors equalForSearch)
+        if (!(a.seed == b.seed && a.turn == b.turn && a.ascension == b.ascension
+              && a.outcome == b.outcome && a.inputState == b.inputState
+              && a.cardSelectInfo == b.cardSelectInfo && a.monsterTurnIdx == b.monsterTurnIdx
+              && a.isBattleOver == b.isBattleOver && a.endTurnQueued == b.endTurnQueued
+              && a.turnHasEnded == b.turnHasEnded && a.skipMonsterTurn == b.skipMonsterTurn
+              && a.smokeBombUsed == b.smokeBombUsed
+              && a.potionCount == b.potionCount && a.potionCapacity == b.potionCapacity
+              && a.potions == b.potions && a.player == b.player && a.monsters == b.monsters
+              && a.miscBits == b.miscBits)) {
+            return false;
+        }
+        const auto &ca = a.cards; const auto &cb = b.cards;
+        if (!(ca.cardsInHand == cb.cardsInHand && ca.nextUniqueCardId == cb.nextUniqueCardId
+              && ca.handNormalityCount == cb.handNormalityCount && ca.handPainCount == cb.handPainCount
+              && ca.strikeCount == cb.strikeCount && ca.handBloodCardCount == cb.handBloodCardCount
+              && ca.drawPileBloodCardCount == cb.drawPileBloodCardCount
+              && ca.discardPileBloodCardCount == cb.discardPileBloodCardCount)) {
+            return false;
+        }
+
+        ++uidEpoch;
+        if (uidEpoch == 0) {   // epoch wrap: invalidate stale entries
+            uidFwdEpoch.fill(0); uidRevEpoch.fill(0); uidEpoch = 1;
+        }
+
+        // ordered card zones build/verify the bijection positionally
+        for (std::size_t i = 0; i < ca.limbo.size(); ++i) {
+            if (!matchCard(ca.limbo[i], cb.limbo[i])) return false;
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (!matchCard(ca.stasisCards[i], cb.stasisCards[i])) return false;
+        }
+        if (!matchPile(ca.drawPile, cb.drawPile) || !matchPile(ca.discardPile, cb.discardPile)
+            || !matchPile(ca.exhaustPile, cb.exhaustPile)) {
+            return false;
+        }
+        {
+            thread_local std::vector<CardInstance> ha, hb;
+            ha.assign(ca.hand.begin(), ca.hand.begin() + ca.cardsInHand);
+            hb.assign(cb.hand.begin(), cb.hand.begin() + cb.cardsInHand);
+            if (!matchMultiset(ha, hb)) return false;
+        }
+
+        // uid-referencing in-flight state: verify under the bijection
+        if (!matchQueueItem(a.curCardQueueItem, b.curCardQueueItem)) return false;
+        if (a.cardQueue.size != b.cardQueue.size) return false;
+        for (int i = 0; i < a.cardQueue.size; ++i) {
+            const auto &qa = a.cardQueue.arr[(a.cardQueue.frontIdx + i) % CardQueue::capacity];
+            const auto &qb = b.cardQueue.arr[(b.cardQueue.frontIdx + i) % CardQueue::capacity];
+            if (!matchQueueItem(qa, qb)) return false;
+        }
+        if (a.actionQueue.size != b.actionQueue.size) return false;
+        for (int i = 0; i < a.actionQueue.size; ++i) {
+            const sts::Action &xa = a.actionQueue[i];
+            const sts::Action &xb = b.actionQueue[i];
+            if (xa.type == sts::ActionType_ExhaustSpecificCardInHand
+                && xb.type == sts::ActionType_ExhaustSpecificCardInHand) {
+                if (xa.variant_ExhaustSpecificCardInHand.idx != xb.variant_ExhaustSpecificCardInHand.idx
+                    || !tryMapUid(xa.variant_ExhaustSpecificCardInHand.uniqueId,
+                                  xb.variant_ExhaustSpecificCardInHand.uniqueId)) {
+                    return false;
+                }
+            } else if (!(xa == xb)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+}
+
 // Moves `state` into the node only when a new node is created; on a match `state` is left
 // intact, so callers may still read it.
 search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleContext &&state) {
@@ -202,15 +362,26 @@ search::BattleSearcher::Node* search::BattleSearcher::getOrCreateNode(BattleCont
     // Linear probe the open-addressed table; equalForSearch resolves hash collisions exactly.
     std::size_t i = hash & stateToNodeMask;
     while (stateToNode[i].node != nullptr) {
-        if (stateToNode[i].hash == hash && stateToNode[i].node->state.equalForSearch(state)) {
-            lastNodeWasCreated = false;
-            return stateToNode[i].node;
+        if (stateToNode[i].hash == hash) {
+            if (stateToNode[i].node->state.equalForSearch(state)) {
+                lastNodeWasCreated = false;
+                return stateToNode[i].node;
+            }
+            ++stats.hashMatchUnequal;
+            if (dedupEqualUidBlind(stateToNode[i].node->state, state)) {
+                ++stats.uidBlindMerges;
+                lastNodeWasCreated = false;
+                return stateToNode[i].node;
+            }
         }
         i = (i + 1) & stateToNodeMask;
     }
 
     Node* newNode = allocNode();
-    newNode->state = std::move(state);
+    // Swap rather than move-assign: the caller's scratch buffer inherits this recycled node's
+    // old pile/edge vector capacities instead of being emptied, so the steady-state expansion
+    // loop performs no heap allocation at all.
+    std::swap(newNode->state, state);
     stateToNode[i] = {hash, newNode};
     lastNodeWasCreated = true;
     ++stats.nodesCreated;
@@ -357,7 +528,7 @@ void search::BattleSearcher::step() {
         // First traversal of this action: execute on a copy of the current state. The rng is
         // pre-seeded to Random(base + 0) so that, if the action turns out to be stochastic,
         // this execution is exactly chance outcome 0 and can be kept rather than redone.
-        BattleContext next = cur->state;
+        BattleContext &next = (expandScratch = cur->state);
         const Random preActionRng = next.rng;
         Random baseGen = preActionRng;
         const auto randomnessBase = static_cast<std::uint64_t>(baseGen.randomLong());
@@ -551,7 +722,7 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         // Widen: reseed from the canonical pre-action state, re-execute, dedup by state.
         // Sequential N gives i.i.d. samples because Random hashes its seed (murmurHash3).
         const std::uint64_t N = chance.outcomesGenerated++;
-        BattleContext out = chance.parent->state;
+        BattleContext &out = (widenScratch = chance.parent->state);
         out.rng = Random(chance.randomnessBase + N);
         chance.stochasticAction.execute(out);
 

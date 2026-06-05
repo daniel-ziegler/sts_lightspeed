@@ -19,6 +19,9 @@
 
 namespace sts::search {
 
+    // uid-relabeling-blind state equality (transposition dedup only; see BattleSearcher.cpp)
+    bool dedupEqualUidBlind(const BattleContext &a, const BattleContext &b);
+
     typedef std::function<double (const BattleContext&)> EvalFnc;
 
     // Tunable weights for evaluateEndState (the value backed up by the search).
@@ -45,11 +48,14 @@ namespace sts::search {
         std::int64_t chanceTranspositions = 0;   // sampled outcome dedup-hit a non-sibling node
         std::int64_t depthSum = 0;               // in-tree path length at each simulation's end
         std::int64_t chanceDepthSum = 0;         // chance nodes on the path at each simulation's end
+        std::int64_t hashMatchUnequal = 0;       // dedup probes where the hash matched but equality failed
+        std::int64_t uidBlindMerges = 0;         // dedup hits via uid-relabeling-blind equality
         void add(const SearchStats &o) {
             steps += o.steps; nodesCreated += o.nodesCreated; detTranspositions += o.detTranspositions;
             chanceOutcomesSampled += o.chanceOutcomesSampled; chanceSiblingReuse += o.chanceSiblingReuse;
             chanceTranspositions += o.chanceTranspositions;
             depthSum += o.depthSum; chanceDepthSum += o.chanceDepthSum;
+            hashMatchUnequal += o.hashMatchUnequal; uidBlindMerges += o.uidBlindMerges;
         }
     };
 
@@ -110,6 +116,11 @@ namespace sts::search {
         
         SimpleAgent rolloutAgent;
         BattleContext rolloutScratch;   // reused playout buffer: copy-assigning into it keeps the card-pile vector capacity, avoiding a fresh allocation per rollout
+        // Same idiom for the two expansion paths: candidate states are built in persistent
+        // scratch buffers, so duplicate outcomes (dedup hits, >half of chance samples) cost no
+        // allocation. getOrCreateNode steals the buffers only when a node is actually created.
+        BattleContext expandScratch;
+        BattleContext widenScratch;
 
         explicit BattleSearcher(const BattleContext &bc, EvalFnc evalFnc=nullptr);
         ~BattleSearcher();

@@ -566,7 +566,21 @@ bool CardManager::operator==(const CardManager &rhs) const {
 }
 
 bool CardManager::equalForSearch(const CardManager &rhs) const {
-    if (cardsInHand != rhs.cardsInHand) {
+    // cheap scalar fields and exact pile compares first; the hand-multiset check (two scratch
+    // sorts) runs only when everything else already matched
+    if (!(cardsInHand == rhs.cardsInHand &&
+          nextUniqueCardId == rhs.nextUniqueCardId &&
+          handNormalityCount == rhs.handNormalityCount &&
+          handPainCount == rhs.handPainCount &&
+          strikeCount == rhs.strikeCount &&
+          handBloodCardCount == rhs.handBloodCardCount &&
+          drawPileBloodCardCount == rhs.drawPileBloodCardCount &&
+          discardPileBloodCardCount == rhs.discardPileBloodCardCount &&
+          limbo == rhs.limbo &&
+          stasisCards == rhs.stasisCards &&
+          drawPile == rhs.drawPile &&
+          discardPile == rhs.discardPile &&
+          exhaustPile == rhs.exhaustPile)) {
         return false;
     }
     // hand as a multiset: sort scratch copies into canonical order, then compare exactly
@@ -575,19 +589,7 @@ bool CardManager::equalForSearch(const CardManager &rhs) const {
     std::copy(rhs.hand.begin(), rhs.hand.begin() + cardsInHand, rhsHand.begin());
     std::sort(lhsHand.begin(), lhsHand.begin() + cardsInHand);
     std::sort(rhsHand.begin(), rhsHand.begin() + cardsInHand);
-    return std::equal(lhsHand.begin(), lhsHand.begin() + cardsInHand, rhsHand.begin()) &&
-           nextUniqueCardId == rhs.nextUniqueCardId &&
-           limbo == rhs.limbo &&
-           stasisCards == rhs.stasisCards &&
-           drawPile == rhs.drawPile &&
-           discardPile == rhs.discardPile &&
-           exhaustPile == rhs.exhaustPile &&
-           handNormalityCount == rhs.handNormalityCount &&
-           handPainCount == rhs.handPainCount &&
-           strikeCount == rhs.strikeCount &&
-           handBloodCardCount == rhs.handBloodCardCount &&
-           drawPileBloodCardCount == rhs.drawPileBloodCardCount &&
-           discardPileBloodCardCount == rhs.discardPileBloodCardCount;
+    return std::equal(lhsHand.begin(), lhsHand.begin() + cardsInHand, rhsHand.begin());
 }
 
 namespace sts {
