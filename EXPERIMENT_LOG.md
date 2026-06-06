@@ -18,6 +18,26 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-06
+
+**honest1 concluded at iter ~456.** Anneal floored @355 (entropy coef 0.0025, lr 3e-6/1e-5);
+high-water 0.816 @436, then 0.758-0.785 — plateau called. Process stopped (last checkpoint
+iter_455); local three-stage eval queued: (1) checkpoint screen 401/431/436/455 × 400 paired
+seeds @1k sims (screen seeds 2,000,000+ disjoint from the headline set), (2) headline champion
+vs heroe2-270 paired on identical seeds (honest engine, McNemar), (3) routing intervention:
+champion ± --randomize-paths (causal price of the routing policy).
+
+**honest1asc launched (box, 30 workers): ascension 0-5 uniform mixture.** Warm start from
+honest1.pt.iter_155 — the last pre-anneal (entropy 0.05, lr 3e-5) checkpoint, per plan: keep
+exploration high for the new task distribution; fresh AdamW. No decay scheduled yet (anneal
+manually later, as with honest1). Level dealt by `seed % 6` (reproducible). Infrastructure
+(`7a63fb1`): ascension appended to the fixed observation (6→7, max 20) and treated as a
+zero-init categorical embedding — golden-checked bit-identical to the old net at A0, so the
+warm start preserves honest1's A0 policy exactly; old parquet (6-element fixed obs) still
+collates (→A0). Per-level win rates (win_rate_asc0..5) now in stats jsonl. Engine effects
+verified at A1 (act-1 elites 4.44→7.11 avg), A2+ (monster HP gates), A5 (75% post-boss heal),
+A6 boundary (90% start HP — outside our mixture). Search knobs remain the A0-tuned set.
+
 ## 2026-06-05
 
 **Engine throughput A/B on live honest1 (collect s/iter @ 256 games):** `c6b4d84` ~265s (win
