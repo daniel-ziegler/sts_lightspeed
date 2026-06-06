@@ -120,6 +120,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("pause_on_card_reward", &search::SearchAgent::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
         .def_readwrite("verbosity_level", &search::SearchAgent::verbosityLevel, "verbosity level: 0=quiet, 1=concise, 2=full")
         .def_readwrite("exploration_parameter", &search::SearchAgent::explorationParameter, "MCTS UCB exploration constant used per battle")
+        .def_readwrite("exploration_parameter_chance", &search::SearchAgent::explorationParameterChance, "MCTS UCB exploration constant for stochastic edges (chance-node children)")
         .def_readwrite("chance_widening_c", &search::SearchAgent::chanceWideningC, "double progressive widening C for chance nodes")
         .def_readwrite("chance_widening_alpha", &search::SearchAgent::chanceWideningAlpha, "double progressive widening alpha for chance nodes")
         .def_readwrite("boss_chance_widening_c", &search::SearchAgent::bossChanceWideningC, "double progressive widening C for chance nodes in boss fights")

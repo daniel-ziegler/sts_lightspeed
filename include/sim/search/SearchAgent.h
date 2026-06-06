@@ -54,6 +54,7 @@ namespace sts::search {
         // bracketed near 25). Widening from the coarse honest tune's top region; widening
         // sensitivity at deployment is much weaker than exploration's.
         double explorationParameter = 25.0;
+        double explorationParameterChance = 25.0;  // UCB constant for stochastic edges (chance-node children)
         double chanceWideningC = 3.7028;
         double chanceWideningAlpha = 0.52389;
         EvalWeights evalWeights;

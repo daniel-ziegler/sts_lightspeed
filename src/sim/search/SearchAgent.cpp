@@ -85,6 +85,7 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
     search::BattleSearcher searcher(bc);   // ctor's resetForSearch sets up root for the first iter
     const bool boss = isBossEncounter(bc.encounter);
     searcher.explorationParameter = explorationParameter;
+    searcher.explorationParameterChance = explorationParameterChance;
     searcher.chanceWideningC = boss ? bossChanceWideningC : chanceWideningC;
     searcher.chanceWideningAlpha = boss ? bossChanceWideningAlpha : chanceWideningAlpha;
     searcher.evalWeights = evalWeights;

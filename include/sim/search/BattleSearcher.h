@@ -96,7 +96,11 @@ namespace sts::search {
 
         EvalFnc evalFnc;
         EvalWeights evalWeights;
-        double explorationParameter = 9.9;   // tuned default
+        // UCB exploration constants, split by edge type: deterministic edges (child is a
+        // decision node) vs stochastic edges (child is a chance node, whose Q-estimate carries
+        // outcome variance on top of policy variance and may need a different exploration level).
+        double explorationParameter = 9.9;         // deterministic edges; tuned default
+        double explorationParameterChance = 9.9;   // stochastic (chance-node) edges
 
         // Double Progressive Widening for chance nodes: after n visits a chance node may
         // hold at most ceil(chanceWideningC * (n+1)^chanceWideningAlpha) distinct outcomes.

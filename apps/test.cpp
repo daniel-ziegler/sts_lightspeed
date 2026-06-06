@@ -14,6 +14,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <limits>
 
 #include "data_structure/fixed_list.h"
 #include "constants/Cards.h"
@@ -143,6 +144,8 @@ static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
 static double g_explorationParameter = 25.0;   // honest-engine tuned default (see SearchAgent.h)
+// NaN sentinel: follows g_explorationParameter unless explicitly set via explorationChance=.
+static double g_explorationParameterChance = std::numeric_limits<double>::quiet_NaN();
 static double g_chanceWideningC = 3.7028;
 static double g_chanceWideningAlpha = 0.52389;
 static double g_bossChanceWideningC = 3.7028;     // boss-specific widening; defaults = general
@@ -166,6 +169,8 @@ void agentMtRunner(AgentMtInfo *info) {
         search::SearchAgent agent;
         agent.simulationCountBase = g_simulationCount;
         agent.explorationParameter = g_explorationParameter;
+        agent.explorationParameterChance = std::isnan(g_explorationParameterChance)
+                ? g_explorationParameter : g_explorationParameterChance;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
         agent.bossChanceWideningC = g_bossChanceWideningC;
@@ -732,6 +737,8 @@ struct EvalStatesInfo {
     std::size_t next = 0;
 
     double explorationParameter = 9.9;   // tuned default
+    // NaN sentinel: follows explorationParameter unless explicitly set via explorationChance=.
+    double explorationParameterChance = std::numeric_limits<double>::quiet_NaN();
     double chanceWideningC = 4.6;         // tuned default
     double chanceWideningAlpha = 0.37;    // tuned default
     std::int64_t searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
@@ -762,6 +769,8 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         search::SearchAgent agent;
         agent.simulationCountBase = info->simBudget;
         agent.explorationParameter = info->explorationParameter;
+        agent.explorationParameterChance = std::isnan(info->explorationParameterChance)
+                ? info->explorationParameter : info->explorationParameterChance;
         agent.chanceWideningC = info->chanceWideningC;
         agent.chanceWideningAlpha = info->chanceWideningAlpha;
         // eval_states applies its widening args uniformly (incl. boss fights) so tuning on a
@@ -814,6 +823,7 @@ static int evalStates(int argc, const char *argv[]) {
         const std::string key = arg.substr(0, eq);
         const double val = std::stod(arg.substr(eq + 1));
         if (key == "exploration") info.explorationParameter = val;
+        else if (key == "explorationChance") info.explorationParameterChance = val;
         else if (key == "wideningC") info.chanceWideningC = val;
         else if (key == "wideningAlpha") info.chanceWideningAlpha = val;
         else if (key == "time") info.searchTimeMicros = static_cast<std::int64_t>(val);
@@ -886,6 +896,7 @@ static void applyGlobalParam(const std::string &arg) {
     const std::string key = arg.substr(0, eq);
     const double val = std::stod(arg.substr(eq + 1));
     if (key == "exploration") g_explorationParameter = val;
+    else if (key == "explorationChance") g_explorationParameterChance = val;
     else if (key == "wideningC") g_chanceWideningC = val;
     else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
     else if (key == "bossWideningC") g_bossChanceWideningC = val;
@@ -922,6 +933,8 @@ static void dumpBattleOutcomesRunner(DumpInfo *info) {
         search::SearchAgent agent;
         agent.simulationCountBase = info->simBudget;
         agent.explorationParameter = g_explorationParameter;
+        agent.explorationParameterChance = std::isnan(g_explorationParameterChance)
+                ? g_explorationParameter : g_explorationParameterChance;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
         agent.bossChanceWideningC = g_bossChanceWideningC;
