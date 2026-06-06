@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm.auto import tqdm
 
-from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo
+from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo, CHOICE_PATHS_OFFSET
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
@@ -175,6 +175,7 @@ class TrainConfig:
     mcts_boss_widening_c: Optional[float] = None      # None = engine's boss-gated default
     mcts_boss_widening_alpha: Optional[float] = None
     log_battle_outcomes: bool = False                 # attach per-battle snapshots to trajectories
+    randomize_path_choices: bool = False              # intervention eval: uniform-random path picks
     record_boss_states: bool = False                  # attach replayable pre-boss-battle action prefixes
     # Battle-search eval weights (None = engine's jointly-tuned defaults). Like the search knobs,
     # these are a coupled set -- override all of them together or none.
@@ -443,7 +444,15 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                         log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
                         probs = np.exp(log_probs)
 
-                        chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
+                        # Intervention eval: replace the policy with uniform-random on pure
+                        # path-choice screens (everything else stays policy-driven), to price
+                        # the routing policy's win-rate contribution.
+                        if (config.randomize_path_choices and choice.paths_offered
+                                and not (choice.cards_offered or choice.relics_offered
+                                         or choice.potions_offered or choice.fixed_actions)):
+                            chosen_idx = CHOICE_PATHS_OFFSET + rng.randrange(len(choice.paths_offered))
+                        else:
+                            chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
                         log_prob = log_probs[chosen_idx]
                         
                         # No perfected strike tracking needed
