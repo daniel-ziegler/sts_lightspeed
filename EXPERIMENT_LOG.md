@@ -27,6 +27,14 @@ seeds @1k sims (screen seeds 2,000,000+ disjoint from the headline set), (2) hea
 vs heroe2-270 paired on identical seeds (honest engine, McNemar), (3) routing intervention:
 champion ± --randomize-paths (causal price of the routing policy).
 
+**honest1asc dialed up to A15 @iter 40** (user call: "enough wins even on A5"). Resumed from
+the iter_40 checkpoint (optimizer included) with --max-ascension 15 → uniform 0-15 (seed % 16,
+~16 games/level/iter). 0-5 era summary (iters 1-40): mixture 0.395→0.33 dip→0.418; A0 held
+0.42-0.55 (≈ honest1's level at the fork), A4/A5 ~0.2-0.3. New mechanics now in
+distribution: A6 90% start HP, A7+ monster HP, A10 Ascender's Bane, A11 two potion slots,
+A12 fewer upgraded rewards, A13 less boss gold, A14 lower max HP, A15 hard event pool —
+all engine-side, pipeline smoke-tested at A15 (8/8 games clean; A10/A14 start states verified).
+
 **honest1asc launched (box, 30 workers): ascension 0-5 uniform mixture.** Warm start from
 honest1.pt.iter_155 — the last pre-anneal (entropy 0.05, lr 3e-5) checkpoint, per plan: keep
 exploration high for the new task distribution; fresh AdamW. No decay scheduled yet (anneal
