@@ -26,7 +26,9 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 (`38205a3`) regresses wall time ~30-40% on strong-policy deep-game collection despite its
 weak-policy telemetry showing +12%; the d1189ce alloc/sort round is genuinely fast. Flagged in
 COORD for re-gating on strong states. honest1 quality unaffected throughout (0.703 @ iter 251,
-new high; entropy 0.61, coef 0.013, lr 1.1e-5).
+new high; entropy 0.61, coef 0.013, lr 1.1e-5). UPDATE: MCTS session confirmed on iter_320 states
+and REVERTED uid-dedup upstream (`1a8d1b1`, merged as `a4caa5b`); box build dir rebuilt —
+search-identical to the deployed d1189ce, picked up at the next natural restart.
 
 **honest1: annealing engaged @155 (entropy 0.05→0.0025 + lr→0.1×, 200 iters each); engine
 upgraded to `51156d0` @190** (perf round + uid-blind transposition dedup, perm-reroot reverted
