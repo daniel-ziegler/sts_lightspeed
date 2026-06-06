@@ -32,10 +32,13 @@ import os
 #   ppo_ent10 PPO epochs=2, entropy_coef 0.10 ┐ entropy bracket
 #   ppo_ent25 PPO epochs=2, entropy_coef 0.25 ┘ (0.25 over-flattened; killed)
 #   honest1   honest-era from-scratch hero: honest CardPile engine, R5b encoding, dest-room aux
+#   honest1asc  ascension 0-5 uniform mixture, warm start honest1.pt.iter_155 (its headline
+#               win_rate is over the mixture -- NOT comparable to the A0-only runs; see the
+#               per-ascension figure below)
 stats_files = []
 for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl',
            'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl',
-           'honest1.pt.stats.jsonl'):
+           'honest1.pt.stats.jsonl', 'honest1asc.pt.stats.jsonl'):
     _fp = f'lambda_results/{_p}'
     if os.path.exists(_fp):
         stats_files.append(_fp)
@@ -45,7 +48,7 @@ colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', '
 # Per-group color overrides (takes precedence over the palette). Use to highlight headline runs.
 GROUP_COLORS = {'hero': 'black', 'heroe2': 'darkorange',
                 'ppo_hient': 'royalblue', 'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet',
-                'honest1': 'crimson'}
+                'honest1': 'crimson', 'honest1asc': 'darkgreen'}
 GROUP_LW = {k: 2.8 for k in GROUP_COLORS}   # all headline runs
 
 def load_run_data(filename):
@@ -89,6 +92,9 @@ def load_run_data(filename):
         'adv_norm_stds': np.array([d.get('adv_norm_std', np.nan) for d in data]),
         'num_experiences': np.array([d.get('num_experiences', np.nan) for d in data]),
         'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
+        # Per-ascension-level breakdown (present only for ascension-mixture runs).
+        **{f'win_rates_asc{a}': np.array([d.get(f'win_rate_asc{a}', np.nan) for d in data])
+           for a in range(6)},
     }
 
 # Load all runs
@@ -341,6 +347,41 @@ else:
     print("honest wall-time figure skipped (missing stats files)")
 
 # %%
+# honest1asc per-ascension win rates: one line per level + the bold mixture rate. honest1's
+# A0 curve is overlaid shifted by its fork point (honest1asc iter 1 continues honest1 iter 155),
+# so the crimson line shows what staying at A0 (with annealing) did from the same checkpoint --
+# the green A0 line holding near it means the mixture isn't costing A0 competence.
+ASC_RUN, ASC_FORK_ITER = 'honest1asc', 155
+_asc_run = next((r for r in runs if r['label'] == ASC_RUN), None)
+if _asc_run is not None:
+    fig, ax = plt.subplots(figsize=(13, 6))
+    asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 6))
+    for a in range(6):
+        y = _asc_run[f'win_rates_asc{a}']
+        if np.all(np.isnan(y)):
+            continue
+        ax.plot(_asc_run['iterations'], y, color=asc_colors[a], alpha=0.18, linewidth=1)
+        ax.plot(_asc_run['iterations'], _smooth(y), color=asc_colors[a], linewidth=1.8,
+                label=f'A{a} (~43 games/iter)')
+    ax.plot(_asc_run['iterations'], _smooth(_asc_run['win_rates']), color='darkgreen',
+            linewidth=3.0, label='mixture (256 games/iter)')
+    _h1 = next((r for r in runs if r['label'] == 'honest1'), None)
+    if _h1 is not None:
+        keep = _h1['iterations'] >= ASC_FORK_ITER
+        ax.plot(_h1['iterations'][keep] - ASC_FORK_ITER, _smooth(_h1['win_rates'][keep]),
+                color='crimson', linewidth=1.6, linestyle='--', alpha=0.8,
+                label='honest1 A0 from same fork (annealed)')
+    ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
+    ax.set_ylabel('Win rate')
+    ax.set_title('honest1asc: per-ascension win rates (uniform 0-5 mixture)')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc='best')
+    plt.tight_layout()
+    plt.show()
+else:
+    print("honest1asc per-ascension figure skipped (stats file missing)")
+
+# %%
 # Entropy phase plots: each run's training trajectory through (x, entropy) space as a faint
 # EMA-smoothed line, ending at a strong dot for its current/final state, for x = avg floor and
 # x = win rate.
@@ -352,8 +393,9 @@ else:
 # the data. PPO normalizes advantages by the (logged) adv_norm_std, so the effective per-return
 # coefficient is entropy_coef * adv_norm_std (times the decisions-per-trajectory factor applied
 # in the loop below). Runs with a decaying entropy_coef use the logged per-iteration value.
-ENTROPY_COEF = {'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25, 'honest1': 0.05}
-PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25', 'honest1'}  # adv / (logged) adv_norm_std
+ENTROPY_COEF = {'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25, 'honest1': 0.05,
+                'honest1asc': 0.05}
+PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25', 'honest1', 'honest1asc'}  # adv / (logged) adv_norm_std
 
 def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     """unit_scale: indifference slope is annotated per (unit_scale of x), e.g. 0.01 win rate."""
