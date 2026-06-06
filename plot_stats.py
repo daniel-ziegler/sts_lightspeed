@@ -94,7 +94,7 @@ def load_run_data(filename):
         'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
         # Per-ascension-level breakdown (present only for ascension-mixture runs).
         **{f'win_rates_asc{a}': np.array([d.get(f'win_rate_asc{a}', np.nan) for d in data])
-           for a in range(16)},
+           for a in range(21)},
     }
 
 # Load all runs
@@ -355,8 +355,8 @@ ASC_RUN, ASC_FORK_ITER = 'honest1asc', 155
 _asc_run = next((r for r in runs if r['label'] == ASC_RUN), None)
 if _asc_run is not None:
     fig, ax = plt.subplots(figsize=(13, 6))
-    asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 16))
-    for a in range(16):
+    asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 21))
+    for a in range(21):
         y = _asc_run[f'win_rates_asc{a}']
         if np.all(np.isnan(y)):
             continue
@@ -373,7 +373,7 @@ if _asc_run is not None:
                 label='honest1 A0 from same fork (annealed)')
     ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
     ax.set_ylabel('Win rate')
-    ax.set_title('honest1asc: per-ascension win rates (uniform mixture; 0-5 until the A15 dial-up)')
+    ax.set_title('honest1asc: per-ascension win rates (uniform mixture; dial-ups: A15 @40, A20 @~105)')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=3, loc='best')
     plt.tight_layout()
