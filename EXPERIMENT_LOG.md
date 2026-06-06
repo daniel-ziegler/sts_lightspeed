@@ -27,6 +27,15 @@ seeds @1k sims (screen seeds 2,000,000+ disjoint from the headline set), (2) hea
 vs heroe2-270 paired on identical seeds (honest engine, McNemar), (3) routing intervention:
 champion ± --randomize-paths (causal price of the routing policy).
 
+**honest1 final evals (local, 1k sims, honest engine).** Stage 1 screen (400 seeds @2,000,000+):
+435=440=0.823 > 455=0.805 > 430=0.798 > 400=0.795; 435/440 perfectly discordance-balanced
+(41/41) → champion = **iter_440**. Stage 2 headline (1000 held-out seeds @1,000,000+):
+**0.794 ± 0.013** — +17pp over the prior honest champion (heroe2-270 = 62.5%), and above the
+cheat-era champion's clairvoyant 0.768. Stage 3 routing intervention (same 1000 seeds,
+--randomize-paths): 0.696 vs 0.794 → **the learned routing policy is causally worth +9.8pp**
+(discordant 213 vs 115, McNemar z=5.41, p=6e-8). The R5b+aux map-representation program is
+validated end-to-end: encoding → SL learnability → RL routing weights → causal win-rate value.
+
 **honest1asc dialed up to A15 @iter 40** (user call: "enough wins even on A5"). Resumed from
 the iter_40 checkpoint (optimizer included) with --max-ascension 15 → uniform 0-15 (seed % 16,
 ~16 games/level/iter). 0-5 era summary (iters 1-40): mixture 0.395→0.33 dip→0.418; A0 held
