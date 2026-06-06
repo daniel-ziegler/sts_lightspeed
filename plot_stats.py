@@ -94,7 +94,7 @@ def load_run_data(filename):
         'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
         # Per-ascension-level breakdown (present only for ascension-mixture runs).
         **{f'win_rates_asc{a}': np.array([d.get(f'win_rate_asc{a}', np.nan) for d in data])
-           for a in range(6)},
+           for a in range(16)},
     }
 
 # Load all runs
@@ -355,14 +355,14 @@ ASC_RUN, ASC_FORK_ITER = 'honest1asc', 155
 _asc_run = next((r for r in runs if r['label'] == ASC_RUN), None)
 if _asc_run is not None:
     fig, ax = plt.subplots(figsize=(13, 6))
-    asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 6))
-    for a in range(6):
+    asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 16))
+    for a in range(16):
         y = _asc_run[f'win_rates_asc{a}']
         if np.all(np.isnan(y)):
             continue
-        ax.plot(_asc_run['iterations'], y, color=asc_colors[a], alpha=0.18, linewidth=1)
-        ax.plot(_asc_run['iterations'], _smooth(y), color=asc_colors[a], linewidth=1.8,
-                label=f'A{a} (~43 games/iter)')
+        ax.plot(_asc_run['iterations'], y, color=asc_colors[a], alpha=0.15, linewidth=0.8)
+        ax.plot(_asc_run['iterations'], _smooth(y), color=asc_colors[a], linewidth=1.6,
+                label=f'A{a}')
     ax.plot(_asc_run['iterations'], _smooth(_asc_run['win_rates']), color='darkgreen',
             linewidth=3.0, label='mixture (256 games/iter)')
     _h1 = next((r for r in runs if r['label'] == 'honest1'), None)
@@ -373,9 +373,9 @@ if _asc_run is not None:
                 label='honest1 A0 from same fork (annealed)')
     ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
     ax.set_ylabel('Win rate')
-    ax.set_title('honest1asc: per-ascension win rates (uniform 0-5 mixture)')
+    ax.set_title('honest1asc: per-ascension win rates (uniform mixture; 0-5 until the A15 dial-up)')
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, loc='best')
+    ax.legend(fontsize=7, ncol=3, loc='best')
     plt.tight_layout()
     plt.show()
 else:
