@@ -19,9 +19,6 @@
 
 namespace sts::search {
 
-    // uid-relabeling-blind state equality (transposition dedup only; see BattleSearcher.cpp)
-    bool dedupEqualUidBlind(const BattleContext &a, const BattleContext &b);
-
     typedef std::function<double (const BattleContext&)> EvalFnc;
 
     // Tunable weights for evaluateEndState (the value backed up by the search).
@@ -48,14 +45,11 @@ namespace sts::search {
         std::int64_t chanceTranspositions = 0;   // sampled outcome dedup-hit a non-sibling node
         std::int64_t depthSum = 0;               // in-tree path length at each simulation's end
         std::int64_t chanceDepthSum = 0;         // chance nodes on the path at each simulation's end
-        std::int64_t hashMatchUnequal = 0;       // dedup probes where the hash matched but equality failed
-        std::int64_t uidBlindMerges = 0;         // dedup hits via uid-relabeling-blind equality
         void add(const SearchStats &o) {
             steps += o.steps; nodesCreated += o.nodesCreated; detTranspositions += o.detTranspositions;
             chanceOutcomesSampled += o.chanceOutcomesSampled; chanceSiblingReuse += o.chanceSiblingReuse;
             chanceTranspositions += o.chanceTranspositions;
             depthSum += o.depthSum; chanceDepthSum += o.chanceDepthSum;
-            hashMatchUnequal += o.hashMatchUnequal; uidBlindMerges += o.uidBlindMerges;
         }
     };
 
