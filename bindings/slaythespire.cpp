@@ -443,6 +443,7 @@ PYBIND11_MODULE(slaythespire, m) {
     gameContext
         .def_readwrite("act", &GameContext::act)
         .def_readwrite("floor_num", &GameContext::floorNum)
+        .def_readwrite("ascension", &GameContext::ascension)
 
         .def_readwrite("seed", &GameContext::seed)
         .def_readwrite("map", &GameContext::map)

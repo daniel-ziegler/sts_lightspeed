@@ -121,6 +121,11 @@ class TrainConfig:
     sampling_temperature: float = 1.0  # action-sampling softmax temperature during collection
 
     # Environment settings
+    # Games are dealt ascensions 0..max_ascension uniformly (derived from the game seed, so
+    # the same seed always plays the same level and resumes/evals are reproducible).
+    # fixed_ascension pins every game to one level instead (per-level evals).
+    max_ascension: int = 0
+    fixed_ascension: Optional[int] = None
     num_games_per_step: int = 256
     num_epochs: int = 4
     num_workers: int = 40
@@ -258,6 +263,7 @@ class Trajectory(NamedTuple):
     final_relics: List[sts.RelicId]  # Final relics
     battle_log: list = []  # per-battle BattleSnapshots (when config.log_battle_outcomes)
     boss_state_records: list = []  # (floor, prefix_bits) per boss battle (when config.record_boss_states)
+    ascension: int = 0
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -337,7 +343,9 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
     _log_steps = os.environ.get('PPO_LOG_STEPS') == '1'
     if _log_seeds:
         print(f"  >>> start seed {seed}", flush=True)
-    gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
+    ascension = (config.fixed_ascension if config.fixed_ascension is not None
+                 else seed % (config.max_ascension + 1))
+    gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, ascension)
     rng = random.Random(sample_seed)
     
     agent = sts.Agent()
@@ -565,6 +573,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_relics=list(gc.relics),
         battle_log=list(agent.battle_log) if config.log_battle_outcomes else [],
         boss_state_records=_boss_records,
+        ascension=ascension,
     )
 
 
@@ -1287,9 +1296,20 @@ def main():
             win_rate = sum(1 for t in trajectories if t.final_reward >= 1.0) / len(trajectories)
             avg_floor = sum(t.final_metrics.floor_num for t in trajectories) / len(trajectories)
             avg_reward = sum(t.final_reward for t in trajectories) / len(trajectories)
-            
+
             print(f"Collected {len(trajectories)} trajectories in {collect_time:.1f}s")
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
+            # Per-ascension-level breakdown when training on a mixture.
+            asc_stats = {}
+            if config.max_ascension > 0:
+                for a in range(config.max_ascension + 1):
+                    ts = [t for t in trajectories if t.ascension == a]
+                    if ts:
+                        asc_stats[f'win_rate_asc{a}'] = sum(1 for t in ts if t.final_reward >= 1.0) / len(ts)
+                        asc_stats[f'num_games_asc{a}'] = len(ts)
+                print("Per-ascension win rates: " + ", ".join(
+                    f"A{a}={asc_stats[f'win_rate_asc{a}']:.3f}(n={asc_stats[f'num_games_asc{a}']})"
+                    for a in range(config.max_ascension + 1) if f'win_rate_asc{a}' in asc_stats))
             
             # Prepare training data (with debug output for first trajectory)
             experiences, advantages, returns, ep_meta = algo.compute_advantages(trajectories, config, adv_norm, debug_traj=True)
@@ -1361,6 +1381,7 @@ def main():
                 # Actual learning rates used this iteration (post-decay).
                 'policy_lr': config.policy_lr * lrf,
                 'value_lr': config.value_lr * lrf,
+                **asc_stats,
             }
             
             # Write stats to JSONL file based on save path

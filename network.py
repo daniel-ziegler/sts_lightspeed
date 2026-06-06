@@ -335,10 +335,12 @@ class IsReachable(IntEnum):
 # sum drown the other components (measured: unscaled aggregates cost ~40pp on unrelated tasks).
 MAP_AGG_CAP = 15
 
-# Boss id is categorical; the remaining fixed-observation scalars stay sinusoidal.
+# Boss id and ascension are categorical; the remaining fixed-observation scalars stay sinusoidal.
 _FIXED_OBS_MAXES = list(sts.getFixedObservationMaximums())
 _BOSS_OBS_IDX = 4
-_FIXED_OBS_SCALAR_MAXES = [m for i, m in enumerate(_FIXED_OBS_MAXES) if i != _BOSS_OBS_IDX]
+_ASC_OBS_IDX = 6
+_FIXED_OBS_SCALAR_MAXES = [m for i, m in enumerate(_FIXED_OBS_MAXES)
+                           if i not in (_BOSS_OBS_IDX, _ASC_OBS_IDX)]
 
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(card_space, upgrade_space)),
@@ -347,6 +349,9 @@ obs_space = DictSpace({
     'fixed_obs': ScalarToSequenceSpace(DictAddSpace({
         'fixed_observation': FixedVecSpace(_FIXED_OBS_SCALAR_MAXES),
         'boss': IntSpace(10),
+        # Zero-init: nets warm-started from pre-ascension checkpoints behave identically
+        # until the embedding trains away from zero.
+        'ascension': IntSpace(21, zero_init=True),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
     # Per-node map features. Beyond the raw structure (room/pos/edges), nodes carry
@@ -772,6 +777,7 @@ def collate_fn(batch):
         'fixed_obs': {
             'fixed_observation': torch.zeros((len(batch), len(_FIXED_OBS_SCALAR_MAXES)), dtype=torch.int32),
             'boss': torch.zeros((len(batch),), dtype=torch.int32),
+            'ascension': torch.zeros((len(batch),), dtype=torch.int32),
             'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
         },
         'map_nodes': {
@@ -845,11 +851,14 @@ def collate_fn(batch):
         batch_obs['potions']['value'][i, :potions_len] = torch.tensor(potions, dtype=torch.int32)
         batch_obs['potions']['mask'][i, :potions_len] = torch.zeros(potions_len, dtype=torch.bool)
         
-        # Set fixed observation components (boss id split out as a categorical)
+        # Set fixed observation components (boss id and ascension split out as categoricals).
+        # Records written before the ascension input have 6 entries -> ascension 0.
         fo = list(x['obs.fixed_observation'])
+        ascension = fo.pop(_ASC_OBS_IDX) if len(fo) > _ASC_OBS_IDX else 0
         boss = fo.pop(_BOSS_OBS_IDX)
         batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(fo, dtype=torch.int32)
         batch_obs['fixed_obs']['boss'][i] = int(boss)
+        batch_obs['fixed_obs']['ascension'][i] = int(ascension)
         batch_obs['fixed_obs']['screen_state'][i] = x['screen_state']
         
         # Set map observation components

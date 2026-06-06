@@ -41,6 +41,7 @@ namespace sts::py {
         ret[offset++] = gc.floorNum;
         ret[offset++] = getBossEncoding(gc.boss);
         ret[offset++] = gc.info.toSelectCount;
+        ret[offset++] = gc.ascension;
 
         return to_numpy(ret);
     }
@@ -55,6 +56,7 @@ namespace sts::py {
         ret[offset++] = getMaxFloor();
         ret[offset++] = numBosses;
         ret[offset++] = Deck::MAX_SIZE; // max cards to select
+        ret[offset++] = 20; // max ascension level
 
         return to_numpy(ret);
     }
