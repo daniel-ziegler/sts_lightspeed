@@ -57,7 +57,9 @@ pybind11::dict py::NNMapRepresentation::as_dict() const {
     return pybind11::dict("xs"_a=xs,
                           "ys"_a=ys,
                           "roomTypes"_a=roomTypes,
-                          "pathXs"_a=pathXs);
+                          "pathXs"_a=pathXs,
+                          "burningEliteX"_a=burningEliteX,
+                          "burningEliteY"_a=burningEliteY);
 }
 
 pybind11::dict py::NNRepresentation::as_dict() const {
@@ -444,6 +446,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("act", &GameContext::act)
         .def_readwrite("floor_num", &GameContext::floorNum)
         .def_readwrite("ascension", &GameContext::ascension)
+        .def_readwrite("skip_battles", &GameContext::skipBattles)
 
         .def_readwrite("seed", &GameContext::seed)
         .def_readwrite("map", &GameContext::map)

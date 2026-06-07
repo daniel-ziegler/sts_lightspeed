@@ -305,6 +305,13 @@ class FixedAction(IntEnum):
     OMINOUS_FORGE_LOSE_HP = auto()
     OMINOUS_FORGE_LEAVE = auto()
 
+    # Combat/chest reward: take the sapphire or emerald key (RewardsActionType.KEY).
+    # Appended last so older checkpoints' FixedAction embeddings load unchanged.
+    TAKE_KEY = auto()
+
+    # Treasure room: open or skip the chest (skip is FixedAction.SKIP).
+    OPEN_CHEST = auto()
+
 
 class EventFixedInfo(IntEnum):
     NONE = 0
@@ -335,12 +342,14 @@ class IsReachable(IntEnum):
 # sum drown the other components (measured: unscaled aggregates cost ~40pp on unrelated tasks).
 MAP_AGG_CAP = 15
 
-# Boss id and ascension are categorical; the remaining fixed-observation scalars stay sinusoidal.
+# Boss id, ascension, and the act-4 key flags are categorical; the remaining
+# fixed-observation scalars stay sinusoidal.
 _FIXED_OBS_MAXES = list(sts.getFixedObservationMaximums())
 _BOSS_OBS_IDX = 4
 _ASC_OBS_IDX = 6
+_KEY_OBS_IDXS = (7, 8, 9)  # ruby, emerald, sapphire
 _FIXED_OBS_SCALAR_MAXES = [m for i, m in enumerate(_FIXED_OBS_MAXES)
-                           if i not in (_BOSS_OBS_IDX, _ASC_OBS_IDX)]
+                           if i not in (_BOSS_OBS_IDX, _ASC_OBS_IDX) + _KEY_OBS_IDXS]
 
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(card_space, upgrade_space)),
@@ -352,6 +361,9 @@ obs_space = DictSpace({
         # Zero-init: nets warm-started from pre-ascension checkpoints behave identically
         # until the embedding trains away from zero.
         'ascension': IntSpace(21, zero_init=True),
+        'key_ruby': IntSpace(2, zero_init=True),
+        'key_emerald': IntSpace(2, zero_init=True),
+        'key_sapphire': IntSpace(2, zero_init=True),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
     # Per-node map features. Beyond the raw structure (room/pos/edges), nodes carry
@@ -366,6 +378,7 @@ obs_space = DictSpace({
         'rel': FixedVecSpace([15, 31]),       # (dx, dy) from current position
         'reachable': EnumSpace(IsReachable),
         'agg': FixedVecSpace([2, 2, 2]),      # (min_elites, max_elites, dist_rest) / MAP_AGG_CAP
+        'burning': IntSpace(2, zero_init=True),  # burning elite here (emerald key fight)
     })),
 })
 
@@ -778,6 +791,9 @@ def collate_fn(batch):
             'fixed_observation': torch.zeros((len(batch), len(_FIXED_OBS_SCALAR_MAXES)), dtype=torch.int32),
             'boss': torch.zeros((len(batch),), dtype=torch.int32),
             'ascension': torch.zeros((len(batch),), dtype=torch.int32),
+            'key_ruby': torch.zeros((len(batch),), dtype=torch.int32),
+            'key_emerald': torch.zeros((len(batch),), dtype=torch.int32),
+            'key_sapphire': torch.zeros((len(batch),), dtype=torch.int32),
             'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
         },
         'map_nodes': {
@@ -789,6 +805,7 @@ def collate_fn(batch):
                 'rel': torch.full((len(batch), MAX_MAP_NODES, 2), 0, dtype=torch.int32),  # (dx, dy) from current
                 'reachable': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
                 'agg': torch.zeros((len(batch), MAX_MAP_NODES, 3), dtype=torch.float32),  # scaled DAG aggregates
+                'burning': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
             },
             'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
         },
@@ -851,14 +868,19 @@ def collate_fn(batch):
         batch_obs['potions']['value'][i, :potions_len] = torch.tensor(potions, dtype=torch.int32)
         batch_obs['potions']['mask'][i, :potions_len] = torch.zeros(potions_len, dtype=torch.bool)
         
-        # Set fixed observation components (boss id and ascension split out as categoricals).
-        # Records written before the ascension input have 6 entries -> ascension 0.
+        # Set fixed observation components (boss/ascension/key flags split out as
+        # categoricals). Records from before an input existed default to 0 (6-entry
+        # records predate ascension; 7-entry records predate the act-4 key flags).
         fo = list(x['obs.fixed_observation'])
+        keys = [fo.pop(j) for j in reversed(_KEY_OBS_IDXS)][::-1] if len(fo) > _KEY_OBS_IDXS[-1] else [0, 0, 0]
         ascension = fo.pop(_ASC_OBS_IDX) if len(fo) > _ASC_OBS_IDX else 0
         boss = fo.pop(_BOSS_OBS_IDX)
         batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(fo, dtype=torch.int32)
         batch_obs['fixed_obs']['boss'][i] = int(boss)
         batch_obs['fixed_obs']['ascension'][i] = int(ascension)
+        batch_obs['fixed_obs']['key_ruby'][i] = int(keys[0])
+        batch_obs['fixed_obs']['key_emerald'][i] = int(keys[1])
+        batch_obs['fixed_obs']['key_sapphire'][i] = int(keys[2])
         batch_obs['fixed_obs']['screen_state'][i] = x['screen_state']
         
         # Set map observation components
@@ -873,6 +895,9 @@ def collate_fn(batch):
         
         # Create node data: raw structure + ego-relative coords, reachability, DAG aggregates
         minE, maxE, dR, reach, dest_rooms = map_dag_features(x)
+        # Burning-elite flag (emerald key). Records from before the field default to no flag.
+        burn_x = int(x.get('obs.map.burningEliteX', -1))
+        burn_y = int(x.get('obs.map.burningEliteY', -1))
         for j in range(nodes_len):
             is_current = 1 if (map_xs[j] == map_x_pos and map_ys[j] == map_y_pos) else 0
             batch_obs['map_nodes']['value']['room'][i, j] = torch.tensor(int(map_room_types[j]), dtype=torch.int32)
@@ -884,6 +909,8 @@ def collate_fn(batch):
             batch_obs['map_nodes']['value']['reachable'][i, j] = 1 if reach[j] else 0
             batch_obs['map_nodes']['value']['agg'][i, j] = torch.tensor(
                 [minE[j] / MAP_AGG_CAP, maxE[j] / MAP_AGG_CAP, dR[j] / MAP_AGG_CAP], dtype=torch.float32)
+            if burn_x >= 0 and map_xs[j] == burn_x and map_ys[j] == burn_y:
+                batch_obs['map_nodes']['value']['burning'][i, j] = 1
         batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
         
         # Build choices data inline

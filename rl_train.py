@@ -205,6 +205,7 @@ class TrainConfig:
     shaping_upg_coef: float = 0.0
     shaping_relic_coef: float = 0.0   # per relic held
     shaping_maxhp_coef: float = 0.0   # per max-HP point
+    shaping_key_coef: float = 0.0     # per act-4 key held (heart runs)
     shaping_offset: float = 0.0
 
     # Per-battle MCTS wall-clock budget (seconds). Sized for the default 1000 sims; raise it
@@ -236,6 +237,8 @@ class GameMetrics:
     num_upgraded: int  # count of upgraded cards in deck (for reward shaping)
     num_relics: int    # count of relics held (for reward shaping)
     outcome: sts.GameOutcome
+    act: int = 1       # current act; distinguishes a heart win (act 4) from an act-3-only win
+    num_keys: int = 0  # act-4 keys held (ruby + emerald + sapphire), for reward shaping
     # MonsterEncounter id of the most recent battle (INVALID=0 before the first one). In episode
     # dumps this enables per-encounter battle-outcome stats: the HP change across the rows where
     # the id flips measures what each fight cost.
@@ -283,6 +286,18 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
+def compute_heart_reward(metrics: GameMetrics) -> float:
+    """Heart-run reward: floor progress (uncapped to floor 57 -> 0.5) plus a split victory
+    bonus -- +0.25 for an act-3-only win (no keys), +0.5 for killing the Heart (act 4).
+    Only a heart kill reaches a total of ~1.0."""
+    floor_reward = metrics.floor_num / 114.0
+    if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
+        victory_bonus = 0.5 if metrics.act >= 4 else 0.25
+    else:
+        victory_bonus = 0.0
+    return floor_reward + victory_bonus
+
+
 def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     """Compute reward that penalizes Perfected Strikes (negative of count)."""
     return -float(metrics.perfected_strike_count)
@@ -297,6 +312,7 @@ def compute_shaped_rewards(
     offset: float,
     relic_coef: float = 0.0,
     maxhp_coef: float = 0.0,
+    key_coef: float = 0.0,
 ) -> Tuple[List[float], float]:
     """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
 
@@ -318,7 +334,8 @@ def compute_shaped_rewards(
     def _shape(m: GameMetrics) -> float:
         hp_frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
         return (hp_coef * hp_frac + upg_coef * m.num_upgraded
-                + relic_coef * m.num_relics + maxhp_coef * m.max_hp - offset)
+                + relic_coef * m.num_relics + maxhp_coef * m.max_hp
+                + key_coef * m.num_keys - offset)
 
     shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
     total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
@@ -482,6 +499,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                             num_upgraded=sum(1 for card in gc.deck if card.upgraded),
                             num_relics=len(gc.relics),
                             outcome=gc.outcome,
+                            act=gc.act,
+                            num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
                             encounter=int(gc.encounter),
                         )
 
@@ -546,6 +565,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         num_upgraded=sum(1 for card in gc.deck if card.upgraded),
         num_relics=len(gc.relics),
         outcome=gc.outcome,
+        act=gc.act,
+        num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
         encounter=int(gc.encounter),
     )
     
@@ -554,6 +575,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         [e.metrics for e in experiences], final_metrics, reward_fn,
         config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
         relic_coef=config.shaping_relic_coef, maxhp_coef=config.shaping_maxhp_coef,
+        key_coef=config.shaping_key_coef,
     )
     
     # Add terminal state value (0.0) for GAE bootstrap
@@ -1013,8 +1035,8 @@ def main():
     parser.add_argument('--save-path', type=str, default='ppo_model.pt',
                         help='Path to save trained model')
     parser.add_argument('--reward-function', type=str, default='smooth',
-                        choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes'],
-                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
+                        choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes', 'heart'],
+                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count), heart (floor/114 + 0.25 act-3 win / 0.5 heart win) (default: smooth)')
     parser.add_argument('--torch-compile', type=str, default='default',
                         help='Torch compile mode: "default", "max-autotune", "reduce-overhead", or "no" to disable')
     parser.add_argument('--save-episodes', action='store_true',
@@ -1136,6 +1158,8 @@ def main():
         reward_fn = compute_victory_reward
     elif args.reward_function == 'no_pstrikes':
         reward_fn = compute_no_pstrikes_reward
+    elif args.reward_function == 'heart':
+        reward_fn = compute_heart_reward
     else:
         raise ValueError(f"Unknown reward function: {args.reward_function}")
     
@@ -1293,20 +1317,37 @@ def main():
                 print("No trajectories collected, skipping iteration")
                 continue
             
-            # Compute statistics
-            win_rate = sum(1 for t in trajectories if t.final_reward >= 1.0) / len(trajectories)
+            # Compute statistics. A "win" is any PLAYER_VICTORY (for heart runs that includes
+            # act-3-only wins; heart_win_rate below isolates full heart kills).
+            def _won(t):
+                return t.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY
+            win_rate = sum(1 for t in trajectories if _won(t)) / len(trajectories)
             avg_floor = sum(t.final_metrics.floor_num for t in trajectories) / len(trajectories)
             avg_reward = sum(t.final_reward for t in trajectories) / len(trajectories)
 
             print(f"Collected {len(trajectories)} trajectories in {collect_time:.1f}s")
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
+            # Heart-run breakdown: full heart kills vs act-3-only wins, plus key acquisition.
+            heart_stats = {}
+            if args.reward_function == 'heart':
+                heart_stats['heart_win_rate'] = sum(
+                    1 for t in trajectories if _won(t) and t.final_metrics.act >= 4) / len(trajectories)
+                heart_stats['act3_win_rate'] = sum(
+                    1 for t in trajectories if _won(t) and t.final_metrics.act < 4) / len(trajectories)
+                heart_stats['avg_keys'] = sum(t.final_metrics.num_keys for t in trajectories) / len(trajectories)
+                heart_stats['act4_reach_rate'] = sum(
+                    1 for t in trajectories if t.final_metrics.act >= 4) / len(trajectories)
+                print(f"Heart: {heart_stats['heart_win_rate']:.3f} heart wins, "
+                      f"{heart_stats['act3_win_rate']:.3f} act3-only wins, "
+                      f"{heart_stats['act4_reach_rate']:.3f} reached act4, "
+                      f"avg keys {heart_stats['avg_keys']:.2f}")
             # Per-ascension-level breakdown when training on a mixture.
             asc_stats = {}
             if config.max_ascension > 0:
                 for a in range(config.max_ascension + 1):
                     ts = [t for t in trajectories if t.ascension == a]
                     if ts:
-                        asc_stats[f'win_rate_asc{a}'] = sum(1 for t in ts if t.final_reward >= 1.0) / len(ts)
+                        asc_stats[f'win_rate_asc{a}'] = sum(1 for t in ts if _won(t)) / len(ts)
                         asc_stats[f'num_games_asc{a}'] = len(ts)
                 print("Per-ascension win rates: " + ", ".join(
                     f"A{a}={asc_stats[f'win_rate_asc{a}']:.3f}(n={asc_stats[f'num_games_asc{a}']})"
@@ -1382,6 +1423,7 @@ def main():
                 # Actual learning rates used this iteration (post-decay).
                 'policy_lr': config.policy_lr * lrf,
                 'value_lr': config.value_lr * lrf,
+                **heart_stats,
                 **asc_stats,
             }
             

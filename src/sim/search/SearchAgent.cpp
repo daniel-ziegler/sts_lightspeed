@@ -253,11 +253,12 @@ GameAction search::SearchAgent::pickOutOfCombatAction(const GameContext &gc) {
             return pickRewardsAction(gc);
 
         case ScreenState::TREASURE_ROOM: {
+            // idx1 0 = open chest, 1 = skip
             bool takeChest = true;
             if (gc.relics.has(RelicId::CURSED_KEY)) {
                 takeChest = gc.info.chestSize == ChestSize::LARGE;
             }
-            return GameAction(takeChest);
+            return GameAction(takeChest ? 0 : 1);
         }
 
         case ScreenState::SHOP_ROOM: {

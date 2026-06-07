@@ -42,6 +42,9 @@ namespace sts::py {
         ret[offset++] = getBossEncoding(gc.boss);
         ret[offset++] = gc.info.toSelectCount;
         ret[offset++] = gc.ascension;
+        ret[offset++] = gc.redKey ? 1 : 0;    // ruby (rest-site Recall)
+        ret[offset++] = gc.greenKey ? 1 : 0;  // emerald (burning elite)
+        ret[offset++] = gc.blueKey ? 1 : 0;   // sapphire (chest)
 
         return to_numpy(ret);
     }
@@ -57,6 +60,9 @@ namespace sts::py {
         ret[offset++] = numBosses;
         ret[offset++] = Deck::MAX_SIZE; // max cards to select
         ret[offset++] = 20; // max ascension level
+        ret[offset++] = 1;  // ruby key
+        ret[offset++] = 1;  // emerald key
+        ret[offset++] = 1;  // sapphire key
 
         return to_numpy(ret);
     }
@@ -260,7 +266,9 @@ namespace sts::py {
             .xs = to_numpy(xs),
             .ys = to_numpy(ys),
             .roomTypes = to_numpy(roomTypes),
-            .pathXs = pathXsArray
+            .pathXs = pathXsArray,
+            .burningEliteX = map.burningEliteX,
+            .burningEliteY = map.burningEliteY
         };
     }
 
