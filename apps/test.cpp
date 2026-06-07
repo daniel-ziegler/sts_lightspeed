@@ -766,6 +766,10 @@ struct EvalStatesInfo {
     int winCount = 0;
     double hpSum = 0;
     int n = 0;
+    // battle-end detail metrics (victims of the objective's blind spots)
+    std::int64_t goldLostSum = 0;   // gold escaped with thieves
+    int parasiteCount = 0;          // battles ending with a pending Parasite implant
+    std::int64_t maxHpGainSum = 0;  // max HP delta vs battle start
 };
 
 static void evalStatesRunner(EvalStatesInfo *info) {
@@ -782,6 +786,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         GameContext gc = loadPreBattleState((*info->records)[idx]);
         BattleContext bc;
         bc.init(gc);
+        const int startMaxHp = bc.player.maxHp;
 
         search::SearchAgent agent;
         agent.simulationCountBase = info->simBudget;
@@ -810,9 +815,25 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         // what the player actually carries forward.
         const double score = dead ? -200.0 : (bc.postBattleHealedHp() + 10.0 * bc.potionCount);
 
+        std::int64_t goldLost = 0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const auto &m = bc.monsters.arr[i];
+            const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
+            const bool escaped = m.curHp > 0 && (m.moveHistory[0] == MonsterMoveId::LOOTER_ESCAPE ||
+                                                 m.moveHistory[0] == MonsterMoveId::MUGGER_ESCAPE);
+            if (thief && escaped) goldLost += m.miscInfo;
+        }
+        const bool pendingParasite = bc.monsters.arr[0].id == MonsterId::WRITHING_MASS
+                && bc.monsters.arr[0].miscInfo
+                && (!bc.player.hasRelic<RelicId::OMAMORI>()
+                    || gc.relics.getRelicValue(RelicId::OMAMORI) == 0);
+
         {
             std::scoped_lock lock(info->m);
             info->stats.add(agent.searchStats);
+            info->goldLostSum += goldLost;
+            info->parasiteCount += pendingParasite ? 1 : 0;
+            info->maxHpGainSum += bc.player.maxHp - startMaxHp;
             info->scoreSum += score;
             if (!dead) {
                 ++info->winCount;
@@ -883,6 +904,9 @@ static int evalStates(int argc, const char *argv[]) {
     const double winRate = info.n > 0 ? static_cast<double>(info.winCount) / info.n : 0.0;
     const double avgHp = info.winCount > 0 ? info.hpSum / info.winCount : 0.0;
     std::cout << "SCORE " << meanScore << ' ' << winRate << ' ' << avgHp << ' ' << info.n << std::endl;
+    std::cout << "DETAIL goldLost=" << (info.n ? (double)info.goldLostSum / info.n : 0)
+              << " parasiteRate=" << (info.n ? (double)info.parasiteCount / info.n : 0)
+              << " maxHpGain=" << (info.n ? (double)info.maxHpGainSum / info.n : 0) << '\n';
     const auto &st = info.stats;
     std::cout << "STATS steps=" << st.steps
               << " nodesCreated=" << st.nodesCreated
