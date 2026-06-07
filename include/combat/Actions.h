@@ -62,7 +62,7 @@ namespace sts {
     X(MakeTempCardInHand, CardInstance,card, int,amount) \
     X(MakeTempCardInDrawPile, CardInstance,c, int,amount, bool,shuffleInto) \
     X(MakeTempCardInDiscard, CardInstance,c, int,amount) \
-    X(DiscardNoTriggerCard) \
+    X(DiscardNoTriggerCard, CardInstance,card) \
     X(ClearCardQueue) \
     X(DiscardAtEndOfTurn) \
     X(DiscardAtEndOfTurnHelper) \

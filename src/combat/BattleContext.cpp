@@ -968,7 +968,7 @@ void BattleContext::useNoTriggerCard() {
     }
 
     cards.removeFromHandById(c.uniqueId);
-    addToBot(Actions::DiscardNoTriggerCard()); // todo what if havoc plays one of these
+    addToBot(Actions::DiscardNoTriggerCard(c));
 }
 
 void BattleContext::useAttackCard() {
