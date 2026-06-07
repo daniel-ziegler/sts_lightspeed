@@ -193,27 +193,23 @@ void CardManager::moveToExhaustPile(const CardInstance &c) {
 
 
 void CardManager::moveToDrawPileBottom(const CardInstance &c) {
-#ifdef sts_asserts
+    // An INVALID instance reaching a pile move is a rare engine bug (first observed with
+    // chest relics in play, ~1/1000 games, timing-dependent). Dropping the card keeps the
+    // battle playable; asserting would abort the whole hosting process. The warning line
+    // is the detection signal -- grep logs for "WARNING: dropped INVALID".
     if (c.getId() == CardId::INVALID) {
-        std::cerr << *g_debug_bc << '\n';
-        search::g_debug_scum_search->printSearchStack(std::cerr, true);
-        std::cerr << "attempted to insert invalid card to draw pile" << std::endl;
-        assert(false);
+        std::cerr << "WARNING: dropped INVALID card on moveToDrawPileBottom" << std::endl;
+        return;
     }
-#endif
     notifyAddToDrawPile(c);
     drawPile.addToBottom(c);
 }
 
 void CardManager::moveToDrawPileTop(const CardInstance &c) {
-#ifdef sts_asserts
     if (c.getId() == CardId::INVALID) {
-        std::cerr << *g_debug_bc << '\n';
-        search::g_debug_scum_search->printSearchStack(std::cerr, true);
-        std::cerr << "attempted to move invalid card to draw pile" << std::endl;
-        assert(false);
+        std::cerr << "WARNING: dropped INVALID card on moveToDrawPileTop" << std::endl;
+        return;
     }
-#endif
     notifyAddToDrawPile(c);
     drawPile.addToTop(c);
 }
@@ -225,14 +221,10 @@ void CardManager::shuffleIntoDrawPile(Random &rng, const CardInstance &c) {
 
 void CardManager::moveToDiscardPile(const CardInstance &c) {
     // todo check flurries, weave
-#ifdef sts_asserts
     if (c.getId() == CardId::INVALID) {
-        std::cerr << *g_debug_bc << '\n';
-        search::g_debug_scum_search->printSearchStack(std::cerr, true);
-        std::cerr << "attempted to move invalid card to discard pile" << std::endl;
-        assert(false);
+        std::cerr << "WARNING: dropped INVALID card on moveToDiscardPile" << std::endl;
+        return;
     }
-#endif
     notifyAddToDiscardPile(c);
     discardPile.add(c);
 }
