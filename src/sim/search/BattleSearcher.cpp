@@ -854,7 +854,36 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
         // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
         // search doesn't value preserving HP that the game is about to restore anyway.
-        return evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        if (evalWeights.goldLossWeight != 0 && bc.requiresStolenGoldCheck()) {
+            // Gold held by an escaped thief is permanently lost; kills refund it at exitBattle,
+            // so only the escaped case is penalized (steal-then-kill nets the same as no steal).
+            for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                const auto &m = bc.monsters.arr[i];
+                const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
+                const bool escaped = m.curHp > 0 && (m.moveHistory[0] == MonsterMoveId::LOOTER_ESCAPE ||
+                                                     m.moveHistory[0] == MonsterMoveId::MUGGER_ESCAPE);
+                if (thief && escaped) {
+                    score -= evalWeights.goldLossWeight * m.miscInfo;
+                }
+            }
+        }
+        if (evalWeights.maxHpWeight != 0) {
+            // Max HP gained during the battle (Feed, Darkstone Periapt); baselined at the search
+            // root so the term is a pure delta and cannot distort the victory/loss tradeoff.
+            score += evalWeights.maxHpWeight * (bc.player.maxHp - rootState->player.maxHp);
+        }
+        if (evalWeights.parasitePenalty != 0) {
+            // Mirrors exitBattle: an implanted Writhing Mass adds a Parasite to the deck unless
+            // a charged Omamori absorbs it.
+            const auto &wm = bc.monsters.arr[0];
+            if (wm.id == MonsterId::WRITHING_MASS && wm.miscInfo
+                && (!bc.player.hasRelic<RelicId::OMAMORI>()
+                    || bc.gameContext->relics.getRelicValue(RelicId::OMAMORI) == 0)) {
+                score -= evalWeights.parasitePenalty;
+            }
+        }
+        return score;
     } else {
         const bool couldHaveSpikers = bc.encounter == MonsterEncounter::THREE_SHAPES || bc.encounter == MonsterEncounter::FOUR_SHAPES;
         const double energyPenalty = bc.energyWasted * -evalWeights.energyWasteWeight * (couldHaveSpikers ? 0 : 1);
