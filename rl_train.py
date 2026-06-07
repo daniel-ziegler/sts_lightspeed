@@ -636,8 +636,21 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
     print(header)
     print("-" * 140)
 
+    def _enc_name(enc_id):
+        try:
+            return str(sts.MonsterEncounter(enc_id)).replace('MonsterEncounter.', '')
+        except ValueError:
+            return f"enc#{enc_id}"
+
+    _boss_relic_screen = int(sts.ScreenState.BOSS_RELIC_REWARDS)
+    # Seed from step 0: the pre-game encounter field is engine-initialized junk, not a fight.
+    prev_encounter = traj.experiences[0].metrics.encounter if traj.experiences else 0
     for t in range(len(traj.experiences)):
         exp = traj.experiences[t]
+        # A change in the most-recent-battle id means a fight happened since the last decision.
+        if exp.metrics.encounter != prev_encounter and exp.metrics.encounter != 0:
+            print(f"      ⚔  fought {_enc_name(exp.metrics.encounter)}")
+        prev_encounter = exp.metrics.encounter
         # Choice summary - what was offered
         offered_items = []
         if exp.choice.cards_offered:
@@ -660,7 +673,17 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
             row += f" | {values[t]:10.3f} | {returns[t]:10.3f}"
         row += f" | {advantages[t]:13.3f}"
         print(row)
+        # Full option lists for the choices worth following closely: card offers
+        # (rewards/shops/selects) and relic offers (boss relics, shops).
+        if exp.choice.cards_offered:
+            print(f"      cards offered: " + ", ".join(str(c) for c in exp.choice.cards_offered))
+        if exp.choice.relics_offered:
+            label = "boss relics" if exp.choice.screen_state == _boss_relic_screen else "relics offered"
+            print(f"      {label}: " + ", ".join(
+                str(r).replace('RelicId.', '') for r in exp.choice.relics_offered))
 
+    if traj.final_metrics.encounter != prev_encounter and traj.final_metrics.encounter != 0:
+        print(f"      ⚔  fought {_enc_name(traj.final_metrics.encounter)}")
     print("-" * 140)
     fm = traj.final_metrics
     print(f"Final game outcome: {fm.outcome}")
