@@ -65,6 +65,11 @@ namespace sts::search {
         double bossChanceWideningC = 3.7028;
         double bossChanceWideningAlpha = 0.52389;
 
+        // END_TURN chance-node widening (high-entropy category: monster rolls + start-of-turn
+        // draws). Defaults equal the general pair; not boss-gated.
+        double endTurnWideningC = 3.7028;
+        double endTurnWideningAlpha = 0.52389;
+
         std::default_random_engine rng;
 
         // public interface

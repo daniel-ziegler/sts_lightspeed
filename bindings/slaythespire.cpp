@@ -125,6 +125,8 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("chance_widening_alpha", &search::SearchAgent::chanceWideningAlpha, "double progressive widening alpha for chance nodes")
         .def_readwrite("boss_chance_widening_c", &search::SearchAgent::bossChanceWideningC, "double progressive widening C for chance nodes in boss fights")
         .def_readwrite("boss_chance_widening_alpha", &search::SearchAgent::bossChanceWideningAlpha, "double progressive widening alpha for chance nodes in boss fights")
+        .def_readwrite("end_turn_widening_c", &search::SearchAgent::endTurnWideningC, "double progressive widening C for END_TURN chance nodes")
+        .def_readwrite("end_turn_widening_alpha", &search::SearchAgent::endTurnWideningAlpha, "double progressive widening alpha for END_TURN chance nodes")
         .def_readwrite("eval_weights", &search::SearchAgent::evalWeights, "evaluateEndState weights backed up by the battle search")
         .def_readwrite("log_battle_outcomes", &search::SearchAgent::logBattleOutcomes, "record a BattleSnapshot after each battle into battle_log")
         .def_readonly("battle_log", &search::SearchAgent::battleLog, "post-battle snapshots (floor/act/hp/potions/deck/encounter), one per battle")

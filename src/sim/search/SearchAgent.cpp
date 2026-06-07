@@ -88,6 +88,8 @@ void search::SearchAgent::playoutBattle(BattleContext &bc) {
     searcher.explorationParameterChance = explorationParameterChance;
     searcher.chanceWideningC = boss ? bossChanceWideningC : chanceWideningC;
     searcher.chanceWideningAlpha = boss ? bossChanceWideningAlpha : chanceWideningAlpha;
+    searcher.endTurnWideningC = endTurnWideningC;
+    searcher.endTurnWideningAlpha = endTurnWideningAlpha;
     searcher.evalWeights = evalWeights;
 
     // Cap reuse-driven pool growth so the dedup table's load factor stays low. Beyond this we do

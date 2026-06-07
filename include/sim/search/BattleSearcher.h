@@ -45,11 +45,21 @@ namespace sts::search {
         std::int64_t chanceTranspositions = 0;   // sampled outcome dedup-hit a non-sibling node
         std::int64_t depthSum = 0;               // in-tree path length at each simulation's end
         std::int64_t chanceDepthSum = 0;         // chance nodes on the path at each simulation's end
+        // Widening behavior split by the kind of stochastic action that spawned the chance node
+        // (0 = END_TURN: monster rolls + start-of-turn draws; 1 = card play; 2 = other).
+        // Per category: outcomes sampled (widen executes), sibling collisions among them, and
+        // visits that arrived with the DPW cap already binding (no widen attempted).
+        std::int64_t wSampled[3] = {};
+        std::int64_t wSibReuse[3] = {};
+        std::int64_t wCapped[3] = {};
         void add(const SearchStats &o) {
             steps += o.steps; nodesCreated += o.nodesCreated; detTranspositions += o.detTranspositions;
             chanceOutcomesSampled += o.chanceOutcomesSampled; chanceSiblingReuse += o.chanceSiblingReuse;
             chanceTranspositions += o.chanceTranspositions;
             depthSum += o.depthSum; chanceDepthSum += o.chanceDepthSum;
+            for (int i = 0; i < 3; ++i) {
+                wSampled[i] += o.wSampled[i]; wSibReuse[i] += o.wSibReuse[i]; wCapped[i] += o.wCapped[i];
+            }
         }
     };
 
@@ -104,8 +114,13 @@ namespace sts::search {
 
         // Double Progressive Widening for chance nodes: after n visits a chance node may
         // hold at most ceil(chanceWideningC * (n+1)^chanceWideningAlpha) distinct outcomes.
+        // END_TURN chance nodes (monster rolls + start-of-turn draws -- the high-entropy
+        // category, where the cap genuinely binds) can take their own pair; the general pair
+        // covers card-play/potion/select chance nodes.
         double chanceWideningC = 4.6;        // tuned default
         double chanceWideningAlpha = 0.37;   // tuned default
+        double endTurnWideningC = 4.6;       // END_TURN pair; set equal to general for the joint behavior
+        double endTurnWideningAlpha = 0.37;
 
         std::default_random_engine randGen;
 

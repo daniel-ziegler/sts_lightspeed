@@ -18,6 +18,17 @@ using namespace sts;
 
 std::int64_t simulationIdx = 0; // for debugging
 
+// Telemetry category for a chance node's stochastic action: 0 = END_TURN (monster rolls +
+// start-of-turn draws), 1 = card play, 2 = other (potions, card selects).
+static int chanceCat(const search::Action &a) {
+    switch (a.getActionType()) {
+        case search::ActionType::END_TURN: return 0;
+        case search::ActionType::CARD:     return 1;
+        default:                           return 2;
+    }
+}
+
+
 namespace sts::search {
     thread_local search::BattleSearcher *g_debug_scum_search;
 
@@ -383,6 +394,7 @@ void search::BattleSearcher::step() {
             edge.node = chance;
 
             ++stats.chanceOutcomesSampled;
+            ++stats.wSampled[chanceCat(edge.action)];
             Edge outcomeEdge;
             outcomeEdge.action = Action{};
             outcomeEdge.node = getOrCreateNode(std::move(next));
@@ -544,13 +556,16 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
     assert(chance.isRandomNode);
     assert(chance.parent != nullptr);
 #endif
+    const int wcat = chanceCat(chance.stochasticAction);
     // Double Progressive Widening. Below the cap we draw a fresh i.i.d. outcome; at the cap we
     // reuse an existing one. This bounds the branching of high-entropy events so their children
     // accumulate visits and the tree deepens, while the visit-weighted average over outcomes
     // remains an unbiased estimate of the chance node's expectation.
     const std::int64_t n = chance.simulationCount;
+    const double wc = wcat == 0 ? endTurnWideningC : chanceWideningC;
+    const double wa = wcat == 0 ? endTurnWideningAlpha : chanceWideningAlpha;
     const int cap = std::max(1, static_cast<int>(
-            std::ceil(chanceWideningC * std::pow(static_cast<double>(n + 1), chanceWideningAlpha))));
+            std::ceil(wc * std::pow(static_cast<double>(n + 1), wa))));
 
     if (static_cast<int>(chance.edges.size()) < cap) {
         // Widen: reseed from the canonical pre-action state, re-execute, dedup by state.
@@ -561,10 +576,12 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         chance.stochasticAction.execute(out);
 
         ++stats.chanceOutcomesSampled;
+        ++stats.wSampled[wcat];
         Node* child = getOrCreateNode(std::move(out));  // out unused afterward; safe to move
         for (auto &e : chance.edges) {
             if (e.node == child) {
                 ++stats.chanceSiblingReuse;
+                ++stats.wSibReuse[wcat];
                 return &e;  // resampled an outcome we already have
             }
         }
@@ -580,6 +597,7 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
 
     // Capped: re-select an existing outcome proportional to its visit count, so the realized
     // descent frequencies keep tracking the true outcome probabilities.
+    ++stats.wCapped[wcat];
     std::int64_t totalVisits = 0;
     for (const auto &e : chance.edges) {
         totalVisits += e.visitCount;
