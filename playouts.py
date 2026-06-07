@@ -1,6 +1,7 @@
 # %%
 from __future__ import annotations
 
+import os
 import random
 import copy
 from enum import IntEnum, auto
@@ -777,12 +778,21 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
     elif gc.screen_state == sts.ScreenState.TREASURE_ROOM:
         # Chest: open (idx1 0) or walk past (idx1 1). A policy decision -- with Cursed Key
         # opening costs a curse, and the sapphire key sits behind chests for heart runs.
+        # STS_FORCE_CHEST=open|skip pins the decision (intervention evals): the desired
+        # action is offered twice so the NN's sample is forced without touching the
+        # sampling loop.
+        force = os.environ.get('STS_FORCE_CHEST')
         for action in actions:
+            if force is not None and action.idx1 != (0 if force == 'open' else 1):
+                continue
             if action.idx1 == 0:
                 fixed_actions.append({'action': FixedAction.OPEN_CHEST})
             else:
                 fixed_actions.append({'action': FixedAction.SKIP})
             fixed_actions_list.append(action)
+        if force is not None and len(fixed_actions_list) == 1:
+            fixed_actions.append(dict(fixed_actions[-1]))
+            fixed_actions_list.append(fixed_actions_list[-1])
 
     elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
         # Shop cards are now returned as [card_set] where card_set contains all shop cards
