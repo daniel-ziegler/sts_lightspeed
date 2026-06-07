@@ -604,8 +604,8 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
     """Print a human-readable playthrough of one trajectory: a per-step state/choice/action table
     followed by the final outcome, deck, and relics. The Pred Value / Return columns are included
     only when `values`/`returns` are given (PPO); critic-free algos pass just the advantages."""
-    print(title or f"=== Trajectory (seed {traj.seed}) ===")
-    print(f"Trajectory length: {len(traj.experiences)} steps")
+    print(title or f"=== Trajectory (seed {traj.seed}, ascension {traj.ascension}) ===")
+    print(f"Trajectory length: {len(traj.experiences)} steps (ascension {traj.ascension})")
     has_v = values is not None and returns is not None
     header = f"Step | {'State':12s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s}"
     if has_v:
@@ -693,7 +693,8 @@ def compute_advantages(trajectories: List[Trajectory], config: TrainConfig, adv_
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
             print_trajectory(traj, advantages, values=values, returns=returns,
-                             title=f"=== PPO Advantage Calculation Debug (seed {traj.seed}) ===")
+                             title=f"=== PPO Advantage Calculation Debug (seed {traj.seed}, "
+                                   f"ascension {traj.ascension}) ===")
         
         # Store experiences and raw (un-normalized) GAE advantages/returns.
         all_experiences.extend(traj.experiences)
