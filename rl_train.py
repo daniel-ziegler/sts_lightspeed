@@ -645,6 +645,7 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
     _boss_relic_screen = int(sts.ScreenState.BOSS_RELIC_REWARDS)
     # Seed from step 0: the pre-game encounter field is engine-initialized junk, not a fight.
     prev_encounter = traj.experiences[0].metrics.encounter if traj.experiences else 0
+    last_offer_line = None
     for t in range(len(traj.experiences)):
         exp = traj.experiences[t]
         # A change in the most-recent-battle id means a fight happened since the last decision.
@@ -667,20 +668,27 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
         action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
         state_str = f"{exp.metrics.floor_num:>2}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
 
+        # Full option lists for the choices worth following closely, printed above the
+        # decision row. Reward screens re-prompt after each take with the same remaining
+        # offer -- consecutive duplicate offer lines are suppressed.
+        offer_lines = []
+        if exp.choice.cards_offered:
+            offer_lines.append("      cards offered: " + ", ".join(str(c) for c in exp.choice.cards_offered))
+        if exp.choice.relics_offered:
+            label = "boss relics" if exp.choice.screen_state == _boss_relic_screen else "relics offered"
+            offer_lines.append(f"      {label}: " + ", ".join(
+                str(r).replace('RelicId.', '') for r in exp.choice.relics_offered))
+        for line in offer_lines:
+            if line != last_offer_line:
+                print(line)
+            last_offer_line = line
+
         row = (f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | "
                f"{np.exp(exp.log_prob):6.3f} | {traj.rewards[t]:6.3f}")
         if has_v:
             row += f" | {values[t]:10.3f} | {returns[t]:10.3f}"
         row += f" | {advantages[t]:13.3f}"
         print(row)
-        # Full option lists for the choices worth following closely: card offers
-        # (rewards/shops/selects) and relic offers (boss relics, shops).
-        if exp.choice.cards_offered:
-            print(f"      cards offered: " + ", ".join(str(c) for c in exp.choice.cards_offered))
-        if exp.choice.relics_offered:
-            label = "boss relics" if exp.choice.screen_state == _boss_relic_screen else "relics offered"
-            print(f"      {label}: " + ", ".join(
-                str(r).replace('RelicId.', '') for r in exp.choice.relics_offered))
 
     if traj.final_metrics.encounter != prev_encounter and traj.final_metrics.encounter != 0:
         print(f"      ⚔  fought {_enc_name(traj.final_metrics.encounter)}")
