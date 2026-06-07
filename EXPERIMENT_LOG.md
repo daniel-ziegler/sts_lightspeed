@@ -18,6 +18,24 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-07
+
+**Heart-run support built (`aa8f739`) — not yet deployed; honest1asc continues.** Full act-4
+stack: key flags + burning-elite position in the obs (zero-init, golden-checked no-op on old
+checkpoints), TAKE_KEY + OPEN_CHEST policy actions, 'heart' reward fn (floor/114 uncapped to 57;
+act-3-only win +0.25 vs heart kill +0.5 — only a heart kill totals ~1.0), shaping_key_coef PBRS
+term, heart_win/act3_win/act4_reach/avg_keys stats. Validated end-to-end: all 3 keys obtainable
+via the policy interface, act-4 transition, Shield & Spear + Corrupt Heart beaten under real
+search. Plan: fresh from-scratch run (uniform A0-20) — the current policy likely learned
+never-RECALL, so no warm start.
+
+**⚠ BUGFIX with run-wide implications: every prior run skipped every chest.** SearchAgent's
+treasure-room fallback had open/skip inverted (`GameAction(takeChest)` → idx1=1 = skip), and
+construct_choice didn't surface the screen to the NN — so ALL collection and evals to date
+(incl. honest1's 0.794 and the 62.5-62.7% baselines) played without chest relics. Fixed +
+chests are now an NN decision. Future evals get a strictly richer game; absolute numbers are
+not directly comparable to pre-fix ones (direction: pre-fix figures are handicapped).
+
 ## 2026-06-06
 
 **honest1asc: 512 games/iter + gentle anneal @~iter 175** (user call, on the first signs of an
