@@ -622,10 +622,39 @@ def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs)
     return trajectories
 
 
+_ROOM_CHARS = {int(sts.Room.MONSTER): 'M', int(sts.Room.ELITE): 'E', int(sts.Room.REST): 'R',
+               int(sts.Room.SHOP): '$', int(sts.Room.EVENT): '?', int(sts.Room.TREASURE): 'T',
+               int(sts.Room.BOSS): 'B'}
+
+
+def _print_act_map(act: int, map_dict: dict, visited: set, boss_visited: bool):
+    """ASCII act map, top row first; nodes on the taken path are bracketed, ! = burning elite."""
+    xs = [int(v) for v in map_dict['xs']]
+    ys = [int(v) for v in map_dict['ys']]
+    rts = [int(v) for v in map_dict['roomTypes']]
+    if not xs:
+        return
+    bx, by = int(map_dict.get('burningEliteX', -1)), int(map_dict.get('burningEliteY', -1))
+    grid = {(x, y): _ROOM_CHARS.get(r, '.') for x, y, r in zip(xs, ys, rts)}
+    print(f"  Act {act} map (path taken in brackets, ! = burning elite):")
+    for y in range(max(ys), -1, -1):
+        cells = []
+        for x in range(7):
+            c = grid.get((x, y))
+            if c is None:
+                cells.append('    ')
+                continue
+            mark = '!' if (x, y) == (bx, by) else ' '
+            hit = (x, y) in visited or (c == 'B' and boss_visited)
+            cells.append(f"[{c}]{mark}" if hit else f" {c.lower()}{mark}")
+        print("      " + "".join(cells).rstrip())
+
+
 def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, title: str = ""):
     """Print a human-readable playthrough of one trajectory: a per-step state/choice/action table
-    followed by the final outcome, deck, and relics. The Pred Value / Return columns are included
-    only when `values`/`returns` are given (PPO); critic-free algos pass just the advantages."""
+    followed by the final outcome, deck, and relics, with an ASCII map of each act's route.
+    The Pred Value / Return columns are included only when `values`/`returns` are given (PPO);
+    critic-free algos pass just the advantages."""
     print(title or f"=== Trajectory (seed {traj.seed}, ascension {traj.ascension}) ===")
     print(f"Trajectory length: {len(traj.experiences)} steps (ascension {traj.ascension})")
     has_v = values is not None and returns is not None
@@ -648,8 +677,21 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
     _card_select_screen = int(sts.ScreenState.CARD_SELECT)
     last_screen_key = None
     last_offer_lines = set()
+    # Per-act route tracking for the map printouts: latest map layout seen in the act plus
+    # the set of node positions the player stood on at decision time.
+    cur_act = traj.experiences[0].metrics.act if traj.experiences else 1
+    act_map, act_visited = None, set()
     for t in range(len(traj.experiences)):
         exp = traj.experiences[t]
+        if exp.metrics.act != cur_act:
+            # Act ended; advancing past acts 1-3 means the boss fell.
+            if act_map is not None:
+                _print_act_map(cur_act, act_map, act_visited, boss_visited=True)
+            cur_act, act_map, act_visited = exp.metrics.act, None, set()
+        obs = exp.choice.obs
+        if obs.mapY >= 0:
+            act_visited.add((obs.mapX, obs.mapY))
+        act_map = obs.map.as_dict()
         # A change in the most-recent-battle id means a fight happened since the last decision.
         if exp.metrics.encounter != prev_encounter and exp.metrics.encounter != 0:
             print(f"      ⚔  fought {_enc_name(exp.metrics.encounter)}")
@@ -705,6 +747,9 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
 
     if traj.final_metrics.encounter != prev_encounter and traj.final_metrics.encounter != 0:
         print(f"      ⚔  fought {_enc_name(traj.final_metrics.encounter)}")
+    if act_map is not None:
+        won = traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY
+        _print_act_map(cur_act, act_map, act_visited, boss_visited=won)
     print("-" * 140)
     fm = traj.final_metrics
     print(f"Final game outcome: {fm.outcome}")
