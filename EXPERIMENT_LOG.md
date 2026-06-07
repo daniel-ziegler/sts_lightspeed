@@ -20,6 +20,28 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ## 2026-06-06
 
+**honest1asc: 512 games/iter + gentle anneal @~iter 175** (user call, on the first signs of an
+A20-era climb: iters 165/170 = 0.316/0.293 vs era mean ~0.21; bands 0.58/0.36/0.14/0.10 and
+0.47/0.40/0.10/0.11). Restarted at the next checkpoint with --num-games-per-step 512 (halves
+per-level variance: ~24 games/level/iter) and geometric decay of entropy coef 0.05→0.0167 and
+lr→1/3 over 100 iters, anchored at the resume iter. A20-era context: flat ~0.21 through iters
+106-160 (pooled 10-iter blocks 0.198-0.235), training health clean throughout (EV 0.70→0.75,
+clipfrac ~0.05). First A20 (double-boss) wins at iters 120/150.
+
+**Chance-vs-det UCB exploration split: tuned + gated, defaults stay (25,25) (MCTS session).**
+New knob `explorationParameterChance` (boss-eval@010ed99, byte-identical at default): separate
+UCB constant for stochastic edges at decision nodes. Tuned on fresh honest1-440 production
+states (2346 dev / 1156 holdout, acts balanced, run_episode-collected; 138-trial Optuna TPE
+@1000 sims, full-set evals; spot box, one reclaim — checkpointed db, deterministic
+re-collection). Proxy basin (expl≈18, ec≈12) and holdout (+0.56) did NOT survive the gate:
+paired 1000-seed eval_hero (honest1-440 @1k sims, seeds 8.2M; control 25/25 = 77.7%, floor
+48.12): **A (18,12) tie** (77.8%, flips +135/−134; floor +0.53 p=0.049), **B (25,12) −5.9pp**
+(71.8%, flips +117/−148 p=0.065; floor −0.97 p=0.005). Reading: deployment is sensitive to the
+det:chance exploration *balance*, not the absolute level — both-scaled-down ties, chance-only
+cut loses; ec≥35 is catastrophic even per-battle (ec=70 → score 47 vs 83). Proxy↔deployment
+divergence recurred despite production-strength states; 1000-seed paired gate stays mandatory.
+Artifacts: `states_h1/` in the boss-eval worktree (state sets, tune db/csv, gate csvs).
+
 **honest1 concluded at iter ~456.** Anneal floored @355 (entropy coef 0.0025, lr 3e-6/1e-5);
 high-water 0.816 @436, then 0.758-0.785 — plateau called. Process stopped (last checkpoint
 iter_455); local three-stage eval queued: (1) checkpoint screen 401/431/436/455 × 400 paired
