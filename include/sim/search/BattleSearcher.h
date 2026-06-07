@@ -32,10 +32,13 @@ namespace sts::search {
         double energyWasteWeight = 1.75;
         double drawWeight = 0.03;
         double turnSurvivalWeight = 1.5;
-        // Outcome details visible only at battle end (victory branch). Defaults 0 = off.
-        double goldLossWeight = 0;    // per gold permanently lost to an escaped Looter/Mugger
-        double maxHpWeight = 0;       // per point of max HP gained vs the search root (Feed, Darkstone)
-        double parasitePenalty = 0;   // flat penalty when Writhing Mass's implant will add a Parasite
+        // Outcome details visible only at battle end (victory branch). Defaults validated:
+        // targeted slices (thief gold lost 27->4 per battle @~0.1 HP; Writhing Mass implant
+        // 68%->24% free; +1.0 max HP per Feed-deck battle) + a 1000-seed paired deployment
+        // gate (79.2% vs 77.8% control, no-harm bar). 100 gold == 25 HP per user calibration.
+        double goldLossWeight = 0.25; // per gold permanently lost to an escaped Looter/Mugger
+        double maxHpWeight = 2.0;     // per point of max HP gained vs the search root (Feed, Darkstone)
+        double parasitePenalty = 12;  // flat penalty when Writhing Mass's implant will add a Parasite
     };
 
     // Deterministic search-graph telemetry: counts are exact properties of the search
