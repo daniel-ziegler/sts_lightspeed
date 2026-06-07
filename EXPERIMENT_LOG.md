@@ -29,8 +29,11 @@ and the skip bug cost ~7pp all along.
 games past the old collate cap (python assert killed the NN service game). (2) The
 INVALID-card pile-move assert fired inside search rollouts (~1/1000 chest-enabled games,
 timing-dependent, NOT reproducible in 600 deterministic-seed attempts) and aborted the whole
-process — now warn-and-drop (grep logs for "WARNING: dropped INVALID"); root cause still
-open, flagged to the MCTS session.
+process — now warn-and-drop (grep logs for "WARNING: dropped INVALID"); root cause FOUND + FIXED
+(`9b95037`): _DiscardNoTriggerCard read the mutable curCardQueueItem at execution time instead
+of capturing its card at queue time — stale reads hit the end-turn/battle-end items whose
+default CardInstance is INVALID (the one observed dump: dead Heart, empty card queue, one
+pending action). warn-and-drop stays as a tripwire.
 
 **honest1asc paused at its anneal peak (~iter 255-260, six straight highs, 0.422 @255;
 16-20 band 0.18).** Resumable: absolute-anchored schedules, checkpoints on box.
