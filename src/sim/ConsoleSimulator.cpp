@@ -76,6 +76,11 @@ void ConsoleSimulator::play(std::istream &is, std::ostream &os, SimulatorContext
         // Handle auto-battle mode - automatically run battles without user input
         if (gc->screenState == ScreenState::BATTLE && c.autoBattleMode) {
             autoBattleAgent.simulationCountBase = 5000;
+            // Battle-end detail terms (escaped-thief gold, Feed max HP, Writhing Mass implant):
+            // enabled for interactive play; engine-wide defaults stay 0 pending the deployment gate.
+            autoBattleAgent.evalWeights.goldLossWeight = 0.25;
+            autoBattleAgent.evalWeights.maxHpWeight = 2.0;
+            autoBattleAgent.evalWeights.parasitePenalty = 12.0;
             handleAutoBattle(os, c);
             if (battleSim.isBattleComplete()) {
                 battleSim.exitBattle(*gc);
