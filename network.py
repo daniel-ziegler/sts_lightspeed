@@ -26,7 +26,7 @@ class ModelHP:
 # Constants for data processing
 MAX_DECK_SIZE = 96  # Should be enough for most decks
 MAX_UPGRADE = 21
-MAX_RELICS = 25     # Maximum number of relics a player typically has
+MAX_RELICS = 40     # collate padding cap; 25 overflowed once chests started granting relics
 MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
 MAX_MAP_NODES = 100
 MAX_GOLD = 1000
