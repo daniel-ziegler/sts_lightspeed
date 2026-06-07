@@ -20,6 +20,28 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ## 2026-06-07
 
+**Chest value measured: +6.6pp causal.** honest1-440, 519 paired headline seeds @1k sims:
+chests-open 0.834 vs chests-skipped 0.769 (McNemar 83/49, z=2.96, p=0.003); independent
+600-game confirmation at seeds 3M+: 0.823. So the honest A0 champion is ~0.83 with chests,
+and the skip bug cost ~7pp all along.
+
+**Two more chest-era bugs found + fixed:** (1) MAX_RELICS 25→40 — chest relics push real
+games past the old collate cap (python assert killed the NN service game). (2) The
+INVALID-card pile-move assert fired inside search rollouts (~1/1000 chest-enabled games,
+timing-dependent, NOT reproducible in 600 deterministic-seed attempts) and aborted the whole
+process — now warn-and-drop (grep logs for "WARNING: dropped INVALID"); root cause still
+open, flagged to the MCTS session.
+
+**honest1asc paused at its anneal peak (~iter 255-260, six straight highs, 0.422 @255;
+16-20 band 0.18).** Resumable: absolute-anchored schedules, checkpoints on box.
+
+**heart1 launched** (box, supervisor-wrapped auto-resume): fresh from-scratch, uniform A0-20,
+reward-function heart, shaping-key-coef 0.1, 256 games/iter, entropy 0.05 flat, lr 3e-5/1e-4,
+battle-timeout 60, 30 workers. New inputs (ascension/keys/burning) now RANDOM-init — the
+zero-init era ended with the fresh run; old checkpoints evaluate faithfully only at tag
+`honest1-eval-compat`.
+
+
 **Heart-run support built (`aa8f739`) — not yet deployed; honest1asc continues.** Full act-4
 stack: key flags + burning-elite position in the obs (zero-init, golden-checked no-op on old
 checkpoints), TAKE_KEY + OPEN_CHEST policy actions, 'heart' reward fn (floor/114 uncapped to 57;
