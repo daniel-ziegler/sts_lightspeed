@@ -102,22 +102,12 @@ class EnumSpace(ScalarSpace[TEnum]):
 
 
 class IntSpace(ScalarSpace[int]):
-    def __init__(self, limit: int, zero_init: bool = False):
-        # zero_init makes the embedding table start at zero: inside an additive token sum
-        # (DictAdd/TupleAdd) the component is then an exact no-op until trained, so a net
-        # warm-started from a checkpoint predating this input reproduces it bit-for-bit.
+    def __init__(self, limit: int):
         self.limit = limit
-        self.zero_init = zero_init
         super().__init__()
 
-    def _make_embedding(self, dim: int) -> nn.Module:
-        emb = nn.Embedding(self.limit, dim)
-        if self.zero_init:
-            nn.init.zeros_(emb.weight)
-        return emb
-
     def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
-        return cache.build(self, dim, lambda: self._make_embedding(dim))
+        return cache.build(self, dim, lambda: nn.Embedding(self.limit, dim))
 
     def sample(self, rng: np.random.Generator) -> int:
         return rng.integers(0, self.limit)

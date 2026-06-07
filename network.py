@@ -358,12 +358,10 @@ obs_space = DictSpace({
     'fixed_obs': ScalarToSequenceSpace(DictAddSpace({
         'fixed_observation': FixedVecSpace(_FIXED_OBS_SCALAR_MAXES),
         'boss': IntSpace(10),
-        # Zero-init: nets warm-started from pre-ascension checkpoints behave identically
-        # until the embedding trains away from zero.
-        'ascension': IntSpace(21, zero_init=True),
-        'key_ruby': IntSpace(2, zero_init=True),
-        'key_emerald': IntSpace(2, zero_init=True),
-        'key_sapphire': IntSpace(2, zero_init=True),
+        'ascension': IntSpace(21),
+        'key_ruby': IntSpace(2),
+        'key_emerald': IntSpace(2),
+        'key_sapphire': IntSpace(2),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
     # Per-node map features. Beyond the raw structure (room/pos/edges), nodes carry
@@ -378,7 +376,7 @@ obs_space = DictSpace({
         'rel': FixedVecSpace([15, 31]),       # (dx, dy) from current position
         'reachable': EnumSpace(IsReachable),
         'agg': FixedVecSpace([2, 2, 2]),      # (min_elites, max_elites, dist_rest) / MAP_AGG_CAP
-        'burning': IntSpace(2, zero_init=True),  # burning elite here (emerald key fight)
+        'burning': IntSpace(2),               # burning elite here (emerald key fight)
     })),
 })
 
