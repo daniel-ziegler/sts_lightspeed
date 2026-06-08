@@ -288,18 +288,25 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
 
 def compute_heart_reward(metrics: GameMetrics) -> float:
     """Heart-run reward. Level progress caps at 0.3 (floor/190); an act-3-only win caps at
-    0.5 total (level + 0.25, clipped); a heart kill adds +0.5 uncapped. Each act-4 key held
-    is worth a REAL +0.1 (not clawed back): because this fn is also the per-step telescoping
-    potential, key pickups earn the credit densely at acquisition AND keep it at terminal.
-    Outcome ordering: heart kill (~1.09) > act3 win w/keys > 3-key act-4 loss (0.59) >
-    act3 win w/o keys (0.5) -- dying in act 4 with keys beats winning act 3 keyless."""
+    0.5 total (level + 0.25, clipped); a heart kill adds +0.5 uncapped.
+
+    Keys are worth +0.1 each but only EARNED by beating act 3: kept at any victory or once
+    act 4 is reached, clawed back at a pre-act-4 losing terminal. Because this fn is also
+    the per-step telescoping potential, the interior key term is act-discounted (1/3 in
+    act 1, 2/3 in act 2, full in act 3+): an early pickup pays only its fraction
+    immediately, with the remainder accruing at each act transition -- damping the
+    grab-keys-at-any-cost incentive in act 1 without changing the earned total."""
     level = min(metrics.floor_num / 190.0, 0.3)
     key_reward = 0.1 * metrics.num_keys
     if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
         if metrics.act >= 4:
             return level + 0.5 + key_reward
         return min(level + 0.25, 0.5) + key_reward
-    return level + key_reward
+    if metrics.outcome == sts.GameOutcome.UNDECIDED:
+        act_weight = 1.0 / 3.0 if metrics.act <= 1 else (2.0 / 3.0 if metrics.act == 2 else 1.0)
+        return level + key_reward * act_weight
+    # Loss: keys count only if the run made it past act 3.
+    return level + (key_reward if metrics.act >= 4 else 0.0)
 
 
 def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
