@@ -287,15 +287,19 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
 
 
 def compute_heart_reward(metrics: GameMetrics) -> float:
-    """Heart-run reward: floor progress (uncapped to floor 57 -> 0.5) plus a split victory
-    bonus -- +0.25 for an act-3-only win (no keys), +0.5 for killing the Heart (act 4).
-    Only a heart kill reaches a total of ~1.0."""
-    floor_reward = metrics.floor_num / 114.0
+    """Heart-run reward. Level progress caps at 0.3 (floor/190); an act-3-only win caps at
+    0.5 total (level + 0.25, clipped); a heart kill adds +0.5 uncapped. Each act-4 key held
+    is worth a REAL +0.1 (not clawed back): because this fn is also the per-step telescoping
+    potential, key pickups earn the credit densely at acquisition AND keep it at terminal.
+    Outcome ordering: heart kill (~1.09) > act3 win w/keys > 3-key act-4 loss (0.59) >
+    act3 win w/o keys (0.5) -- dying in act 4 with keys beats winning act 3 keyless."""
+    level = min(metrics.floor_num / 190.0, 0.3)
+    key_reward = 0.1 * metrics.num_keys
     if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
-        victory_bonus = 0.5 if metrics.act >= 4 else 0.25
-    else:
-        victory_bonus = 0.0
-    return floor_reward + victory_bonus
+        if metrics.act >= 4:
+            return level + 0.5 + key_reward
+        return min(level + 0.25, 0.5) + key_reward
+    return level + key_reward
 
 
 def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
