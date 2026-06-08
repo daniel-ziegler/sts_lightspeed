@@ -18,6 +18,22 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-08
+
+**INVALID-card root cause found + fixed (`55902fa`): action-queue ring desync on victory.**
+`clearPostCombatActions` compacted the queue (size decremented) without updating `back`,
+breaking `back == front + size`. Any post-victory `addToBot` (Self-Forming Clay / Rupture /
+Red Skull / Gremlin Horn reacting to the surviving whitelisted beat-of-death damage) then
+pushed past the live region, and later pops walked the stale gap — **resurrecting cleared or
+already-executed actions**. A resurrected OnAfterCardUsed disposed the consumed-power husk
+(onAfterUseCard deliberately sets a played power's id to INVALID) → the INVALID pile moves /
+original abort. The bug predates chests (any victory tail could double-fire resurrected
+actions, silently corrupting post-battle HP); chests+powers made it visible. Debug chain:
+warn fingerprint (seed/turn/monster) → deterministic replay from heart1's episode parquet
+(forcing recorded decisions; 226 drops reproduced exactly, Heart fight floor 55 turn 7) →
+in-process backtraces → husk detector → queue-dump showing the stale gap. Verified 226→0 on
+the repro; deployed to heart1 (supervisor bounce).
+
 ## 2026-06-07 (heart reward v2)
 
 **heart1 reward revised @iter ~70 (`0a5b9a2`)**: avg keys decayed 1.96→1.27 over iters 18-69 —
