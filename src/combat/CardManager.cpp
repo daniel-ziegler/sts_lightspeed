@@ -222,7 +222,17 @@ void CardManager::shuffleIntoDrawPile(Random &rng, const CardInstance &c) {
 void CardManager::moveToDiscardPile(const CardInstance &c) {
     // todo check flurries, weave
     if (c.getId() == CardId::INVALID) {
-        std::cerr << "WARNING: dropped INVALID card on moveToDiscardPile" << std::endl;
+        // One-line battle fingerprint for root-causing (g_debug_bc is thread_local, set by
+        // the executing battle): seed/turn/monster identify the fight class.
+        std::cerr << "WARNING: dropped INVALID card on moveToDiscardPile";
+        if (g_debug_bc != nullptr) {
+            std::cerr << " [seed " << g_debug_bc->seed << " turn " << g_debug_bc->turn
+                      << " m0 " << static_cast<int>(g_debug_bc->monsters.arr[0].id)
+                      << " mAlive " << g_debug_bc->monsters.monstersAlive
+                      << " cardQ " << g_debug_bc->cardQueue.size
+                      << " hand " << g_debug_bc->cards.cardsInHand << "]";
+        }
+        std::cerr << std::endl;
         return;
     }
     notifyAddToDiscardPile(c);
