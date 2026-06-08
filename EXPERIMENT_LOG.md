@@ -18,6 +18,17 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-07 (heart reward v2)
+
+**heart1 reward revised @iter ~70 (`0a5b9a2`)**: avg keys decayed 1.96→1.27 over iters 18-69 —
+pure PBRS gives no NET key incentive and the heart bonus is unreachable early, so the pickup
+habit was extinguishing. New reward: level term capped 0.3 (floor/190), act-3-only win capped
+0.5 total, heart kill +0.5, and **+0.1/key real terminal reward** (in the base potential:
+dense credit at pickup, kept at terminal; PBRS shaping_key_coef dropped as redundant).
+Outcome ordering now: heart ~1.09 > act3+2keys 0.70 > 3-key act-4 loss 0.58 > keyless act3 win
+0.50 — dying in act 4 with keys deliberately beats winning act 3 without them. Restarted from
+the latest checkpoint (value head re-anchors to the new terminal scale over a few iters).
+
 ## 2026-06-07
 
 **Chest value measured: +6.6pp causal.** honest1-440, 519 paired headline seeds @1k sims:
@@ -60,6 +71,25 @@ construct_choice didn't surface the screen to the NN — so ALL collection and e
 (incl. honest1's 0.794 and the 62.5-62.7% baselines) played without chest relics. Fixed +
 chests are now an NN decision. Future evals get a strictly richer game; absolute numbers are
 not directly comparable to pre-fix ones (direction: pre-fix figures are handicapped).
+
+## 2026-06-07
+
+**Battle-end detail eval terms GATED IN as engine defaults (MCTS session, boss-eval@0245769):**
+goldLossWeight 0.25 (escaped-thief gold; 100g==25HP calibration), maxHpWeight 2.0 (delta vs
+search root; Feed/Darkstone), parasitePenalty 12 (Writhing Mass implant, mirrors exitBattle).
+Targeted A/Bs (honest1-440 slices @1k sims): thief gold lost 27.2→4.1 (~0.1 HP); implant 68%→24%
+(HP up); Feed decks +1.0 maxHp/battle (HP up). Deployment gate 79.2% vs 77.8% (flips +91/−77,
+floor +0.29). eval_states gained a DETAIL line (goldLost/parasiteRate/maxHpGain); encounter
+state slices in states_h1/.
+
+**DPW widening split by chance-node category: knob landed (6b4934f), defaults unchanged.**
+WIDEN telemetry: cap binds 39-45% of END_TURN visits vs 3-10% card; card widen executes are
+56-62% wasted sibling re-rolls. 180-trial 4D tune (honest1-440 dev set): best region card
+5.0/0.84 + endTurn 5.7/0.49, +0.8 dev / +0.9 holdout — deployment gate TIE (77.7 vs 77.8,
+flips +129/−130). Third knob-split evaporation in a row (chance/det exploration, now widening);
+only the mechanism-backed objective change survived its gate. Perf note for later: adaptive
+stop-widening after K sibling collisions could reclaim most of the wasted card executes
+without quality risk.
 
 ## 2026-06-06
 
