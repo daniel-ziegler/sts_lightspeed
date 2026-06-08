@@ -22,23 +22,19 @@ import numpy as np
 import glob
 import os
 
-# Current/relevant runs only (older experiments -- the shape_* upg-coefficient sweep, the hero
-# lr/entropy forks, the GRPO runs -- are concluded; their stats remain in lambda_results/ if
-# ever needed again). NOTE: all runs except honest1 trained on the CLAIRVOYANT engine (see
-# EXPERIMENT_LOG.md) -- their win rates are inflated and not comparable to honest-era curves.
-#   hero      PPO from-scratch baseline (v1: iters 1-99) + continuation (v2: 100-177)
-#   heroe2    PPO num_epochs=2 fork -- cheat-era runner-up (0.744 @ 10k-sim paired eval)
+# Current/relevant runs only (concluded experiments' stats remain in lambda_results/).
+# NOTE: ppo_hient trained on the CLAIRVOYANT engine (see EXPERIMENT_LOG.md) -- its win rates
+# are inflated and not comparable to honest-era curves. All pre-heart runs also played
+# chest-less (the chest-skip bug, fixed 2026-06-07) -- ~7pp handicap vs heart1's game.
 #   ppo_hient PPO epochs=2, entropy_coef 0.05 + decay -- cheat-era champion (0.768 @ 10k)
-#   ppo_ent10 PPO epochs=2, entropy_coef 0.10 ┐ entropy bracket
-#   ppo_ent25 PPO epochs=2, entropy_coef 0.25 ┘ (0.25 over-flattened; killed)
-#   honest1   honest-era from-scratch hero: honest CardPile engine, R5b encoding, dest-room aux
-#   honest1asc  ascension 0-5 uniform mixture, warm start honest1.pt.iter_155 (its headline
-#               win_rate is over the mixture -- NOT comparable to the A0-only runs; see the
-#               per-ascension figure below)
+#   honest1   honest-era from-scratch hero (champion iter_440 = 0.794 honest, 1k sims)
+#   honest1asc  ascension mixture (0-5 -> 0-15 @40 -> 0-20 @105), warm start honest1 iter_155;
+#               headline win_rate is over the mixture
+#   heart1    from scratch: heart objective (act-4 keys, act3 win 0.25 / heart 0.5), A0-20
+#             uniform, chests fixed
 stats_files = []
-for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl',
-           'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl',
-           'honest1.pt.stats.jsonl', 'honest1asc.pt.stats.jsonl'):
+for _p in ('ppo_hient.pt.stats.jsonl',
+           'honest1.pt.stats.jsonl', 'honest1asc.pt.stats.jsonl', 'heart1.pt.stats.jsonl'):
     _fp = f'lambda_results/{_p}'
     if os.path.exists(_fp):
         stats_files.append(_fp)
@@ -46,9 +42,8 @@ for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl',
 # Color palette for different runs
 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
 # Per-group color overrides (takes precedence over the palette). Use to highlight headline runs.
-GROUP_COLORS = {'hero': 'black', 'heroe2': 'darkorange',
-                'ppo_hient': 'royalblue', 'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet',
-                'honest1': 'crimson', 'honest1asc': 'darkgreen'}
+GROUP_COLORS = {'ppo_hient': 'royalblue',
+                'honest1': 'crimson', 'honest1asc': 'darkgreen', 'heart1': 'darkmagenta'}
 GROUP_LW = {k: 2.8 for k in GROUP_COLORS}   # all headline runs
 
 def load_run_data(filename):
@@ -92,6 +87,11 @@ def load_run_data(filename):
         'adv_norm_stds': np.array([d.get('adv_norm_std', np.nan) for d in data]),
         'num_experiences': np.array([d.get('num_experiences', np.nan) for d in data]),
         'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
+        # Heart-run breakdown (present only for reward-function=heart runs).
+        'heart_win_rates': np.array([d.get('heart_win_rate', np.nan) for d in data]),
+        'act3_win_rates': np.array([d.get('act3_win_rate', np.nan) for d in data]),
+        'act4_reach_rates': np.array([d.get('act4_reach_rate', np.nan) for d in data]),
+        'avg_keys': np.array([d.get('avg_keys', np.nan) for d in data]),
         # Per-ascension-level breakdown (present only for ascension-mixture runs).
         **{f'win_rates_asc{a}': np.array([d.get(f'win_rate_asc{a}', np.nan) for d in data])
            for a in range(21)},
@@ -306,11 +306,11 @@ plt.show()
 _LR = 'lambda_results'
 hero_file = f'{_LR}/hero.pt.stats.jsonl'
 CHEAT_BASELINES = [
-    ('hero v1 (cheat era, from scratch)', f'{_LR}/hero.pt.stats.jsonl', 'black', 99),
     ('ppo_hient (cheat era, from scratch)', f'{_LR}/ppo_hient.pt.stats.jsonl', 'royalblue', 195),
 ]
 HONEST_RUNS = [
     ('honest1 (honest engine, R5b+aux)', f'{_LR}/honest1.pt.stats.jsonl', 'crimson'),
+    ('heart1 (heart objective, A0-20, chests fixed)', f'{_LR}/heart1.pt.stats.jsonl', 'darkmagenta'),
 ]
 
 def _wall_hours(run, max_iter=None):
@@ -351,9 +351,11 @@ else:
 # A0 curve is overlaid shifted by its fork point (honest1asc iter 1 continues honest1 iter 155),
 # so the crimson line shows what staying at A0 (with annealing) did from the same checkpoint --
 # the green A0 line holding near it means the mixture isn't costing A0 competence.
-ASC_RUN, ASC_FORK_ITER = 'honest1asc', 155
-_asc_run = next((r for r in runs if r['label'] == ASC_RUN), None)
-if _asc_run is not None:
+ASC_FORK_ITER = 155  # honest1asc forked from honest1 at this iteration
+_asc_runs = [r for r in runs
+             if any(not np.all(np.isnan(r[f'win_rates_asc{a}'])) for a in range(21))]
+for _asc_run in _asc_runs:
+    ASC_RUN = _asc_run['label']
     fig, ax = plt.subplots(figsize=(13, 6))
     asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 21))
     for a in range(21):
@@ -363,23 +365,50 @@ if _asc_run is not None:
         ax.plot(_asc_run['iterations'], y, color=asc_colors[a], alpha=0.15, linewidth=0.8)
         ax.plot(_asc_run['iterations'], _smooth(y), color=asc_colors[a], linewidth=1.6,
                 label=f'A{a}')
-    ax.plot(_asc_run['iterations'], _smooth(_asc_run['win_rates']), color='darkgreen',
-            linewidth=3.0, label='mixture (256 games/iter)')
-    _h1 = next((r for r in runs if r['label'] == 'honest1'), None)
-    if _h1 is not None:
-        keep = _h1['iterations'] >= ASC_FORK_ITER
-        ax.plot(_h1['iterations'][keep] - ASC_FORK_ITER, _smooth(_h1['win_rates'][keep]),
-                color='crimson', linewidth=1.6, linestyle='--', alpha=0.8,
-                label='honest1 A0 from same fork (annealed)')
-    ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
+    ax.plot(_asc_run['iterations'], _smooth(_asc_run['win_rates']),
+            color=GROUP_COLORS.get(ASC_RUN, 'black'), linewidth=3.0, label='mixture')
+    if ASC_RUN == 'honest1asc':
+        _h1 = next((r for r in runs if r['label'] == 'honest1'), None)
+        if _h1 is not None:
+            keep = _h1['iterations'] >= ASC_FORK_ITER
+            ax.plot(_h1['iterations'][keep] - ASC_FORK_ITER, _smooth(_h1['win_rates'][keep]),
+                    color='crimson', linewidth=1.6, linestyle='--', alpha=0.8,
+                    label='honest1 A0 from same fork (annealed)')
+        ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
+    else:
+        ax.set_xlabel('Iteration')
     ax.set_ylabel('Win rate')
-    ax.set_title('honest1asc: per-ascension win rates (uniform mixture; dial-ups: A15 @40, A20 @~105)')
+    ax.set_title(f'{ASC_RUN}: per-ascension win rates (uniform mixture)')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=3, loc='best')
     plt.tight_layout()
     plt.show()
-else:
-    print("honest1asc per-ascension figure skipped (stats file missing)")
+if not _asc_runs:
+    print("per-ascension figures skipped (no mixture runs loaded)")
+
+# %%
+# Heart-run progress: outcome decomposition (heart kills vs act-3-only wins vs reaching act 4)
+# and key acquisition.
+_heart_runs = [r for r in runs if not np.all(np.isnan(r['heart_win_rates']))]
+for _hr in _heart_runs:
+    fig, (axw, axk) = plt.subplots(1, 2, figsize=(14, 5))
+    for field, color, lbl in (('win_rates', 'gray', 'any win'),
+                              ('act3_win_rates', 'darkorange', 'act3-only win'),
+                              ('act4_reach_rates', 'steelblue', 'reached act 4'),
+                              ('heart_win_rates', 'darkmagenta', 'HEART KILL')):
+        axw.plot(_hr['iterations'], _hr[field], color=color, alpha=0.15, linewidth=0.8)
+        axw.plot(_hr['iterations'], _smooth(_hr[field]), color=color, linewidth=2.0, label=lbl)
+    axw.set_xlabel('Iteration'); axw.set_ylabel('Rate')
+    axw.set_title(f'{_hr["label"]}: outcome decomposition')
+    axw.grid(True, alpha=0.3); axw.legend(fontsize=8)
+    axk.plot(_hr['iterations'], _hr['avg_keys'], color='seagreen', alpha=0.2, linewidth=0.8)
+    axk.plot(_hr['iterations'], _smooth(_hr['avg_keys']), color='seagreen', linewidth=2.2)
+    axk.set_ylim(0, 3.05); axk.axhline(3.0, color='gray', linewidth=0.8, linestyle='--')
+    axk.set_xlabel('Iteration'); axk.set_ylabel('Avg keys at game end (3 = act-4 access)')
+    axk.set_title(f'{_hr["label"]}: key acquisition')
+    axk.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 # %%
 # Entropy phase plots: each run's training trajectory through (x, entropy) space as a faint
@@ -393,9 +422,8 @@ else:
 # the data. PPO normalizes advantages by the (logged) adv_norm_std, so the effective per-return
 # coefficient is entropy_coef * adv_norm_std (times the decisions-per-trajectory factor applied
 # in the loop below). Runs with a decaying entropy_coef use the logged per-iteration value.
-ENTROPY_COEF = {'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25, 'honest1': 0.05,
-                'honest1asc': 0.05}
-PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25', 'honest1', 'honest1asc'}  # adv / (logged) adv_norm_std
+ENTROPY_COEF = {'ppo_hient': 0.05, 'honest1': 0.05, 'honest1asc': 0.05, 'heart1': 0.05}
+PPO_NORMALIZED = {'ppo_hient', 'honest1', 'honest1asc', 'heart1'}  # adv / (logged) adv_norm_std
 
 def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     """unit_scale: indifference slope is annotated per (unit_scale of x), e.g. 0.01 win rate."""
