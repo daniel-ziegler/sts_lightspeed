@@ -5,10 +5,12 @@
 #include "combat/CardManager.h"
 
 #include <set>
+#include <cstdlib>
+#include <execinfo.h>
+
 #include <algorithm>
 
 #include "combat/BattleContext.h"
-
 #include "game/GameContext.h"
 #include "game/Card.h"
 
@@ -224,6 +226,8 @@ void CardManager::moveToDiscardPile(const CardInstance &c) {
     if (c.getId() == CardId::INVALID) {
         // One-line battle fingerprint for root-causing (g_debug_bc is thread_local, set by
         // the executing battle): seed/turn/monster identify the fight class.
+        // STS_INVALID_VERBOSE=1 additionally dumps the full battle state + search action
+        // stack on the first occurrence (debug sessions only -- the dump is large).
         std::cerr << "WARNING: dropped INVALID card on moveToDiscardPile";
         if (g_debug_bc != nullptr) {
             std::cerr << " [seed " << g_debug_bc->seed << " turn " << g_debug_bc->turn
@@ -233,6 +237,32 @@ void CardManager::moveToDiscardPile(const CardInstance &c) {
                       << " hand " << g_debug_bc->cards.cardsInHand << "]";
         }
         std::cerr << std::endl;
+        static bool dumped = false;
+        if (!dumped && std::getenv("STS_INVALID_VERBOSE") != nullptr && g_debug_bc != nullptr) {
+            dumped = true;
+            std::cerr << *g_debug_bc << '\n';
+            if (search::g_debug_scum_search != nullptr) {
+                search::g_debug_scum_search->printSearchStack(std::cerr, true);
+            }
+            std::cerr << "curCardQueueItem: card " << g_debug_bc->curCardQueueItem.card
+                      << " isEndTurn " << g_debug_bc->curCardQueueItem.isEndTurn
+                      << " triggerOnUse " << g_debug_bc->curCardQueueItem.triggerOnUse
+                      << " purgeOnUse " << g_debug_bc->curCardQueueItem.purgeOnUse << '\n';
+            std::cerr << "actionQueue (" << g_debug_bc->actionQueue.size << "):";
+            {
+                int ci = g_debug_bc->actionQueue.front;
+                for (int i = 0; i < g_debug_bc->actionQueue.size; ++i) {
+                    if (ci >= g_debug_bc->actionQueue.getCapacity()) ci = 0;
+                    std::cerr << ' ' << g_debug_bc->actionQueue.arr[ci];
+                    ++ci;
+                }
+            }
+            std::cerr << '\n';
+            void *frames[32];
+            const int n = backtrace(frames, 32);
+            backtrace_symbols_fd(frames, n, 2);
+            std::cerr.flush();
+        }
         return;
     }
     notifyAddToDiscardPile(c);
