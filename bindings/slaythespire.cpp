@@ -104,7 +104,10 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("alive_weight", &search::EvalWeights::aliveWeight)
         .def_readwrite("energy_waste_weight", &search::EvalWeights::energyWasteWeight)
         .def_readwrite("draw_weight", &search::EvalWeights::drawWeight)
-        .def_readwrite("turn_survival_weight", &search::EvalWeights::turnSurvivalWeight);
+        .def_readwrite("turn_survival_weight", &search::EvalWeights::turnSurvivalWeight)
+        .def_readwrite("gold_loss_weight", &search::EvalWeights::goldLossWeight, "penalty per gold permanently lost to an escaped Looter/Mugger")
+        .def_readwrite("max_hp_weight", &search::EvalWeights::maxHpWeight, "bonus per max HP gained vs the search root (Feed, Darkstone)")
+        .def_readwrite("parasite_penalty", &search::EvalWeights::parasitePenalty, "flat penalty when Writhing Mass's implant will add a Parasite");
 
     pybind11::class_<search::BattleSnapshot>(m, "BattleSnapshot")
         .def_readonly("floor", &search::BattleSnapshot::floor)
@@ -122,10 +125,13 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("pause_on_card_reward", &search::SearchAgent::pauseOnCardReward, "causes the agent to pause so as to cede control to the user when it encounters a card reward choice")
         .def_readwrite("verbosity_level", &search::SearchAgent::verbosityLevel, "verbosity level: 0=quiet, 1=concise, 2=full")
         .def_readwrite("exploration_parameter", &search::SearchAgent::explorationParameter, "MCTS UCB exploration constant used per battle")
+        .def_readwrite("exploration_parameter_chance", &search::SearchAgent::explorationParameterChance, "MCTS UCB exploration constant for stochastic edges (chance-node children)")
         .def_readwrite("chance_widening_c", &search::SearchAgent::chanceWideningC, "double progressive widening C for chance nodes")
         .def_readwrite("chance_widening_alpha", &search::SearchAgent::chanceWideningAlpha, "double progressive widening alpha for chance nodes")
         .def_readwrite("boss_chance_widening_c", &search::SearchAgent::bossChanceWideningC, "double progressive widening C for chance nodes in boss fights")
         .def_readwrite("boss_chance_widening_alpha", &search::SearchAgent::bossChanceWideningAlpha, "double progressive widening alpha for chance nodes in boss fights")
+        .def_readwrite("end_turn_widening_c", &search::SearchAgent::endTurnWideningC, "double progressive widening C for END_TURN chance nodes")
+        .def_readwrite("end_turn_widening_alpha", &search::SearchAgent::endTurnWideningAlpha, "double progressive widening alpha for END_TURN chance nodes")
         .def_readwrite("eval_weights", &search::SearchAgent::evalWeights, "evaluateEndState weights backed up by the battle search")
         .def_readwrite("log_battle_outcomes", &search::SearchAgent::logBattleOutcomes, "record a BattleSnapshot after each battle into battle_log")
         .def_readonly("battle_log", &search::SearchAgent::battleLog, "post-battle snapshots (floor/act/hp/potions/deck/encounter), one per battle")

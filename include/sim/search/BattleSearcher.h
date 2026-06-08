@@ -32,6 +32,13 @@ namespace sts::search {
         double energyWasteWeight = 1.75;
         double drawWeight = 0.03;
         double turnSurvivalWeight = 1.5;
+        // Outcome details visible only at battle end (victory branch). Defaults validated:
+        // targeted slices (thief gold lost 27->4 per battle @~0.1 HP; Writhing Mass implant
+        // 68%->24% free; +1.0 max HP per Feed-deck battle) + a 1000-seed paired deployment
+        // gate (79.2% vs 77.8% control, no-harm bar). 100 gold == 25 HP per user calibration.
+        double goldLossWeight = 0.25; // per gold permanently lost to an escaped Looter/Mugger
+        double maxHpWeight = 2.0;     // per point of max HP gained vs the search root (Feed, Darkstone)
+        double parasitePenalty = 12;  // flat penalty when Writhing Mass's implant will add a Parasite
     };
 
     // Deterministic search-graph telemetry: counts are exact properties of the search
@@ -45,11 +52,21 @@ namespace sts::search {
         std::int64_t chanceTranspositions = 0;   // sampled outcome dedup-hit a non-sibling node
         std::int64_t depthSum = 0;               // in-tree path length at each simulation's end
         std::int64_t chanceDepthSum = 0;         // chance nodes on the path at each simulation's end
+        // Widening behavior split by the kind of stochastic action that spawned the chance node
+        // (0 = END_TURN: monster rolls + start-of-turn draws; 1 = card play; 2 = other).
+        // Per category: outcomes sampled (widen executes), sibling collisions among them, and
+        // visits that arrived with the DPW cap already binding (no widen attempted).
+        std::int64_t wSampled[3] = {};
+        std::int64_t wSibReuse[3] = {};
+        std::int64_t wCapped[3] = {};
         void add(const SearchStats &o) {
             steps += o.steps; nodesCreated += o.nodesCreated; detTranspositions += o.detTranspositions;
             chanceOutcomesSampled += o.chanceOutcomesSampled; chanceSiblingReuse += o.chanceSiblingReuse;
             chanceTranspositions += o.chanceTranspositions;
             depthSum += o.depthSum; chanceDepthSum += o.chanceDepthSum;
+            for (int i = 0; i < 3; ++i) {
+                wSampled[i] += o.wSampled[i]; wSibReuse[i] += o.wSibReuse[i]; wCapped[i] += o.wCapped[i];
+            }
         }
     };
 
@@ -96,12 +113,21 @@ namespace sts::search {
 
         EvalFnc evalFnc;
         EvalWeights evalWeights;
-        double explorationParameter = 9.9;   // tuned default
+        // UCB exploration constants, split by edge type: deterministic edges (child is a
+        // decision node) vs stochastic edges (child is a chance node, whose Q-estimate carries
+        // outcome variance on top of policy variance and may need a different exploration level).
+        double explorationParameter = 9.9;         // deterministic edges; tuned default
+        double explorationParameterChance = 9.9;   // stochastic (chance-node) edges
 
         // Double Progressive Widening for chance nodes: after n visits a chance node may
         // hold at most ceil(chanceWideningC * (n+1)^chanceWideningAlpha) distinct outcomes.
+        // END_TURN chance nodes (monster rolls + start-of-turn draws -- the high-entropy
+        // category, where the cap genuinely binds) can take their own pair; the general pair
+        // covers card-play/potion/select chance nodes.
         double chanceWideningC = 4.6;        // tuned default
         double chanceWideningAlpha = 0.37;   // tuned default
+        double endTurnWideningC = 4.6;       // END_TURN pair; set equal to general for the joint behavior
+        double endTurnWideningAlpha = 0.37;
 
         std::default_random_engine randGen;
 

@@ -54,6 +54,7 @@ namespace sts::search {
         // bracketed near 25). Widening from the coarse honest tune's top region; widening
         // sensitivity at deployment is much weaker than exploration's.
         double explorationParameter = 25.0;
+        double explorationParameterChance = 25.0;  // UCB constant for stochastic edges (chance-node children)
         double chanceWideningC = 3.7028;
         double chanceWideningAlpha = 0.52389;
         EvalWeights evalWeights;
@@ -63,6 +64,11 @@ namespace sts::search {
         // the clairvoyant-era boss studies are not transferable).
         double bossChanceWideningC = 3.7028;
         double bossChanceWideningAlpha = 0.52389;
+
+        // END_TURN chance-node widening (high-entropy category: monster rolls + start-of-turn
+        // draws). Defaults equal the general pair; not boss-gated.
+        double endTurnWideningC = 3.7028;
+        double endTurnWideningAlpha = 0.52389;
 
         std::default_random_engine rng;
 

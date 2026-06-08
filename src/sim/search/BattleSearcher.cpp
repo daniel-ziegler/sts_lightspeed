@@ -18,6 +18,17 @@ using namespace sts;
 
 std::int64_t simulationIdx = 0; // for debugging
 
+// Telemetry category for a chance node's stochastic action: 0 = END_TURN (monster rolls +
+// start-of-turn draws), 1 = card play, 2 = other (potions, card selects).
+static int chanceCat(const search::Action &a) {
+    switch (a.getActionType()) {
+        case search::ActionType::END_TURN: return 0;
+        case search::ActionType::CARD:     return 1;
+        default:                           return 2;
+    }
+}
+
+
 namespace sts::search {
     thread_local search::BattleSearcher *g_debug_scum_search;
 
@@ -383,6 +394,7 @@ void search::BattleSearcher::step() {
             edge.node = chance;
 
             ++stats.chanceOutcomesSampled;
+            ++stats.wSampled[chanceCat(edge.action)];
             Edge outcomeEdge;
             outcomeEdge.action = Action{};
             outcomeEdge.node = getOrCreateNode(std::move(next));
@@ -463,7 +475,9 @@ double search::BattleSearcher::evaluateEdge(const search::BattleSearcher::Node &
     // term uses this edge's own visit count rather than the child's simulationCount. With node
     // sharing the two diverge, and using edge visits keeps UCB well-formed (Childs et al. 2008).
     const double qualityValue = edge.node->evaluationSum / edge.node->simulationCount;
-    const double explorationValue = explorationParameter *
+    const double exploration = edge.node->isRandomNode ? explorationParameterChance
+                                                       : explorationParameter;
+    const double explorationValue = exploration *
             std::sqrt(logParentVisits / (edge.visitCount + 1));
 
     return qualityValue + explorationValue;
@@ -542,13 +556,16 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
     assert(chance.isRandomNode);
     assert(chance.parent != nullptr);
 #endif
+    const int wcat = chanceCat(chance.stochasticAction);
     // Double Progressive Widening. Below the cap we draw a fresh i.i.d. outcome; at the cap we
     // reuse an existing one. This bounds the branching of high-entropy events so their children
     // accumulate visits and the tree deepens, while the visit-weighted average over outcomes
     // remains an unbiased estimate of the chance node's expectation.
     const std::int64_t n = chance.simulationCount;
+    const double wc = wcat == 0 ? endTurnWideningC : chanceWideningC;
+    const double wa = wcat == 0 ? endTurnWideningAlpha : chanceWideningAlpha;
     const int cap = std::max(1, static_cast<int>(
-            std::ceil(chanceWideningC * std::pow(static_cast<double>(n + 1), chanceWideningAlpha))));
+            std::ceil(wc * std::pow(static_cast<double>(n + 1), wa))));
 
     if (static_cast<int>(chance.edges.size()) < cap) {
         // Widen: reseed from the canonical pre-action state, re-execute, dedup by state.
@@ -559,10 +576,12 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
         chance.stochasticAction.execute(out);
 
         ++stats.chanceOutcomesSampled;
+        ++stats.wSampled[wcat];
         Node* child = getOrCreateNode(std::move(out));  // out unused afterward; safe to move
         for (auto &e : chance.edges) {
             if (e.node == child) {
                 ++stats.chanceSiblingReuse;
+                ++stats.wSibReuse[wcat];
                 return &e;  // resampled an outcome we already have
             }
         }
@@ -578,6 +597,7 @@ search::BattleSearcher::Edge* search::BattleSearcher::selectChanceOutcome(search
 
     // Capped: re-select an existing outcome proportional to its visit count, so the realized
     // descent frequencies keep tracking the true outcome probabilities.
+    ++stats.wCapped[wcat];
     std::int64_t totalVisits = 0;
     for (const auto &e : chance.edges) {
         totalVisits += e.visitCount;
@@ -834,7 +854,36 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
         // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
         // search doesn't value preserving HP that the game is about to restore anyway.
-        return evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        if (evalWeights.goldLossWeight != 0 && bc.requiresStolenGoldCheck()) {
+            // Gold held by an escaped thief is permanently lost; kills refund it at exitBattle,
+            // so only the escaped case is penalized (steal-then-kill nets the same as no steal).
+            for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                const auto &m = bc.monsters.arr[i];
+                const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
+                const bool escaped = m.curHp > 0 && (m.moveHistory[0] == MonsterMoveId::LOOTER_ESCAPE ||
+                                                     m.moveHistory[0] == MonsterMoveId::MUGGER_ESCAPE);
+                if (thief && escaped) {
+                    score -= evalWeights.goldLossWeight * m.miscInfo;
+                }
+            }
+        }
+        if (evalWeights.maxHpWeight != 0) {
+            // Max HP gained during the battle (Feed, Darkstone Periapt); baselined at the search
+            // root so the term is a pure delta and cannot distort the victory/loss tradeoff.
+            score += evalWeights.maxHpWeight * (bc.player.maxHp - rootState->player.maxHp);
+        }
+        if (evalWeights.parasitePenalty != 0) {
+            // Mirrors exitBattle: an implanted Writhing Mass adds a Parasite to the deck unless
+            // a charged Omamori absorbs it.
+            const auto &wm = bc.monsters.arr[0];
+            if (wm.id == MonsterId::WRITHING_MASS && wm.miscInfo
+                && (!bc.player.hasRelic<RelicId::OMAMORI>()
+                    || bc.gameContext->relics.getRelicValue(RelicId::OMAMORI) == 0)) {
+                score -= evalWeights.parasitePenalty;
+            }
+        }
+        return score;
     } else {
         const bool couldHaveSpikers = bc.encounter == MonsterEncounter::THREE_SHAPES || bc.encounter == MonsterEncounter::FOUR_SHAPES;
         const double energyPenalty = bc.energyWasted * -evalWeights.energyWasteWeight * (couldHaveSpikers ? 0 : 1);

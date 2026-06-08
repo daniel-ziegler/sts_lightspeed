@@ -14,6 +14,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <limits>
 
 #include "data_structure/fixed_list.h"
 #include "constants/Cards.h"
@@ -143,8 +144,13 @@ static int g_searchAscension = 0;
 static int g_simulationCount = 5;
 static int g_print_level = 0;
 static double g_explorationParameter = 25.0;   // honest-engine tuned default (see SearchAgent.h)
+// NaN sentinel: follows g_explorationParameter unless explicitly set via explorationChance=.
+static double g_explorationParameterChance = std::numeric_limits<double>::quiet_NaN();
 static double g_chanceWideningC = 3.7028;
 static double g_chanceWideningAlpha = 0.52389;
+// NaN sentinels: follow the general widening pair unless endTurnWideningC/Alpha= is given.
+static double g_endTurnWideningC = std::numeric_limits<double>::quiet_NaN();
+static double g_endTurnWideningAlpha = std::numeric_limits<double>::quiet_NaN();
 static double g_bossChanceWideningC = 3.7028;     // boss-specific widening; defaults = general
 static double g_bossChanceWideningAlpha = 0.52389;
 static std::int64_t g_searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
@@ -166,8 +172,12 @@ void agentMtRunner(AgentMtInfo *info) {
         search::SearchAgent agent;
         agent.simulationCountBase = g_simulationCount;
         agent.explorationParameter = g_explorationParameter;
+        agent.explorationParameterChance = std::isnan(g_explorationParameterChance)
+                ? g_explorationParameter : g_explorationParameterChance;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.endTurnWideningC = std::isnan(g_endTurnWideningC) ? g_chanceWideningC : g_endTurnWideningC;
+        agent.endTurnWideningAlpha = std::isnan(g_endTurnWideningAlpha) ? g_chanceWideningAlpha : g_endTurnWideningAlpha;
         agent.bossChanceWideningC = g_bossChanceWideningC;
         agent.bossChanceWideningAlpha = g_bossChanceWideningAlpha;
         agent.searchTimeMicros = g_searchTimeMicros;
@@ -243,6 +253,15 @@ void agentMt(int threadCount, std::uint64_t startSeed, int playoutCount) {
               << " chanceTrans=" << st.chanceTranspositions
               << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
               << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
+    {
+        static const char* wcats[3] = {"endTurn", "card", "other"};
+        std::cout << "WIDEN";
+        for (int i = 0; i < 3; ++i) {
+            std::cout << ' ' << wcats[i] << "=" << st.wSampled[i]
+                      << "/sib" << st.wSibReuse[i] << "/cap" << st.wCapped[i];
+        }
+        std::cout << '\n';
+    }
     std::cout << "threads: " << threadCount
               << " playoutCount: " << playoutCount
               << " depth: " << g_simulationCount
@@ -732,8 +751,13 @@ struct EvalStatesInfo {
     std::size_t next = 0;
 
     double explorationParameter = 9.9;   // tuned default
+    // NaN sentinel: follows explorationParameter unless explicitly set via explorationChance=.
+    double explorationParameterChance = std::numeric_limits<double>::quiet_NaN();
     double chanceWideningC = 4.6;         // tuned default
     double chanceWideningAlpha = 0.37;    // tuned default
+    // NaN sentinels: follow the general widening pair unless endTurnWideningC/Alpha= is given.
+    double endTurnWideningC = std::numeric_limits<double>::quiet_NaN();
+    double endTurnWideningAlpha = std::numeric_limits<double>::quiet_NaN();
     std::int64_t searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
     search::EvalWeights evalWeights;
     int simBudget = 0;
@@ -762,12 +786,18 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         search::SearchAgent agent;
         agent.simulationCountBase = info->simBudget;
         agent.explorationParameter = info->explorationParameter;
+        agent.explorationParameterChance = std::isnan(info->explorationParameterChance)
+                ? info->explorationParameter : info->explorationParameterChance;
         agent.chanceWideningC = info->chanceWideningC;
         agent.chanceWideningAlpha = info->chanceWideningAlpha;
         // eval_states applies its widening args uniformly (incl. boss fights) so tuning on a
         // boss-only set controls boss-state behavior; overrides SearchAgent's baked-in boss default.
         agent.bossChanceWideningC = info->chanceWideningC;
         agent.bossChanceWideningAlpha = info->chanceWideningAlpha;
+        agent.endTurnWideningC = std::isnan(info->endTurnWideningC)
+                ? info->chanceWideningC : info->endTurnWideningC;
+        agent.endTurnWideningAlpha = std::isnan(info->endTurnWideningAlpha)
+                ? info->chanceWideningAlpha : info->endTurnWideningAlpha;
         agent.searchTimeMicros = info->searchTimeMicros;
         agent.evalWeights = info->evalWeights;
         agent.verbosityLevel = 0;
@@ -814,8 +844,11 @@ static int evalStates(int argc, const char *argv[]) {
         const std::string key = arg.substr(0, eq);
         const double val = std::stod(arg.substr(eq + 1));
         if (key == "exploration") info.explorationParameter = val;
+        else if (key == "explorationChance") info.explorationParameterChance = val;
         else if (key == "wideningC") info.chanceWideningC = val;
         else if (key == "wideningAlpha") info.chanceWideningAlpha = val;
+        else if (key == "endTurnWideningC") info.endTurnWideningC = val;
+        else if (key == "endTurnWideningAlpha") info.endTurnWideningAlpha = val;
         else if (key == "time") info.searchTimeMicros = static_cast<std::int64_t>(val);
         else if (key == "winBonus") info.evalWeights.winBonus = val;
         else if (key == "potionWeight") info.evalWeights.potionWeight = val;
@@ -825,6 +858,9 @@ static int evalStates(int argc, const char *argv[]) {
         else if (key == "energyWaste") info.evalWeights.energyWasteWeight = val;
         else if (key == "drawWeight") info.evalWeights.drawWeight = val;
         else if (key == "turnSurvival") info.evalWeights.turnSurvivalWeight = val;
+        else if (key == "goldLoss") info.evalWeights.goldLossWeight = val;
+        else if (key == "maxHpWeight") info.evalWeights.maxHpWeight = val;
+        else if (key == "parasitePenalty") info.evalWeights.parasitePenalty = val;
         else throw std::runtime_error("eval_states: unknown param: " + key);
     }
 
@@ -856,6 +892,15 @@ static int evalStates(int argc, const char *argv[]) {
               << " chanceTrans=" << st.chanceTranspositions
               << " avgDepth=" << (st.steps ? (double)st.depthSum/st.steps : 0)
               << " avgChanceDepth=" << (st.steps ? (double)st.chanceDepthSum/st.steps : 0) << '\n';
+    {
+        static const char* wcats[3] = {"endTurn", "card", "other"};
+        std::cout << "WIDEN";
+        for (int i = 0; i < 3; ++i) {
+            std::cout << ' ' << wcats[i] << "=" << st.wSampled[i]
+                      << "/sib" << st.wSibReuse[i] << "/cap" << st.wCapped[i];
+        }
+        std::cout << '\n';
+    }
     return 0;
 }
 
@@ -886,8 +931,11 @@ static void applyGlobalParam(const std::string &arg) {
     const std::string key = arg.substr(0, eq);
     const double val = std::stod(arg.substr(eq + 1));
     if (key == "exploration") g_explorationParameter = val;
+    else if (key == "explorationChance") g_explorationParameterChance = val;
     else if (key == "wideningC") g_chanceWideningC = val;
     else if (key == "wideningAlpha") g_chanceWideningAlpha = val;
+    else if (key == "endTurnWideningC") g_endTurnWideningC = val;
+    else if (key == "endTurnWideningAlpha") g_endTurnWideningAlpha = val;
     else if (key == "bossWideningC") g_bossChanceWideningC = val;
     else if (key == "bossWideningAlpha") g_bossChanceWideningAlpha = val;
     else if (key == "time") g_searchTimeMicros = static_cast<std::int64_t>(val);
@@ -899,6 +947,9 @@ static void applyGlobalParam(const std::string &arg) {
     else if (key == "energyWaste") g_evalWeights.energyWasteWeight = val;
     else if (key == "drawWeight") g_evalWeights.drawWeight = val;
     else if (key == "turnSurvival") g_evalWeights.turnSurvivalWeight = val;
+    else if (key == "goldLoss") g_evalWeights.goldLossWeight = val;
+    else if (key == "maxHpWeight") g_evalWeights.maxHpWeight = val;
+    else if (key == "parasitePenalty") g_evalWeights.parasitePenalty = val;
     else throw std::runtime_error("unknown param: " + key);
 }
 
@@ -922,8 +973,12 @@ static void dumpBattleOutcomesRunner(DumpInfo *info) {
         search::SearchAgent agent;
         agent.simulationCountBase = info->simBudget;
         agent.explorationParameter = g_explorationParameter;
+        agent.explorationParameterChance = std::isnan(g_explorationParameterChance)
+                ? g_explorationParameter : g_explorationParameterChance;
         agent.chanceWideningC = g_chanceWideningC;
         agent.chanceWideningAlpha = g_chanceWideningAlpha;
+        agent.endTurnWideningC = std::isnan(g_endTurnWideningC) ? g_chanceWideningC : g_endTurnWideningC;
+        agent.endTurnWideningAlpha = std::isnan(g_endTurnWideningAlpha) ? g_chanceWideningAlpha : g_endTurnWideningAlpha;
         agent.bossChanceWideningC = g_bossChanceWideningC;
         agent.bossChanceWideningAlpha = g_bossChanceWideningAlpha;
         agent.searchTimeMicros = g_searchTimeMicros;
