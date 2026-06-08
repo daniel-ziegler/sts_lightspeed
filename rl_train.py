@@ -206,6 +206,9 @@ class TrainConfig:
     shaping_relic_coef: float = 0.0   # per relic held
     shaping_maxhp_coef: float = 0.0   # per max-HP point
     shaping_key_coef: float = 0.0     # per act-4 key held (heart runs)
+    # Deck-thinning: NEGATIVE potential per Strike/Defend still in the deck, so each removal
+    # earns +coef immediately (PBRS, terminal-uncredited like the other shape terms).
+    shaping_starter_coef: float = 0.0
     shaping_offset: float = 0.0
 
     # Per-battle MCTS wall-clock budget (seconds). Sized for the default 1000 sims; raise it
@@ -239,6 +242,7 @@ class GameMetrics:
     outcome: sts.GameOutcome
     act: int = 1       # current act; distinguishes a heart win (act 4) from an act-3-only win
     num_keys: int = 0  # act-4 keys held (ruby + emerald + sapphire), for reward shaping
+    num_starters: int = 0  # Strikes + Defends in deck (any upgrade), for thinning shaping
     # MonsterEncounter id of the most recent battle (INVALID=0 before the first one). In episode
     # dumps this enables per-encounter battle-outcome stats: the HP change across the rows where
     # the id flips measures what each fight cost.
@@ -324,6 +328,7 @@ def compute_shaped_rewards(
     relic_coef: float = 0.0,
     maxhp_coef: float = 0.0,
     key_coef: float = 0.0,
+    starter_coef: float = 0.0,
 ) -> Tuple[List[float], float]:
     """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
 
@@ -346,7 +351,7 @@ def compute_shaped_rewards(
         hp_frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
         return (hp_coef * hp_frac + upg_coef * m.num_upgraded
                 + relic_coef * m.num_relics + maxhp_coef * m.max_hp
-                + key_coef * m.num_keys - offset)
+                + key_coef * m.num_keys - starter_coef * m.num_starters - offset)
 
     shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
     total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
@@ -512,6 +517,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                             outcome=gc.outcome,
                             act=gc.act,
                             num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
+                            num_starters=sum(1 for card in gc.deck
+                                             if card.id in (sts.CardId.STRIKE_RED, sts.CardId.DEFEND_RED)),
                             encounter=int(gc.encounter),
                         )
 
@@ -578,6 +585,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         outcome=gc.outcome,
         act=gc.act,
         num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
+        num_starters=sum(1 for card in gc.deck
+                         if card.id in (sts.CardId.STRIKE_RED, sts.CardId.DEFEND_RED)),
         encounter=int(gc.encounter),
     )
     
@@ -586,7 +595,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         [e.metrics for e in experiences], final_metrics, reward_fn,
         config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
         relic_coef=config.shaping_relic_coef, maxhp_coef=config.shaping_maxhp_coef,
-        key_coef=config.shaping_key_coef,
+        key_coef=config.shaping_key_coef, starter_coef=config.shaping_starter_coef,
     )
     
     # Add terminal state value (0.0) for GAE bootstrap
