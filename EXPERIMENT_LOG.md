@@ -18,6 +18,14 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-08 (heart1 schedule + engine update @185)
+
+**heart1 lr decay engaged @iter 185** (pre-agreed condition met: kl 0.0045→0.0077, clipfrac
+0.050→0.069 over iters 165-180 as the entropy coef fell): lr → 1/3 over 100 iters, anchored.
+Same bounce loaded the **boss-eval@0245769 merge** (`b2c2514`): battle-end detail eval terms
+gold/maxHp/parasite as engine defaults (MCTS-session gated 79.2% vs 77.8%) — thief-gold
+protection, Feed/maxHp value, Writhing Mass implant avoidance, all heart-run-relevant.
+
 ## 2026-06-08
 
 **INVALID-card root cause found + fixed (`55902fa`): action-queue ring desync on victory.**
