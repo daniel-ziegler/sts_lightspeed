@@ -290,27 +290,38 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
-def compute_heart_reward(metrics: GameMetrics) -> float:
-    """Heart-run reward. Level progress caps at 0.3 (floor/190); an act-3-only win caps at
-    0.5 total (level + 0.25, clipped); a heart kill adds +0.5 uncapped.
+CLEAR_BONUS = 0.2   # for beating the act-3 boss (a stop OR pushing on to act 4)
+KEY_VALUE = 0.1     # per act-4 key, earned once act 3 is cleared
+HEART_BONUS = 0.3   # for killing the Corrupt Heart
 
-    Keys are worth +0.1 each but only EARNED by beating act 3: kept at any victory or once
-    act 4 is reached, clawed back at a pre-act-4 losing terminal. Because this fn is also
-    the per-step telescoping potential, the interior key term is act-discounted (1/3 in
-    act 1, 2/3 in act 2, full in act 3+): an early pickup pays only its fraction
-    immediately, with the remainder accruing at each act transition -- damping the
-    grab-keys-at-any-cost incentive in act 1 without changing the earned total."""
+
+def compute_heart_reward(metrics: GameMetrics) -> float:
+    """Heart-run reward, designed monotone in true progress while still rewarding partial keys.
+
+    Components: level (floor/190, caps 0.3) + CLEAR_BONUS once the act-3 boss is beaten
+    (a stop OR pushing on) + KEY_VALUE per key (earned only once act 3 is cleared) +
+    HEART_BONUS for the kill. The act-3-clear bonus is the fix for the old inversion: an
+    act-4 death ALSO cleared act 3, so it gets the same bonus as a stop -- and since it
+    always carries 3 keys vs a stop's <=3, it strictly outscores any act-3 stop. Terminal
+    ordering (floors 51 stop / 54 act-4 death / 55 heart): act3 0k 0.47 < 1k 0.57 < 2k 0.67
+    < 3-key act-4 death 0.78 < heart kill 1.09 -- strictly increasing.
+
+    Interior (UNDECIDED) telescopes out of the undiscounted return but shapes GAE credit:
+    act-discounted partial key credit during acts 1-3 gives early pickups a learning signal;
+    the act-3 clear is banked in full once in act 4."""
     level = min(metrics.floor_num / 190.0, 0.3)
-    key_reward = 0.1 * metrics.num_keys
-    if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY:
-        if metrics.act >= 4:
-            return level + 0.5 + key_reward
-        return min(level + 0.25, 0.5) + key_reward
     if metrics.outcome == sts.GameOutcome.UNDECIDED:
+        if metrics.act >= 4:
+            return level + CLEAR_BONUS + KEY_VALUE * metrics.num_keys
         act_weight = 1.0 / 3.0 if metrics.act <= 1 else (2.0 / 3.0 if metrics.act == 2 else 1.0)
-        return level + key_reward * act_weight
-    # Loss: keys count only if the run made it past act 3.
-    return level + (key_reward if metrics.act >= 4 else 0.0)
+        return level + KEY_VALUE * metrics.num_keys * act_weight
+    # Terminal: act 3 cleared iff this is a victory (only reachable past the act-3 boss) or
+    # the run got into act 4. Keys count only when cleared; heart bonus for the act-4 win.
+    cleared = metrics.outcome == sts.GameOutcome.PLAYER_VICTORY or metrics.act >= 4
+    keys = metrics.num_keys if cleared else 0
+    heart = metrics.outcome == sts.GameOutcome.PLAYER_VICTORY and metrics.act >= 4
+    return (level + (CLEAR_BONUS if cleared else 0.0)
+            + KEY_VALUE * keys + (HEART_BONUS if heart else 0.0))
 
 
 def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
