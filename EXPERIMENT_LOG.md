@@ -26,7 +26,21 @@ Same bounce loaded the **boss-eval@0245769 merge** (`b2c2514`): battle-end detai
 gold/maxHp/parasite as engine defaults (MCTS-session gated 79.2% vs 77.8%) — thief-gold
 protection, Feed/maxHp value, Writhing Mass implant avoidance, all heart-run-relevant.
 
-## 2026-06-08
+## 2026-06-08 (heart reward v4 + lr un-anneal)
+
+**Heart reward v4 (`d3b2924`): monotone in true progress.** v3 had an inversion -- a 2-key
+act-3 stop (0.7) outscored a 3-key act-4 death (0.584) because the win bonus was exclusive to
+stopping, even though an act-4 death also cleared act 3; this drove the keyless/low-key act-3
+equilibrium. v4 restructures as level(floor/190, cap 0.3) + 0.2 act-3-clear (stop OR push) +
+0.1/key (earned once act 3 cleared) + 0.3 heart. Act-4 death gets the clear bonus too + always
+3 keys, so it strictly beats any stop. Terminal chain strictly increasing: act3 0k 0.47 < 1k
+0.57 < 2k 0.67 < act4 death 0.78 < heart 1.09. Partial keys still rewarded; early-death keys
+clawed back. Swapped into heart1 live (it had been banked as a general agent; user chose to
+redirect it after all).
+
+**lr un-annealed 2x** (1e-5 -> 2e-5): clipfrac had fallen to ~0.025 (over-annealed); raised
+lr_final_frac 0.333 -> 0.667 (past the decay window, so this just lifts the floor). Same bounce.
+
 
 **INVALID-card root cause found + fixed (`55902fa`): action-queue ring desync on victory.**
 `clearPostCombatActions` compacted the queue (size decremented) without updating `back`,
