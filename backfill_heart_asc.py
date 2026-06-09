@@ -1,11 +1,14 @@
 """Backfill per-ascension heart-kill rates into a run's stats jsonl from its episode parquets.
 
-Each episode parquet (iter_N.parquet) holds per-decision rows; one game = one seed. A game's
-final outcome (win/loss), final_floor, and ascension (fixed_observation[6]) are constant within
-the seed. A heart kill is a win whose final_floor exceeds the act-3 boss floor (51): an
-act-3-only win ends exactly at 51, the Corrupt Heart sits at 55. We add heart_win_rate_asc{a}
-(and, for older stats lacking them, win_rate_asc{a}/num_games_asc{a}) to each matching
-iteration row. iter_N.parquet corresponds to stats `iteration` N.
+Each episode parquet (iter_N.parquet) holds per-decision rows; one game = one seed. Ascension
+(fixed_observation[6]) and outcome are constant within a seed; key count
+(fixed_observation[7..9]) is monotone, so its per-game max is the keys-at-end. A heart kill is
+a WIN holding all 3 keys: 3 keys force the act-4 transition, where the only victory is the
+Corrupt Heart -- so won AND max-keys==3 is exact and ascension-proof. (A floor threshold is
+NOT: A20's double act-3 boss bumps an act-3-only win to floor 52, which a floor>51 test
+miscounts as a heart kill.) We add heart_win_rate_asc{a} (and, for older stats lacking them,
+win_rate_asc{a}/num_games_asc{a}) to each matching iteration row. iter_N.parquet corresponds to
+stats `iteration` N.
 """
 import argparse
 import glob
@@ -14,16 +17,21 @@ import os
 
 import pandas as pd
 
-ACT3_BOSS_FLOOR = 51
 ASC_OBS_IDX = 6
+KEY_OBS_IDXS = (7, 8, 9)
 
 
 def per_iter_asc_stats(ep_path: str) -> dict:
-    df = pd.read_parquet(ep_path, columns=['seed', 'outcome', 'final_floor', 'obs.fixed_observation'])
-    g = df.groupby('seed').first()
-    asc = g['obs.fixed_observation'].apply(lambda x: int(x[ASC_OBS_IDX]))
-    won = g['outcome'] == 1
-    heart = won & (g['final_floor'] > ACT3_BOSS_FLOOR)
+    df = pd.read_parquet(ep_path, columns=['seed', 'outcome', 'obs.fixed_observation'])
+    fo = df['obs.fixed_observation']
+    df = df.assign(
+        asc=fo.apply(lambda x: int(x[ASC_OBS_IDX])),
+        keys=fo.apply(lambda x: sum(int(x[i]) for i in KEY_OBS_IDXS)),
+    )
+    asc = df.groupby('seed')['asc'].first()
+    won = df.groupby('seed')['outcome'].first() == 1
+    max_keys = df.groupby('seed')['keys'].max()
+    heart = won & (max_keys == 3)
     out = {}
     for a, sub in asc.groupby(asc):
         idx = sub.index
@@ -59,11 +67,11 @@ def main():
             d = json.loads(line)
             extra = by_iter.get(d.get('iteration'))
             if extra:
-                # Don't clobber values the trainer already logged natively.
-                added = {k: v for k, v in extra.items() if k not in d}
-                if added:
-                    d.update(added)
-                    patched += 1
+                # Overwrite the per-ascension fields from the episodes (keys==3 is the exact,
+                # ascension-proof heart-kill signal -- supersedes any earlier floor-based
+                # backfill; matches the trainer's native act>=4 logging on rows that have it).
+                d.update(extra)
+                patched += 1
             rows.append(d)
     print(f"patched {patched} stats rows")
 
