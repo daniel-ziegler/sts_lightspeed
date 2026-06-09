@@ -26,6 +26,35 @@ Same bounce loaded the **boss-eval@0245769 merge** (`b2c2514`): battle-end detai
 gold/maxHp/parasite as engine defaults (MCTS-session gated 79.2% vs 77.8%) — thief-gold
 protection, Feed/maxHp value, Writhing Mass implant avoidance, all heart-run-relevant.
 
+## 2026-06-09 (card-choice + value-head deck-conditioning diagnosis)
+
+**Why heart1 plateaus at mediocre strategies: it's deck-BLIND, and that's a value-target/credit
+problem, not exploration temperature or representation.** Three nested analyses on the last
+~50 iters (analyze_card_choices.py, analyze_value_probe.py, analyze_rep_probe.py):
+
+1. *Policy card choice* (conditional logit, 409k reward+shop acquisitions): card IDENTITY alone
+   predicts 64% of picks (McFadden R2 0.38); full context only adds to 0.71. deck_count coef
+   ~-0.04/SD, n_pstrike ~-0.05/SD -> near-zero duplicate aversion / deck-conditioning. Average
+   TASTE is fine (top: Panache/Reaper/Apotheosis/Feed/Demon Form; bottom: Flex/True Grit/Rampage)
+   -- Perfected Strike is a rank-5/107 UNCONDITIONAL grab (good in the abstract, bad as a fixed
+   policy that can't tell a 3-attack deck from a 12-attack one).
+2. *Critic deck-conditioning* (counterfactual dV(card|deck) = V(deck+c)-V(deck) on real states):
+   dV is near-constant across decks (sd 0.005-0.019 on a ~1.1 scale). Control-deconfounded
+   synergy slopes ~0: Perfected Strike vs #strikes -0.006/SD (wrong sign), Body Slam vs #block
+   +0.006/SD (negligible), True Grit upgrade valued BACKWARDS (-0.021). The critic carries no
+   deck-conditional card value.
+3. *Representation capacity* (linear probe from the pooled vector the value head reads): recovers
+   deck composition at high R2 -- #strikes 0.80, #pstrikes 0.87, #block 0.79, deck_size 0.97.
+   The value head is a linear map on this same vector, so the info is present and linearly
+   accessible; the head just never learned to use it.
+
+Conclusion: the trunk encodes the deck; the on-policy returns (under a deck-blind policy) never
+made deck-conditioning pay, so neither critic nor policy learned it -- a self-reinforcing
+equilibrium. Fixable training-side (no arch change). Per-decision entropy can't break it
+(synergy decks need a COORDINATED multi-pick build; per-decision entropy explores picks
+independently). Candidate levers: card-acquisition-specific exploration temperature; deck-
+archetype diversity/intrinsic reward; population with varied card biases.
+
 ## 2026-06-08 (heart reward v4 + lr un-anneal)
 
 **Heart reward v4 (`d3b2924`): monotone in true progress.** v3 had an inversion -- a 2-key
