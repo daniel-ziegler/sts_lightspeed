@@ -74,12 +74,26 @@ def main():
             print(f"sample iter {sample['iteration']}: {hk}")
         return
 
+    # Append-safe against a live trainer: re-read now and carry over any iteration rows that
+    # appeared since we first read (they'd otherwise be lost in the atomic replace). Newer rows
+    # already carry the field natively, so we keep them verbatim.
+    seen = {r.get('iteration') for r in rows}
+    with open(args.stats) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            if d.get('iteration') not in seen:
+                rows.append(d)
+                seen.add(d.get('iteration'))
+    rows.sort(key=lambda r: (r.get('iteration') is None, r.get('iteration')))
+
     tmp = args.stats + '.tmp'
     with open(tmp, 'w') as f:
         for d in rows:
             f.write(json.dumps(d) + '\n')
     os.replace(tmp, args.stats)
-    print(f"wrote {args.stats}")
+    print(f"wrote {args.stats} ({len(rows)} rows)")
 
 
 if __name__ == '__main__':
