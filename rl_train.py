@@ -1450,14 +1450,19 @@ def main():
                       f"{heart_stats['act3_win_rate']:.3f} act3-only wins, "
                       f"{heart_stats['act4_reach_rate']:.3f} reached act4, "
                       f"avg keys {heart_stats['avg_keys']:.2f}")
-            # Per-ascension-level breakdown when training on a mixture.
+            # Per-ascension-level breakdown when training on a mixture. For heart runs, also
+            # log the per-level HEART-KILL rate (full act-4 clear) alongside the any-win rate.
             asc_stats = {}
             if config.max_ascension > 0:
+                is_heart = args.reward_function == 'heart'
                 for a in range(config.max_ascension + 1):
                     ts = [t for t in trajectories if t.ascension == a]
                     if ts:
                         asc_stats[f'win_rate_asc{a}'] = sum(1 for t in ts if _won(t)) / len(ts)
                         asc_stats[f'num_games_asc{a}'] = len(ts)
+                        if is_heart:
+                            asc_stats[f'heart_win_rate_asc{a}'] = sum(
+                                1 for t in ts if _won(t) and t.final_metrics.act >= 4) / len(ts)
                 print("Per-ascension win rates: " + ", ".join(
                     f"A{a}={asc_stats[f'win_rate_asc{a}']:.3f}(n={asc_stats[f'num_games_asc{a}']})"
                     for a in range(config.max_ascension + 1) if f'win_rate_asc{a}' in asc_stats))

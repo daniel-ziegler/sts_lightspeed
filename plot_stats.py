@@ -95,6 +95,9 @@ def load_run_data(filename):
         # Per-ascension-level breakdown (present only for ascension-mixture runs).
         **{f'win_rates_asc{a}': np.array([d.get(f'win_rate_asc{a}', np.nan) for d in data])
            for a in range(21)},
+        # Per-level heart-kill rate (heart runs only).
+        **{f'heart_win_rates_asc{a}': np.array([d.get(f'heart_win_rate_asc{a}', np.nan) for d in data])
+           for a in range(21)},
     }
 
 # Load all runs
@@ -356,16 +359,22 @@ _asc_runs = [r for r in runs
              if any(not np.all(np.isnan(r[f'win_rates_asc{a}'])) for a in range(21))]
 for _asc_run in _asc_runs:
     ASC_RUN = _asc_run['label']
+    # Heart runs: plot per-level HEART-KILL rate (the run's actual objective) and the
+    # heart-kill mixture; other mixtures plot any-win rate.
+    is_heart = not np.all(np.isnan(_asc_run['heart_win_rates']))
+    asc_prefix = 'heart_win_rates_asc' if is_heart else 'win_rates_asc'
+    mix_field = 'heart_win_rates' if is_heart else 'win_rates'
+    metric = 'heart-kill rate' if is_heart else 'win rate'
     fig, ax = plt.subplots(figsize=(13, 6))
     asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 21))
     for a in range(21):
-        y = _asc_run[f'win_rates_asc{a}']
+        y = _asc_run[f'{asc_prefix}{a}']
         if np.all(np.isnan(y)):
             continue
         ax.plot(_asc_run['iterations'], y, color=asc_colors[a], alpha=0.15, linewidth=0.8)
         ax.plot(_asc_run['iterations'], _smooth(y), color=asc_colors[a], linewidth=1.6,
                 label=f'A{a}')
-    ax.plot(_asc_run['iterations'], _smooth(_asc_run['win_rates']),
+    ax.plot(_asc_run['iterations'], _smooth(_asc_run[mix_field]),
             color=GROUP_COLORS.get(ASC_RUN, 'black'), linewidth=3.0, label='mixture')
     if ASC_RUN == 'honest1asc':
         _h1 = next((r for r in runs if r['label'] == 'honest1'), None)
@@ -377,8 +386,8 @@ for _asc_run in _asc_runs:
         ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
     else:
         ax.set_xlabel('Iteration')
-    ax.set_ylabel('Win rate')
-    ax.set_title(f'{ASC_RUN}: per-ascension win rates (uniform mixture)')
+    ax.set_ylabel(metric.capitalize())
+    ax.set_title(f'{ASC_RUN}: per-ascension {metric} (uniform mixture)')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=3, loc='best')
     plt.tight_layout()
