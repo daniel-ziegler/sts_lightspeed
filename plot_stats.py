@@ -488,10 +488,13 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=2, loc='best')
 
-fig, (ax_floor, ax_win) = plt.subplots(2, 1, figsize=(16, 22), dpi=200)
+fig, (ax_rew, ax_floor) = plt.subplots(2, 1, figsize=(16, 22), dpi=200)
+# Entropy vs avg reward: the indifference line here is the PURE return-vs-entropy exchange
+# rate (d(reward)/d(reward) = 1, so slope = -1/coef_eff) -- the most direct read of how many
+# nats of entropy each run is currently "buying" per unit of training return.
+_phase_panel(ax_rew, 'avg_rewards', 'Avg reward', '0.1 reward', unit_scale=0.1)
 _phase_panel(ax_floor, 'avg_floors', 'Avg floor reached', 'floor')
-_phase_panel(ax_win, 'win_rates', 'Win rate', '+1% win', unit_scale=0.01)
-fig.suptitle('Trajectories (faint), current state (dots), GRPO objective-indifference lines (dashed)',
+fig.suptitle('Trajectories (faint), current state (dots), objective-indifference lines (dashed)',
              fontsize=13)
 plt.tight_layout()
 plt.show()
