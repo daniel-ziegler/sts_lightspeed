@@ -18,6 +18,46 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-10 (map-SL revival: choice-dependent reachability vs per-choice cone aggregate)
+
+**Motivation.** heart1 routes poorly to burning elites (emerald key, usually 2-4 rows ahead) —
+a *multi-hop* lookahead the existing map SL probes never tested (all were one-hop "is the
+option's immediate destination an elite"). The production binary `reachable` bit collapses
+exactly the "must commit left *now*" distinction. Added to `sl_repr_lab.py`: (a) two multi-hop
+routing tasks — `route_deep_elite` (option whose cone holds an elite beyond its immediate
+dest) and `route_burning` (option whose cone reaches the burning-elite node, from the new
+burningEliteX/Y obs field); (b) new representation arms on the R5b production baseline —
+`RV` (binary reachable → per-frontier-column multi-hot `reach_via`, sinusoidal FixedVec),
+`RVe` (same set as a SUM of a learned per-column table SHARED with the path token's x →
+identity binding, the "sum the x embeddings" idea), `PC` (forward-cone aggregate
+minE/maxE/dist_rest + a reaches_burn bit ON the path-choice token), and combos. Ran on the box
+A10 (laptop 3060 too small: dim-256 full-attn OOMs >batch128), 10 heart1 parquets (28k path
+decisions, ~1k held-out/task), 20 epochs, seed 0.
+
+**Result (best held-out acc).** route_burning (base 0.41): Rbase 0.58, RV 0.59, RVe 0.56,
+**PC/RV+PC/RVe+PC 1.00**. route_deep_elite (base 0.47): Rbase 0.61, RV 0.60, RVe 0.57,
+**PC/RV+PC/RVe+PC 1.00**. elite one-hop control 1.00 everywhere (saturated, as in prior lab).
+
+**Verdict.** The per-choice forward-cone aggregate (PC) *solves* both multi-hop routing tasks;
+`reach_via` (the per-node multi-hop, raw reachability) barely beats baseline. The info is
+*present* in reach_via but the net can't learn to *aggregate it across the DAG* at a realistic
+budget — precomputing the aggregate onto the choice token makes routing trivial. Confirms the
+standing repr-lab lesson ("option grounding = lookup, not a learned multi-hop attention
+program") for the multi-hop case. `RV+PC == PC` (reach_via adds nothing on top). Learned shared
+embedding `RVe` is *worst* — consistent with "sinusoids load-bearing, learned tables crater."
+Honesty caveat: PC's cone features encode nearly exactly the lookahead each task needs, so this
+shows representation *sufficiency* (the net exploits precomputed per-choice aggregates, not raw
+per-node reachability), not yet a win-rate gain — that's the RL test. Mess notes: orphaned
+child PID survived `kill <wrapper>` and held 11.8 GB → OOM'd the relaunch (kill the actual
+`python3` pid / use setsid); batch 512 needs ~17 GB (co-resident with heart1's 4.6 GB), batch
+256 ~8-12 GB fits.
+
+**Production-port candidate (pending go-ahead):** add the per-choice cone aggregate
+(frontier-node minE/maxE/dist_rest, scaled, + reaches_burn) to the `paths` token in
+collate_fn/network as ZERO-INIT DictAdd components → warm-starts heart1 bit-identically, then
+learns to use them. Skip reach_via (no policy benefit). Non-path states keep the existing
+per-node agg + binary reachable (already in production) for the value head.
+
 ## 2026-06-08 (heart1 schedule + engine update @185)
 
 **heart1 lr decay engaged @iter 185** (pre-agreed condition met: kl 0.0045→0.0077, clipfrac

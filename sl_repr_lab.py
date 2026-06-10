@@ -87,6 +87,68 @@ class LearnedVecSpace(ScalarSpace):
         return np.array([int(rng.integers(0, c)) - off for off, c in self.specs])
 
 
+# ---- shared learned column embedding (the "sum the x embeddings" arm) -----------
+# One learned table over the 7 map columns is shared by BOTH the path-choice token's x
+# (single lookup) and a node's reach_via (sum of the columns that can reach it). Sharing the
+# table means a node's reach_via lives in the same space as the option's own x embedding, so
+# attention binds them by identity rather than having to learn a coordinate match.
+NUM_COLS = 7
+
+
+class _ColTable:
+    """Lazy holder so the lookup and bag spaces below resolve to ONE nn.Embedding instance."""
+    def __init__(self):
+        self.table = None
+
+    def get(self, dim):
+        if self.table is None:
+            self.table = nn.Embedding(NUM_COLS, dim)
+            nn.init.normal_(self.table.weight, std=0.02)
+        return self.table
+
+
+class _ColLookupEmbed(nn.Module):
+    def __init__(self, table):
+        super().__init__()
+        self.table = table
+
+    def forward(self, x):  # x: [..., 1] int column (-1 padding, masked downstream)
+        return self.table(x[..., 0].long().clamp(min=0))
+
+
+class _ColBagEmbed(nn.Module):
+    def __init__(self, table):
+        super().__init__()
+        self.table = table
+
+    def forward(self, x):  # x: [..., NUM_COLS] multi-hot -> sum of the set columns' embeddings
+        return x.float() @ self.table.weight
+
+
+class ColLookupSpace(ScalarSpace):
+    def __init__(self, holder):
+        self.holder = holder
+        super().__init__()
+
+    def build_embed(self, dim, cache):
+        return _ColLookupEmbed(self.holder.get(dim))
+
+    def sample(self, rng):
+        return np.array([int(rng.integers(0, NUM_COLS))])
+
+
+class ColBagSpace(ScalarSpace):
+    def __init__(self, holder):
+        self.holder = holder
+        super().__init__()
+
+    def build_embed(self, dim, cache):
+        return _ColBagEmbed(self.holder.get(dim))
+
+    def sample(self, rng):
+        return np.array([int(rng.integers(0, 2)) for _ in range(NUM_COLS)])
+
+
 # ---------------------------------------------------------------- map ground truth
 
 def map_info(r):
@@ -122,18 +184,32 @@ def map_info(r):
     opts = [idx.get((int(x), ydest)) for x in r['paths_offered']]
     if None in opts or len(opts) < 2:
         return None
-    # forward reachability from the offered frontier
+    # forward reachability from the offered frontier (binary) AND per-column: reach_col[j] is a
+    # bitmask over the frontier COLUMN (map x, 0..6) of each option that can forward-reach node j.
+    # Frontier options occupy distinct columns, so column indexing is unambiguous and aligns with
+    # the path-choice token's own x coordinate.
     reach = [False] * n
-    stack = list(opts)
-    while stack:
-        i = stack.pop()
-        if reach[i]:
-            continue
-        reach[i] = True
-        stack.extend(succ[i])
+    reach_col = [0] * n
+    for o in opts:
+        c = xs[o]
+        seen, stack = set(), [o]
+        while stack:
+            i = stack.pop()
+            if i in seen:
+                continue
+            seen.add(i)
+            stack.extend(succ[i])
+        for i in seen:
+            reach[i] = True
+            reach_col[i] |= (1 << c)
+
+    # Burning-elite node (emerald key), if its position was recorded in this obs (older dumps
+    # predate the field -> None). reaches_burn[o] tells whether option o's cone contains it.
+    bx, by = int(r.get('obs.map.burningEliteX', -1)), int(r.get('obs.map.burningEliteY', -1))
+    burn = idx.get((bx, by)) if bx >= 0 else None
     return dict(
         xs=xs, ys=ys, rts=rts, n=n, opts=opts, ydest=ydest, succ=succ,
-        minE=minE, maxE=maxE, dR=dR, reach=reach,
+        minE=minE, maxE=maxE, dR=dR, reach=reach, reach_col=reach_col, burn=burn,
         cur=(int(r['obs.mapX']), int(r['obs.mapY'])),
     )
 
@@ -162,6 +238,82 @@ def _choice_space_with_paths(paths_elem):
 
 
 _PATHS_DEST = DictAddSpace({'x': FixedVecSpace([7]), 'room': EnumSpace(sts.Room)})
+
+
+# Composable augmentation pieces for the reach_via / per-choice arms (each mutates the collated
+# batch in place; order matters only in that _aug_path_cone needs _aug_paths_room run first to
+# turn the bare path-x tensor into the {'x', 'room', ...} dict it extends).
+def _aug_paths_room(bt, infos):
+    x = bt['choices']['paths']['value']
+    if isinstance(x, dict):
+        x = x['x']
+    room = torch.zeros(x.shape[0], x.shape[1], dtype=torch.int32)
+    for i, mi in enumerate(infos):
+        for k, o in enumerate(mi['opts'][:x.shape[1]]):
+            room[i, k] = mi['rts'][o]
+    bt['choices']['paths']['value'] = {'x': x, 'room': room}
+
+
+def _aug_node_rel(bt, infos):
+    rel = torch.zeros(len(infos), MAX_MAP_NODES, 2, dtype=torch.int32)
+    for i, mi in enumerate(infos):
+        cx, cy = mi['cur']
+        for j in range(mi['n']):
+            rel[i, j, 0] = mi['xs'][j] - cx
+            rel[i, j, 1] = mi['ys'][j] - cy
+    bt['map_nodes']['value']['rel'] = rel
+
+
+def _aug_node_reachable(bt, infos):
+    reach = torch.zeros(len(infos), MAX_MAP_NODES, dtype=torch.int32)
+    for i, mi in enumerate(infos):
+        for j in range(mi['n']):
+            reach[i, j] = 1 if mi['reach'][j] else 0
+    bt['map_nodes']['value']['reachable'] = reach
+
+
+def _aug_node_reach_via(bt, infos):
+    rv = torch.zeros(len(infos), MAX_MAP_NODES, NUM_COLS, dtype=torch.float32)
+    for i, mi in enumerate(infos):
+        for j in range(mi['n']):
+            m = mi['reach_col'][j]
+            for c in range(NUM_COLS):
+                if (m >> c) & 1:
+                    rv[i, j, c] = 1.0
+    bt['map_nodes']['value']['reach_via'] = rv
+
+
+def _aug_node_agg(bt, infos):
+    agg = torch.zeros(len(infos), MAX_MAP_NODES, 3, dtype=torch.float32)
+    for i, mi in enumerate(infos):
+        for j in range(mi['n']):
+            agg[i, j, 0] = mi['minE'][j] / DIST_CAP
+            agg[i, j, 1] = mi['maxE'][j] / DIST_CAP
+            agg[i, j, 2] = min(mi['dR'][j], DIST_CAP) / DIST_CAP
+    bt['map_nodes']['value']['agg'] = agg
+
+
+def _aug_path_cone(bt, infos):
+    """Forward-cone summary on each path-choice token: the frontier node's (minE, maxE,
+    dist_rest) aggregates (scaled) plus a 'reaches_burn' bit (does this option's cone contain
+    the burning elite). Precomputes the lookahead the routing otherwise has to attend out."""
+    pv = bt['choices']['paths']['value']
+    W = pv['x'].shape[1]
+    cone = torch.zeros(len(infos), W, 3, dtype=torch.float32)
+    rb = torch.zeros(len(infos), W, dtype=torch.int32)
+    for i, mi in enumerate(infos):
+        for k, o in enumerate(mi['opts'][:W]):
+            cone[i, k, 0] = mi['minE'][o] / DIST_CAP
+            cone[i, k, 1] = mi['maxE'][o] / DIST_CAP
+            cone[i, k, 2] = min(mi['dR'][o], DIST_CAP) / DIST_CAP
+            if mi['burn'] is not None and (mi['reach_col'][mi['burn']] >> mi['xs'][o]) & 1:
+                rb[i, k] = 1
+    pv['cone'] = cone
+    pv['reaches_burn'] = rb
+
+
+_PATHS_CONE = DictAddSpace({'x': FixedVecSpace([7]), 'room': EnumSpace(sts.Room),
+                            'cone': FixedVecSpace([2, 2, 2]), 'reaches_burn': EnumSpace(Flag2)})
 
 
 def build_repr(name):
@@ -245,6 +397,67 @@ def build_repr(name):
             aug4(bt, infos)
             del bt['map_nodes']['value']['path_xs']
         return o_sp, c_sp4, aug
+
+    # ---- choice-dependent reachability arms (all R5b + a routing-signal change) ----
+    # Baseline for these is R5b (the production encoding). reach_via replaces R5b's binary
+    # `reachable` with a per-frontier-column multi-hot; PC adds a forward-cone summary to the
+    # path-choice token. RV = multi-hot (sinusoidal FixedVec); RVe = the same set as a SUM of a
+    # learned per-column embedding table SHARED with the path token's x (identity binding).
+    _RV_MAP = {'rel': FixedVecSpace([15, 31]), 'reach_via': FixedVecSpace([2] * NUM_COLS),
+               'agg': FixedVecSpace([2, 2, 2])}
+    _BASE_MAP = {'rel': FixedVecSpace([15, 31]), 'reachable': EnumSpace(Flag2),
+                 'agg': FixedVecSpace([2, 2, 2])}
+
+    if name == 'Rbase':  # production R5b features, rebuilt via the robust aug helpers so the
+        # only delta vs RV is reachable->reach_via and vs PC is the absent cone. The apples-to-
+        # apples baseline (the lab's stale R1-R6 augs assume a pre-R5b bare-tensor paths value).
+        def aug(bt, infos):
+            _aug_paths_room(bt, infos); _aug_node_rel(bt, infos)
+            _aug_node_reachable(bt, infos); _aug_node_agg(bt, infos)
+        return _obs_space_with_map(_BASE_MAP), _choice_space_with_paths(_PATHS_DEST), aug
+
+    if name == 'RV':
+        def aug(bt, infos):
+            _aug_paths_room(bt, infos); _aug_node_rel(bt, infos)
+            _aug_node_reach_via(bt, infos); _aug_node_agg(bt, infos)
+        return _obs_space_with_map(_RV_MAP), _choice_space_with_paths(_PATHS_DEST), aug
+
+    if name == 'RVe':
+        holder = _ColTable()
+        def aug(bt, infos):
+            _aug_paths_room(bt, infos); _aug_node_rel(bt, infos)
+            _aug_node_reach_via(bt, infos); _aug_node_agg(bt, infos)
+        o_sp = _obs_space_with_map({'rel': FixedVecSpace([15, 31]), 'reach_via': ColBagSpace(holder),
+                                    'agg': FixedVecSpace([2, 2, 2])})
+        c_sp = _choice_space_with_paths(DictAddSpace({'x': ColLookupSpace(holder),
+                                                      'room': EnumSpace(sts.Room)}))
+        return o_sp, c_sp, aug
+
+    if name == 'PC':
+        def aug(bt, infos):
+            _aug_paths_room(bt, infos); _aug_node_rel(bt, infos)
+            _aug_node_reachable(bt, infos); _aug_node_agg(bt, infos); _aug_path_cone(bt, infos)
+        o_sp = _obs_space_with_map({'rel': FixedVecSpace([15, 31]), 'reachable': EnumSpace(Flag2),
+                                    'agg': FixedVecSpace([2, 2, 2])})
+        return o_sp, _choice_space_with_paths(_PATHS_CONE), aug
+
+    if name == 'RV+PC':
+        def aug(bt, infos):
+            _aug_paths_room(bt, infos); _aug_node_rel(bt, infos)
+            _aug_node_reach_via(bt, infos); _aug_node_agg(bt, infos); _aug_path_cone(bt, infos)
+        return _obs_space_with_map(_RV_MAP), _choice_space_with_paths(_PATHS_CONE), aug
+
+    if name == 'RVe+PC':
+        holder = _ColTable()
+        def aug(bt, infos):
+            _aug_paths_room(bt, infos); _aug_node_rel(bt, infos)
+            _aug_node_reach_via(bt, infos); _aug_node_agg(bt, infos); _aug_path_cone(bt, infos)
+        o_sp = _obs_space_with_map({'rel': FixedVecSpace([15, 31]), 'reach_via': ColBagSpace(holder),
+                                    'agg': FixedVecSpace([2, 2, 2])})
+        c_sp = _choice_space_with_paths(DictAddSpace({
+            'x': ColLookupSpace(holder), 'room': EnumSpace(sts.Room),
+            'cone': FixedVecSpace([2, 2, 2]), 'reaches_burn': EnumSpace(Flag2)}))
+        return o_sp, c_sp, aug
 
     # Learned-table arms: same tensors/structure, lookup embeddings instead of sinusoids
     # for the small-integer coordinate features.
@@ -341,6 +554,31 @@ def task_spec(name):
                 seen |= frontier
             return float(sum(1 for i in seen if mi['rts'][i] == ELITE3))
         return 'reg', f
+
+    # Multi-hop routing: the correct option is distinguished by what's reachable BEYOND its
+    # immediate destination -- exactly the lookahead one-hop 'elite'/'rest' tasks don't exercise
+    # and the binary `reachable` bit collapses. These are the burning-elite-routing analogues.
+    if name == 'route_deep_elite':
+        def f(r, mi):
+            # deep[o] = is an elite reachable from option o at depth >= 2 (not o itself)?
+            deep = [1 if max((mi['maxE'][j] for j in mi['succ'][o]), default=0) >= 1 else 0
+                    for o in mi['opts']]
+            if sum(deep) in (0, len(deep)):
+                return None  # need it present AND distinguishable
+            xs = [int(x) for x in r['paths_offered']]
+            return min((k for k, d in enumerate(deep) if d), key=lambda k: xs[k])
+        return 'ce', f
+    if name == 'route_burning':
+        def f(r, mi):
+            if mi['burn'] is None:
+                return None
+            rc = mi['reach_col'][mi['burn']]
+            reaches = [1 if (rc >> mi['xs'][o]) & 1 else 0 for o in mi['opts']]
+            if sum(reaches) in (0, len(reaches)):
+                return None
+            xs = [int(x) for x in r['paths_offered']]
+            return min((k for k, b in enumerate(reaches) if b), key=lambda k: xs[k])
+        return 'ce', f
     raise ValueError(name)
 
 
