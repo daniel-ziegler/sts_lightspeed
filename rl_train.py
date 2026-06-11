@@ -290,25 +290,26 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
-CLEAR_BONUS = 0.2   # for beating the act-3 boss (a stop OR pushing on to act 4)
-KEY_VALUE = 0.1     # per act-4 key, earned once act 3 is cleared
-HEART_BONUS = 0.3   # for killing the Corrupt Heart
+CLEAR_BONUS = 0.0   # no separate act-3-clear bonus; clearing act 3 only earns its floor reward
+KEY_VALUE = 0.05    # per act-4 key, earned once act 3 is cleared
+HEART_BONUS = 0.6   # for killing the Corrupt Heart -- sized so a heart kill totals >= 1.0
 
 
 def compute_heart_reward(metrics: GameMetrics) -> float:
     """Heart-run reward, designed monotone in true progress while still rewarding partial keys.
 
-    Components: level (floor/190, caps 0.3) + CLEAR_BONUS once the act-3 boss is beaten
-    (a stop OR pushing on) + KEY_VALUE per key (earned only once act 3 is cleared) +
-    HEART_BONUS for the kill. The act-3-clear bonus is the fix for the old inversion: an
-    act-4 death ALSO cleared act 3, so it gets the same bonus as a stop -- and since it
-    always carries 3 keys vs a stop's <=3, it strictly outscores any act-3 stop. Terminal
-    ordering (floors 51 stop / 54 act-4 death / 55 heart): act3 0k 0.47 < 1k 0.57 < 2k 0.67
-    < 3-key act-4 death 0.78 < heart kill 1.09 -- strictly increasing.
+    Components: level (floor/190, caps 0.3) + KEY_VALUE per key (earned only once act 3 is
+    cleared) + HEART_BONUS for the kill. There is no separate act-3-clear bonus -- clearing
+    act 3 only earns its floor reward, so the agent isn't paid just to stop at the act-3 boss;
+    the reward comes from grabbing keys and reaching the heart. Monotonicity still holds across
+    the act-3-stop / act-4-death boundary without a clear bonus: an act-4 death has BOTH a
+    higher floor (>=52 vs the 51 act-3 boss) AND 3 keys vs an act-3 win's <=2, so it strictly
+    outscores any act-3 win on floor+keys alone. Terminal ordering (floors 51 win / 54 act-4
+    death / 55 heart): act3 0k 0.27 < 1k 0.32 < 2k 0.37 < 3-key act-4 death 0.43 < heart kill
+    1.04 -- strictly increasing, and a heart kill totals >= 1.0.
 
     Interior (UNDECIDED) telescopes out of the undiscounted return but shapes GAE credit:
-    act-discounted partial key credit during acts 1-3 gives early pickups a learning signal;
-    the act-3 clear is banked in full once in act 4."""
+    act-discounted partial key credit during acts 1-3 gives early pickups a learning signal."""
     level = min(metrics.floor_num / 190.0, 0.3)
     if metrics.outcome == sts.GameOutcome.UNDECIDED:
         if metrics.act >= 4:
