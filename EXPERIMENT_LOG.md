@@ -84,6 +84,14 @@ momentum preserved (reward change adds no params). Stacks on the cone feature + 
 entropy decay, so cone attribution is now entangled (user opted to deploy now). Watching for
 the heart-directed shift: less act-3 dawdling, higher key-rate / act-4 reach / heart kills.
 
+**Gradual lr decay to half @iter 910**: bases reset to the current effective lrs (policy
+3e-5→2e-5, value 1e-4→6.6667e-5) with lr-final-frac 0.66667→0.5, decay-start 185→910, steps
+100 — so lr holds at current (2e-5 / 6.67e-5) at iter 910 then geometrically halves to 1e-5 /
+3.33e-5 by ~iter 1010, no discontinuity. The schedule scales policy+value by one factor, so
+both halve (value re-fits to the new reward scale in the first few iters at 6.67e-5, well before
+it decays). All four changes (cone / 512 games / entropy decay / aggressive reward / lr halve)
+now stacked on heart1.
+
 ## 2026-06-08 (heart1 schedule + engine update @185)
 
 **heart1 lr decay engaged @iter 185** (pre-agreed condition met: kl 0.0045→0.0077, clipfrac
