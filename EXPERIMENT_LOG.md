@@ -75,6 +75,15 @@ momentum preserved. Repr-only window (850-895) stayed healthy: heart kills in th
 warm-start continuity exact. Watch emerald-key rate + act-4 reach over the next few dozen iters
 for the cone feature paying off.
 
+**More-aggressive heart reward @iter 910** (`446ad8c`): CLEAR_BONUS 0.2→0 (clearing act 3 only
+earns its floor reward -- no stop bonus), KEY_VALUE 0.1→0.05, HEART_BONUS 0.3→0.6 (heart kill
+totals ≥1.0). New terminal progression (floors 51/54/55): act3 0k 0.27 < 1k 0.32 < 2k 0.37 <
+3-key act-4 death 0.43 < heart kill 1.04 -- strictly monotone (act-4 death still outscores any
+act-3 win on floor+keys alone, so no clear bonus needed). Resumed from iter_910, optimizer
+momentum preserved (reward change adds no params). Stacks on the cone feature + 512 games +
+entropy decay, so cone attribution is now entangled (user opted to deploy now). Watching for
+the heart-directed shift: less act-3 dawdling, higher key-rate / act-4 reach / heart kills.
+
 ## 2026-06-08 (heart1 schedule + engine update @185)
 
 **heart1 lr decay engaged @iter 185** (pre-agreed condition met: kl 0.0045→0.0077, clipfrac
