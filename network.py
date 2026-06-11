@@ -8,7 +8,7 @@ from torch import nn
 import torch.nn.functional as F
 
 import slaythespire as sts
-from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace, EmbedCache
+from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace, EmbedCache, FixedVecEmbedding
 
 @dataclass
 class ModelHP:
@@ -380,6 +380,29 @@ obs_space = DictSpace({
     })),
 })
 
+# Zero-initialized embedding variants: a new DictAdd component built from one of these is an
+# exact no-op at init (it adds 0 to the token sum), so adding it to the obs/choice encoding
+# warm-starts an existing checkpoint bit-identically -- the component only starts to matter once
+# trained. Used for the per-path-choice forward-cone features added below.
+class ZeroInitIntSpace(IntSpace):
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            e = nn.Embedding(self.limit, dim)
+            nn.init.zeros_(e.weight)
+            return e
+        return cache.build(self, dim, make)
+
+
+class ZeroInitFixedVecSpace(FixedVecSpace):
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            e = FixedVecEmbedding(dim, self.limits)
+            nn.init.zeros_(e.proj.weight)
+            nn.init.zeros_(e.proj.bias)
+            return e
+        return cache.build(self, dim, make)
+
+
 choice_space = DictSpace({
     'cards': SequenceSpace(TupleAddSpace(card_space, upgrade_space, EnumSpace(sts.CardSelectScreenType))),
     'relics': SequenceSpace(relic_space),
@@ -392,10 +415,19 @@ choice_space = DictSpace({
         'info': EnumSpace(EventFixedInfo),
     })),
     # Each path option carries its destination's room type alongside the x coordinate, so
-    # option grounding is a lookup instead of a learned multi-hop attention program.
+    # option grounding is a lookup instead of a learned multi-hop attention program. It also
+    # carries a forward-cone summary of what taking it leads to -- the destination node's
+    # (minE, maxE, dist_rest) DAG aggregates (scaled) and a bit for whether the burning elite
+    # (emerald key) is reachable down this option. Precomputing the lookahead onto the option
+    # the policy scores is what makes multi-hop routing (e.g. reaching a burning elite 2-4 rows
+    # ahead) learnable -- the SL repr-lab showed raw per-node reachability isn't aggregated by
+    # the net at a realistic budget, while this per-choice cone solves it (EXPERIMENT_LOG
+    # 2026-06-10). Zero-init so it warm-starts existing checkpoints bit-identically.
     'paths': SequenceSpace(DictAddSpace({
         'x': FixedVecSpace([7]),
         'room': EnumSpace(sts.Room),
+        'cone': ZeroInitFixedVecSpace([2, 2, 2]),   # (minE, maxE, dist_rest) / MAP_AGG_CAP
+        'reaches_burn': ZeroInitIntSpace(2),
     })),
 })
 
@@ -738,6 +770,15 @@ def map_dag_features(x):
         elif succ[j]:
             dR[j] = min(MAP_AGG_CAP, 1 + min(dR[k] for k in succ[j]))
 
+    # Can each node forward-reach the burning elite (emerald key)? Reverse-y DP: a node reaches
+    # it iff it IS it or any successor does. (-1,-1 burningElite => no burning elite this map.)
+    bx, by = int(x.get('obs.map.burningEliteX', -1)), int(x.get('obs.map.burningEliteY', -1))
+    bn = idx.get((bx, by)) if bx >= 0 else None
+    reaches_burn = [False] * n
+    if bn is not None:
+        for j in sorted(range(n), key=lambda j: -ys[j]):
+            reaches_burn[j] = (j == bn) or any(reaches_burn[k] for k in succ[j])
+
     cur = idx.get((int(x['obs.mapX']), int(x['obs.mapY'])))
     if cur is not None:
         frontier = list(succ[cur])
@@ -760,10 +801,18 @@ def map_dag_features(x):
 
     ydest = int(x['obs.mapY']) + 1
     dest_rooms = []
+    opt_cone = []   # per offered option: the destination node's (minE, maxE, dist_rest)
+    opt_burn = []   # per offered option: does its forward cone reach the burning elite
     for px in x['paths_offered']:
         k = idx.get((int(px), ydest))
         dest_rooms.append(rts[k] if k is not None else 0)
-    return minE, maxE, dR, reach, dest_rooms
+        if k is not None:
+            opt_cone.append((minE[k], maxE[k], dR[k]))
+            opt_burn.append(reaches_burn[k])
+        else:
+            opt_cone.append((0, 0, MAP_AGG_CAP))
+            opt_burn.append(False)
+    return minE, maxE, dR, reach, dest_rooms, opt_cone, opt_burn
 
 
 def collate_fn(batch):
@@ -837,6 +886,8 @@ def collate_fn(batch):
             'value': {
                 'x': torch.full((len(batch), MAX_PATH_CHOICES, 1), -1, dtype=torch.int32),
                 'room': torch.full((len(batch), MAX_PATH_CHOICES), 0, dtype=torch.int32),
+                'cone': torch.zeros((len(batch), MAX_PATH_CHOICES, 3), dtype=torch.float32),
+                'reaches_burn': torch.zeros((len(batch), MAX_PATH_CHOICES), dtype=torch.int32),
             },
             'mask': torch.ones((len(batch), MAX_PATH_CHOICES), dtype=torch.bool)
         },
@@ -892,7 +943,7 @@ def collate_fn(batch):
         assert nodes_len <= MAX_MAP_NODES, f"Map nodes count {nodes_len} exceeds maximum {MAX_MAP_NODES}"
         
         # Create node data: raw structure + ego-relative coords, reachability, DAG aggregates
-        minE, maxE, dR, reach, dest_rooms = map_dag_features(x)
+        minE, maxE, dR, reach, dest_rooms, opt_cone, opt_burn = map_dag_features(x)
         # Burning-elite flag (emerald key). Records from before the field default to no flag.
         burn_x = int(x.get('obs.map.burningEliteX', -1))
         burn_y = int(x.get('obs.map.burningEliteY', -1))
@@ -942,6 +993,10 @@ def collate_fn(batch):
             batch_choices['paths']['value']['x'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
             batch_choices['paths']['value']['room'][i, :choice_paths_len] = torch.tensor(dest_rooms, dtype=torch.int32)
             aux_dest_room[i, :choice_paths_len] = torch.tensor(dest_rooms, dtype=torch.long)
+            batch_choices['paths']['value']['cone'][i, :choice_paths_len] = torch.tensor(
+                opt_cone, dtype=torch.float32) / MAP_AGG_CAP
+            batch_choices['paths']['value']['reaches_burn'][i, :choice_paths_len] = torch.tensor(
+                opt_burn, dtype=torch.int32)
         batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         fixed_actions = x['fixed_actions']
