@@ -58,6 +58,14 @@ collate_fn/network as ZERO-INIT DictAdd components → warm-starts heart1 bit-id
 learns to use them. Skip reach_via (no policy benefit). Non-path states keep the existing
 per-node agg + binary reachable (already in production) for the value head.
 
+**Deployed to heart1 @iter 850** (`1cbede1` net + `5db2284` lab; rl_train `<this commit>` adds a
+fresh-optimizer fallback when a warm-start changes the param set). Per-choice cone added as
+zero-init DictAdd components on the `paths` token (golden check: max |logit|/|value| diff = 0
+vs iter_850). Resumed bit-identically, 256 games, entropy floored 0.0167 — **representation
+change in isolation for 50 steps** (user call, cleaner attribution), then layer in entropy decay
+(0.0167→~0.0083) + num-games 256→512 at iter ~900. Fresh optimizer moments on resume (added
+params break the 2-group optimizer's saved state; net weights still load exactly).
+
 ## 2026-06-08 (heart1 schedule + engine update @185)
 
 **heart1 lr decay engaged @iter 185** (pre-agreed condition met: kl 0.0045→0.0077, clipfrac
