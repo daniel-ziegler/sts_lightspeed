@@ -84,6 +84,17 @@ momentum preserved (reward change adds no params). Stacks on the cone feature + 
 entropy decay, so cone attribution is now entangled (user opted to deploy now). Watching for
 the heart-directed shift: less act-3 dawdling, higher key-rate / act-4 reach / heart kills.
 
+**Cone-feature isolated effect (clean 45-iter window 850→895, before any schedule/reward
+change).** Windowed A/B vs matched pre-cone window 805-849 (identical hparams, 256 games/ent
+0.0167/lr 2e-5): avg_floor **+0.54** (sig), avg_keys **+0.026** (sig, marginal), win/act3/
+act4reach/heart all flat. Direct routing A/B (`eval_burn_route.py`, 3314 identical
+burning-reachable path decisions, iter_850's cone params load zero = pre-cone vs iter_895's 45
+trained iters): argmax picks a burning-reaching option **0.569 → 0.621 (+5.2pp)**, prob-mass
+0.563 → 0.598 (+3.5pp), vs 0.511 uniform. Verdict: the cone feature **works** -- the policy
+demonstrably learned to route to burning elites more (the capability), but the behavioral payoff
+was modest because the OLD reward (CLEAR_BONUS 0.2, KEY 0.1) under-incentivized chasing the
+emerald key / heart. Capability now meets incentive via the aggressive reward.
+
 **Gradual lr decay to half @iter 910**: bases reset to the current effective lrs (policy
 3e-5→2e-5, value 1e-4→6.6667e-5) with lr-final-frac 0.66667→0.5, decay-start 185→910, steps
 100 — so lr holds at current (2e-5 / 6.67e-5) at iter 910 then geometrically halves to 1e-5 /
