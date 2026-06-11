@@ -1346,6 +1346,12 @@ def main():
                 print(f"Loaded optimizer state from {optimizer_path}")
             except FileNotFoundError:
                 print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
+            except (ValueError, RuntimeError) as e:
+                # Param set changed since the checkpoint (e.g. a zero-init feature was added to
+                # the net for a warm-start) -> optimizer groups no longer match the saved state.
+                # Fall back to fresh moments; the net weights still load exactly.
+                print(f"Warning: optimizer state from {optimizer_path} incompatible with current "
+                      f"param set ({e}); starting with fresh optimizer state")
         
         service_net = combined_net
         
@@ -1397,6 +1403,12 @@ def main():
                 print(f"Loaded optimizer state from {optimizer_path}")
             except FileNotFoundError:
                 print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
+            except (ValueError, RuntimeError) as e:
+                # Param set changed since the checkpoint (e.g. a zero-init feature was added to
+                # the net for a warm-start) -> optimizer groups no longer match the saved state.
+                # Fall back to fresh moments; the net weights still load exactly.
+                print(f"Warning: optimizer state from {optimizer_path} incompatible with current "
+                      f"param set ({e}); starting with fresh optimizer state")
         
         orig_net = nets = service_net = net  # lol TODO
         print(f"Using single network (value_head={algo.requires_value_head})")
