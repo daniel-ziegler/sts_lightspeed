@@ -66,6 +66,15 @@ change in isolation for 50 steps** (user call, cleaner attribution), then layer 
 (0.0167→~0.0083) + num-games 256→512 at iter ~900. Fresh optimizer moments on resume (added
 params break the 2-group optimizer's saved state; net weights still load exactly).
 
+**Schedule changes layered in @iter 895→900** (after the 50-step repr-only window): num-games
+256→512, entropy decay restart 0.0166667→0.0083333 over 100 iters anchored at decay-start 900
+(holds at floor until 900 then halves), lr untouched (still 2e-5). Resume from iter_895 loaded
+optimizer state cleanly this time (the cone param set is now stable, so saved moments match) —
+momentum preserved. Repr-only window (850-895) stayed healthy: heart kills in the prior
+0.05-0.13 band, invdrops frozen at 256 (cone change is obs-only, doesn't touch the engine),
+warm-start continuity exact. Watch emerald-key rate + act-4 reach over the next few dozen iters
+for the cone feature paying off.
+
 ## 2026-06-08 (heart1 schedule + engine update @185)
 
 **heart1 lr decay engaged @iter 185** (pre-agreed condition met: kl 0.0045→0.0077, clipfrac
