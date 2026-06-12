@@ -224,7 +224,9 @@ int search::SimpleAgent::getIncomingDamage(const BattleContext &bc) const {
         }
 
         DamageInfo dInfo;
-        if (bc.player.hasRelic<R::RUNIC_DOME>()) {
+        // Hidden intents (Runic Dome): the current move may be a stale pre-roll placeholder,
+        // so estimate incoming damage flat instead of reading it.
+        if (bc.intentsHidden) {
             dInfo = {5*bc.gameContext->act, 1};
 
         } else {

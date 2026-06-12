@@ -816,7 +816,14 @@ static GameContext loadPreBattleState(const GameStateRecord &rec) {
                 bc.exitBattle(gc);
                 inBattle = false;
             } else {
-                search::Action(rec.actions[idx++]).execute(bc);
+                // Engine changes can make a recorded run play out differently (e.g. Runic Dome
+                // battles draw differently since deferred rolls); validate so divergence throws
+                // instead of executing a stale action on a mismatched state.
+                const search::Action a(rec.actions[idx++]);
+                if (!a.isValidAction(bc)) {
+                    throw std::runtime_error("loadPreBattleState: battle action diverged from prefix");
+                }
+                a.execute(bc);
             }
         } else {
             if (gc.outcome != GameOutcome::UNDECIDED) {
@@ -827,7 +834,11 @@ static GameContext loadPreBattleState(const GameStateRecord &rec) {
                 bc.init(gc);
                 inBattle = true;
             } else {
-                GameAction(rec.actions[idx++]).execute(gc);
+                const GameAction a(rec.actions[idx++]);
+                if (!a.isValidAction(gc)) {
+                    throw std::runtime_error("loadPreBattleState: game action diverged from prefix");
+                }
+                a.execute(gc);
             }
         }
     }
@@ -986,6 +997,7 @@ struct EvalStatesInfo {
     std::int64_t searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
     search::EvalWeights evalWeights;
     int simBudget = 0;
+    bool forceIntentsHidden = false;      // hideIntents=1: Runic Dome blindness without the relic
 
     double scoreSum = 0;
     int winCount = 0;
@@ -995,6 +1007,7 @@ struct EvalStatesInfo {
     std::int64_t goldLostSum = 0;   // gold escaped with thieves
     int parasiteCount = 0;          // battles ending with a pending Parasite implant
     std::int64_t maxHpGainSum = 0;  // max HP delta vs battle start
+    int skippedRecords = 0;         // prefixes that no longer replay on this engine
 };
 
 static void evalStatesRunner(EvalStatesInfo *info) {
@@ -1008,9 +1021,25 @@ static void evalStatesRunner(EvalStatesInfo *info) {
             idx = info->next++;
         }
 
-        GameContext gc = loadPreBattleState((*info->records)[idx]);
+        GameContext gc;
+        try {
+            gc = loadPreBattleState((*info->records)[idx]);
+        } catch (const std::runtime_error &) {
+            // Engine changes can invalidate recorded action prefixes (e.g. runs that picked
+            // Runic Dome predate deferred rolls). Deterministic per record, so paired arms
+            // skip identical subsets.
+            std::scoped_lock lock(info->m);
+            ++info->skippedRecords;
+            continue;
+        }
         BattleContext bc;
         bc.init(gc);
+        if (info->forceIntentsHidden) {
+            // Set after init: first-turn moves were already rolled (visible), matching a battle
+            // where intents become hidden from the first decision onward is approximated by
+            // hiding all subsequent rolls. Measures pure blindness; energy is unchanged.
+            bc.intentsHidden = true;
+        }
         const int startMaxHp = bc.player.maxHp;
 
         search::SearchAgent agent;
@@ -1107,6 +1136,7 @@ static int evalStates(int argc, const char *argv[]) {
         else if (key == "goldLoss") info.evalWeights.goldLossWeight = val;
         else if (key == "maxHpWeight") info.evalWeights.maxHpWeight = val;
         else if (key == "parasitePenalty") info.evalWeights.parasitePenalty = val;
+        else if (key == "hideIntents") info.forceIntentsHidden = val != 0;
         else throw std::runtime_error("eval_states: unknown param: " + key);
     }
 
@@ -1129,6 +1159,9 @@ static int evalStates(int argc, const char *argv[]) {
     const double winRate = info.n > 0 ? static_cast<double>(info.winCount) / info.n : 0.0;
     const double avgHp = info.winCount > 0 ? info.hpSum / info.winCount : 0.0;
     std::cout << "SCORE " << meanScore << ' ' << winRate << ' ' << avgHp << ' ' << info.n << std::endl;
+    if (info.skippedRecords > 0) {
+        std::cout << "SKIPPED " << info.skippedRecords << " unreplayable records" << std::endl;
+    }
     std::cout << "DETAIL goldLost=" << (info.n ? (double)info.goldLostSum / info.n : 0)
               << " parasiteRate=" << (info.n ? (double)info.parasiteCount / info.n : 0)
               << " maxHpGain=" << (info.n ? (double)info.maxHpGainSum / info.n : 0) << '\n';
