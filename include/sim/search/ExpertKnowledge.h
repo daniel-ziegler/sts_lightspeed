@@ -12,7 +12,7 @@
 namespace sts::search::Expert {
 
     int getPlayOrdering(CardId id);
-    int getBossRelicOrdering(RelicId id);
+    int getBossRelicOrdering(RelicId id, int ascension);
     int getObtainWeight(CardId id);
     int getObtainWeight(CardId id, bool upgraded);
 

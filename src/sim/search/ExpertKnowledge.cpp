@@ -200,19 +200,23 @@ int sts::search::Expert::getPlayOrdering(CardId id) {
 
 }
 
-int search::Expert::getBossRelicOrdering(RelicId id) {
+int search::Expert::getBossRelicOrdering(RelicId id, int ascension) {
+    // Runic Dome plays honestly now (hidden intents, deferred rolls); the searcher still plans
+    // over the exact intent distribution, so the blindness cost is ascension-dependent rather
+    // than ruinous. Measured paired @1000 sims: asc 0 (548 h1dev states) -0.8 eval-score
+    // (<1 HP/battle), -0.2pp battle wins; asc 16-20 (450 heart1 states) -4.7 score, -1.6pp.
+    // So +1 energy ranks just behind the unconditional energy relics at low ascension, and
+    // with the real-downside energy relics (Choker/Snecko tier) at high ascension.
+    if (id == RelicId::RUNIC_DOME) {
+        return ascension >= 10 ? 2 : 1;
+    }
+
     switch (id) {
         case RelicId::ECTOPLASM:
         case RelicId::COFFEE_DRIPPER:
         case RelicId::FUSION_HAMMER:
             return 0;
 
-        // Runic Dome plays honestly now (hidden intents, deferred rolls). Measured blindness
-        // cost for the searcher is small -- ~0.8 eval-score (<1 HP) per battle, -0.2pp battle
-        // wins on 548 paired h1dev states @1000 sims -- since it still plans over the exact
-        // intent distribution. +1 energy at that price slots just behind the unconditional
-        // energy relics.
-        case RelicId::RUNIC_DOME:
         case RelicId::PANDORAS_BOX:
         case RelicId::BUSTED_CROWN:
         case RelicId::CURSED_KEY:
