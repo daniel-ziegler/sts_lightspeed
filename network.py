@@ -510,12 +510,15 @@ class NN(nn.Module):
             nn.init.zeros_(self.value_head.bias)
 
 
-    def forward(self, batch: dict, return_aux: bool = False):
+    def forward(self, batch: dict, return_aux: bool = False, return_pooled: bool = False):
         """
         Process a batch of inputs through the network.
 
         With return_aux=True, additionally returns aux_room_logits
         [batch, MAX_PATH_CHOICES, n_rooms] for the destination-room auxiliary loss.
+        With return_pooled=True (value head required, exclusive with return_aux),
+        additionally returns the pooled trunk embedding [batch, dim] that the value
+        head reads — the attachment point for auxiliary prediction heads.
 
         Args:
             batch: Dictionary containing observation data and choices data.
@@ -618,6 +621,8 @@ class NN(nn.Module):
             values = self.value_head(pooled).squeeze(-1).float()  # [batch_size]
             if return_aux:
                 return choice_logits.clone(), values.clone(), aux_room_logits
+            if return_pooled:
+                return choice_logits.clone(), values.clone(), pooled
             return choice_logits.clone(), values.clone()
         else:
             if return_aux:
@@ -627,6 +632,24 @@ class NN(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
+
+
+class BattleOutcomeHead(nn.Module):
+    """Predicts a specific battle's ΔHP outcome (battle_buckets scheme) from the trunk's
+    pooled embedding and the encounter. The encounter is a HEAD-ONLY input — the trunk never
+    sees it, so the trunk representation stays identical to the policy/value net's and the
+    head is forced to read combat strength out of the state embedding and cross it with the
+    encounter here. out_dim = NUM_BUCKETS for the bucketed CE head, 1 for the scaled-float
+    (ΔHP / maxHP) regression head."""
+
+    def __init__(self, dim: int, out_dim: int):
+        super().__init__()
+        self.enc_embed = nn.Embedding(len(sts.MonsterEncounter), dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * dim, dim), nn.SiLU(), nn.Linear(dim, out_dim))
+
+    def forward(self, pooled: torch.Tensor, encounter: torch.Tensor) -> torch.Tensor:
+        return self.mlp(torch.cat([pooled, self.enc_embed(encounter)], dim=-1)).float()
 
 
 def load_network_backward_compatible(net: NN, state_dict: dict) -> NN:
