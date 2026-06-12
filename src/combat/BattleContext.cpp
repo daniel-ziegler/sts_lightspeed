@@ -28,6 +28,7 @@ void BattleContext::init_empty(const GameContext &gc) {
     floorNum = gc.floorNum;
 
     rng = Random(gc.seed+gc.floorNum);
+    intentsHidden = gc.relics.has(RelicId::RUNIC_DOME);
 
     ascension = gc.ascension;
     outcome = Outcome::UNDECIDED;

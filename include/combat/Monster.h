@@ -26,6 +26,29 @@ namespace sts {
         int attackCount = 1;
     };
 
+    // Volatile inputs to a monster's move roll, captured at the roll's true time. With Runic
+    // Dome (BattleContext::intentsHidden) the roll's rng draws are deferred until the move first
+    // becomes observable (the monster acting, or an intent query like Spot Weakness); everything
+    // mutable-state-dependent that getMoveForRoll reads is captured here at the original roll
+    // site, so the deferred evaluation is distributed exactly as an immediate one. Zeroed
+    // whenever no roll is pending (state equality compares it directly).
+    struct MonsterRollInputs {
+        std::int16_t curHp = 0;
+        std::int16_t maxHp = 0;
+        std::int16_t knightCurHp = 0;          // monster slot 0 (the Knight in Chosen+Mystics fights)
+        std::int16_t knightMaxHp = 0;
+        std::int16_t monsterTurnNumber = 0;    // Champ taunt / Collector mega debuff / Giant Head timers
+        std::int32_t miscInfo = 0;
+        std::int8_t aliveCount = 0;
+        std::int8_t monstersAlive = 0;
+        bool knightAlive = false;
+        bool playerConstricted = false;        // Spire Growth
+        bool asleep = false;                   // Lagavulin
+        bool halfDead = false;                 // Darkling reincarnate
+
+        bool operator==(const MonsterRollInputs &rhs) const = default;
+    };
+
     struct Monster {
 
         /*
@@ -81,6 +104,14 @@ namespace sts {
         // time eater has used haste
         // awakened one isPhase2
         int miscInfo = 0;
+
+        // Deferred move rolls (Runic Dome): how many roll evaluations have their rng draws
+        // postponed until the move becomes observable, plus the volatile inputs captured at the
+        // (latest) original roll site. Values >1 arise only from chained rerolls (Writhing Mass
+        // REACTIVE, Gremlin Leader rally) whose rolls read no volatile inputs, so keeping just
+        // the latest snapshot is exact. Both stay zeroed when nothing is pending.
+        std::uint8_t pendingMoveRolls = 0;
+        MonsterRollInputs rollInputs;
 
         Monster() = default;
         Monster(const Monster& rhs) = default;
@@ -156,9 +187,12 @@ namespace sts {
         [[nodiscard]] bool eitherLastTwo(MonsterMoveId moveId) const;
 
         void rollMove(BattleContext &bc);
+        void rollMoveFromInputs(BattleContext &bc, const MonsterRollInputs &in);  // immediate roll: draws rng now
+        void materializePendingMove(BattleContext &bc);  // evaluate deferred rolls; no-op when none pending
+        [[nodiscard]] static MonsterRollInputs captureRollInputs(const Monster &m, const BattleContext &bc);
 
         // todo make monsterData const as well and move logic to move actions
-        [[nodiscard]] MMID getMoveForRoll(BattleContext &bc, int &monsterData, int roll) const;
+        [[nodiscard]] MMID getMoveForRoll(BattleContext &bc, const MonsterRollInputs &in, int &monsterData, int roll) const;
 
         [[nodiscard]] int calculateDamageToPlayer(const BattleContext &bc, int baseDamage) const;
         void attackPlayerHelper(BattleContext &bc, int baseDamage, int times=1);

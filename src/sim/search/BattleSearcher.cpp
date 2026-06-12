@@ -93,6 +93,9 @@ namespace sts::search {
             hash_combine(hash, m.block);
             hash_combine(hash, m.statusBits);
             hash_combine(hash, static_cast<int>(m.moveHistory[0]));
+            // Pending vs already-rolled intent are different information sets (Runic Dome).
+            // The rollInputs snapshot is left to equalForSearch's exact comparison.
+            hash_combine(hash, static_cast<int>(m.pendingMoveRolls));
         }
 
         // Hash the hand as a multiset: combine per-card hashes COMMUTATIVELY (sum) so

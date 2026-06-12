@@ -61,6 +61,13 @@ namespace sts {
 
         Random rng;
 
+        // Runic Dome: monster intents are hidden from the player, so move rolls defer their rng
+        // until the move becomes observable (Monster::rollMove / materializePendingMove). Set
+        // from the GameContext's relics before monsters init (player.relicBits is populated too
+        // late for the first-turn rolls). Constant within a battle, so state hashing/equality
+        // don't need it.
+        bool intentsHidden = false;
+
         int ascension = 0;
         Outcome outcome = Outcome::UNDECIDED;
         InputState inputState = InputState::EXECUTING_ACTIONS;

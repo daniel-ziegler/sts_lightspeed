@@ -527,6 +527,163 @@ namespace drawdist {
 
 }
 
+namespace intentdist {
+
+    // Exactness check for Runic Dome's deferred move rolls. For each monster whose roll reads
+    // volatile state: defer a roll at state S1 (intentsHidden), mutate exactly that state, then
+    // materialize with the rng reseeded to a known stream. The result must match an immediate
+    // roll at S1 consuming the same stream, draw for draw (move, full history, miscInfo, and
+    // number of rng draws). "power" counts how often an immediate roll at the mutated state
+    // differs -- evidence the mutation matters and the test would catch a live (wrong) read.
+
+    struct CaseResult { int mismatches = 0; int power = 0; };
+
+    template <typename SetupF, typename MutateF>
+    CaseResult runCase(std::uint64_t seed, MonsterEncounter enc, MonsterId monsterId,
+                       SetupF setup, MutateF mutate, int trials, int pendingCount = 1) {
+        GameContext gc(CharacterClass::IRONCLAD, seed, 0);
+        BattleContext base;
+        base.init(gc, enc);
+        int mi = -1;
+        for (int i = 0; i < base.monsters.monsterCount; ++i) {
+            if (base.monsters.arr[i].id == monsterId) { mi = i; break; }
+        }
+        if (mi < 0) {
+            std::cerr << "verify_intent: monster not found in encounter" << std::endl;
+            std::exit(1);
+        }
+        setup(base, base.monsters.arr[mi]);
+
+        CaseResult r;
+        for (int t = 0; t < trials; ++t) {
+            const Random stream(seed * 1000003ULL + t);
+
+            BattleContext a = base;                    // immediate roll(s) at S1
+            a.intentsHidden = false;
+            a.rng = stream;
+            for (int k = 0; k < pendingCount; ++k) {
+                a.monsters.arr[mi].rollMove(a);
+            }
+
+            BattleContext b = base;                    // defer at S1, mutate, materialize
+            b.intentsHidden = true;
+            for (int k = 0; k < pendingCount; ++k) {
+                b.monsters.arr[mi].rollMove(b);        // consumes no rng
+            }
+            mutate(b);
+            b.rng = stream;
+            b.monsters.arr[mi].materializePendingMove(b);
+
+            BattleContext c = base;                    // immediate roll(s) at the mutated state
+            c.intentsHidden = false;
+            mutate(c);
+            c.rng = stream;
+            for (int k = 0; k < pendingCount; ++k) {
+                c.monsters.arr[mi].rollMove(c);
+            }
+
+            const auto &ma = a.monsters.arr[mi];
+            const auto &mb = b.monsters.arr[mi];
+            if (ma.moveHistory[0] != mb.moveHistory[0] || ma.moveHistory[1] != mb.moveHistory[1]
+                || ma.miscInfo != mb.miscInfo || a.rng.counter != b.rng.counter) {
+                ++r.mismatches;
+            }
+            if (c.monsters.arr[mi].moveHistory[0] != ma.moveHistory[0]) {
+                ++r.power;
+            }
+        }
+        return r;
+    }
+
+    void run(std::uint64_t seed, int trials) {
+        int failures = 0;
+        auto report = [&](const char *name, const CaseResult &r, bool expectPower) {
+            const bool ok = r.mismatches == 0 && (!expectPower || r.power > 0);
+            if (!ok) ++failures;
+            std::cout << name << ": mismatches=" << r.mismatches << "/" << trials
+                      << " power=" << r.power << "/" << trials
+                      << (ok ? " OK" : " FAIL") << std::endl;
+        };
+
+        report("champ hp+turn", runCase(seed, ME::CHAMP, MonsterId::THE_CHAMP,
+            [](BattleContext &bc, Monster &m) {
+                m.setMove(MMID::THE_CHAMP_DEFENSIVE_STANCE);
+                bc.turn = 2;  // (turnNumber+1) % 4 == 0 -> taunt branch live at S1
+            },
+            [](BattleContext &bc) {
+                bc.turn = 3;
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;  // anger branch if read live
+            }, trials), true);
+
+        report("collector turnNumber", runCase(seed, ME::COLLECTOR, MonsterId::THE_COLLECTOR,
+            [](BattleContext &bc, Monster &m) {
+                m.setMove(MMID::THE_COLLECTOR_FIREBALL);
+                bc.turn = 2;  // turnNumber == 3 -> mega debuff at S1
+            },
+            [](BattleContext &bc) { bc.turn = 5; }, trials), true);
+
+        report("centurion allyAlive", runCase(seed, ME::CENTURION_AND_HEALER, MonsterId::CENTURION,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::CENTURION_SLASH); },
+            [](BattleContext &bc) {
+                bc.monsters.arr[1].curHp = 0;  // mystic dead if read live
+                --bc.monsters.monstersAlive;
+            }, trials), true);
+
+        report("mystic knightHp", runCase(seed, ME::CENTURION_AND_HEALER, MonsterId::MYSTIC,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::MYSTIC_BUFF); },
+            [](BattleContext &bc) { bc.monsters.arr[0].curHp = 1; }, trials), true);
+
+        report("reptomancer spawnCap", runCase(seed, ME::REPTOMANCER, MonsterId::REPTOMANCER,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::REPTOMANCER_SNAKE_STRIKE); },
+            [](BattleContext &bc) { bc.monsters.monstersAlive = 4; }, trials), true);
+
+        report("spireGrowth constricted", runCase(seed, ME::SPIRE_GROWTH, MonsterId::SPIRE_GROWTH,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::SPIRE_GROWTH_QUICK_TACKLE); },
+            [](BattleContext &bc) { bc.player.debuff<PS::CONSTRICTED>(10); }, trials), true);
+
+        report("timeEater halfHp", runCase(seed, ME::TIME_EATER, MonsterId::TIME_EATER,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::TIME_EATER_REVERBERATE); },
+            [](BattleContext &bc) {
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;
+            }, trials), true);
+
+        report("lagavulin wake", runCase(seed, ME::LAGAVULIN, MonsterId::LAGAVULIN,
+            [](BattleContext &bc, Monster &m) { (void)bc; (void)m; },
+            [](BattleContext &bc) { bc.monsters.arr[0].setHasStatus<MS::ASLEEP>(false); },
+            trials), true);
+
+        report("darkling halfDead", runCase(seed, ME::THREE_DARKLINGS, MonsterId::DARKLING,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::DARKLING_NIP); },
+            [](BattleContext &bc) { bc.monsters.arr[0].halfDead = true; }, trials), true);
+
+        // Chained rerolls (Writhing Mass REACTIVE): three deferred rolls replay through
+        // history/miscInfo identically to three immediate ones. Its roll reads no volatile
+        // state, so the (aggressive) mutation must have no effect: power is expected 0.
+        report("writhingMass chain", runCase(seed, ME::WRITHING_MASS, MonsterId::WRITHING_MASS,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::WRITHING_MASS_FLAIL); },
+            [](BattleContext &bc) {
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;
+                bc.turn += 3;
+            }, trials, 3), false);
+
+        // Non-volatile control: Jaw Worm reads only history/ascension; mutation must not
+        // matter for either path.
+        report("jawWorm control", runCase(seed, ME::JAW_WORM, MonsterId::JAW_WORM,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::JAW_WORM_CHOMP); },
+            [](BattleContext &bc) {
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;
+                bc.turn += 3;
+            }, trials), false);
+
+        std::cout << (failures == 0 ? "ALL OK" : "FAILURES: " + std::to_string(failures)) << std::endl;
+    }
+
+}
+
 int mcts(int argc, const char *argv[]) {
     const auto saveFilePath = argv[2];
     const auto simulationCount = std::stoll(argv[3]);
@@ -1158,6 +1315,9 @@ int main(int argc, const char* argv[]) {
     } else if (command == "verify_draw_dist") {
         // verify_draw_dist <startSeed> <numSeeds> <trialsPerSeed>
         drawdist::run(std::stoull(argv[2]), std::stoi(argv[3]), std::stoi(argv[4]));
+    } else if (command == "verify_intent") {
+        // verify_intent <seed> <trials> -- deferred (Runic Dome) move-roll exactness checks
+        intentdist::run(std::stoull(argv[2]), std::stoi(argv[3]));
     } else if (command == "playground") {
         Action a = Actions::MakeTempCardInHand(CardInstance(CardId::DEFEND_RED), 1);
         std::cout << a << '\n';
