@@ -98,6 +98,9 @@ def load_run_data(filename):
         # Per-level heart-kill rate (heart runs only).
         **{f'heart_win_rates_asc{a}': np.array([d.get(f'heart_win_rate_asc{a}', np.nan) for d in data])
            for a in range(21)},
+        # Per-level game counts (for pooling / Wilson CIs).
+        **{f'num_games_asc{a}': np.array([d.get(f'num_games_asc{a}', 0) for d in data])
+           for a in range(21)},
     }
 
 # Load all runs
@@ -394,6 +397,74 @@ for _asc_run in _asc_runs:
     plt.show()
 if not _asc_runs:
     print("per-ascension figures skipped (no mixture runs loaded)")
+
+# %%
+# Per-ascension SNAPSHOT: win + heart-kill vs ascension level, pooled (game-weighted) over the
+# last POOL_ITERS iters. A single iter samples only ~24 games/level (±0.1 noise); pooling ~40
+# iters tightens that to a readable curve with Wilson CIs. This is the "where do we stand at each
+# ascension right now" view, complementary to the per-level-over-time figure above.
+import math
+POOL_ITERS = 40
+
+def _wilson(k, n, z=1.96):
+    if n == 0:
+        return (np.nan, np.nan, np.nan)
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return p, max(0.0, c - h), min(1.0, c + h)
+
+for _asc_run in _asc_runs:
+    is_heart = not np.all(np.isnan(_asc_run['heart_win_rates']))
+    # pool the last POOL_ITERS iters that actually have per-level games
+    has_games = np.array([_asc_run[f'num_games_asc{a}'] for a in range(21)]).sum(axis=0) > 0
+    idx = np.where(has_games)[0][-POOL_ITERS:]
+    if idx.size == 0:
+        continue
+    it0, it1 = int(_asc_run['iterations'][idx[0]]), int(_asc_run['iterations'][idx[-1]])
+    win_k = np.zeros(21); heart_k = np.zeros(21); n = np.zeros(21)
+    for a in range(21):
+        g = _asc_run[f'num_games_asc{a}'][idx]
+        n[a] = np.nansum(g)
+        win_k[a] = np.nansum(np.nan_to_num(_asc_run[f'win_rates_asc{a}'][idx]) * g)
+        if is_heart:
+            heart_k[a] = np.nansum(np.nan_to_num(_asc_run[f'heart_win_rates_asc{a}'][idx]) * g)
+    A = np.arange(21)
+    win = np.array([_wilson(win_k[a], n[a]) for a in A])
+    fig, ax = plt.subplots(figsize=(12, 6))
+    # win_rate = heart_win_rate + act3_win_rate: a "win" is a heart kill OR taking the act-3
+    # boss victory. The blue/red gap is act-3-only wins (not act-4 deaths).
+    series = [(win, 'steelblue', 'any win (heart kill or act-3 victory)')]
+    if is_heart:
+        series.append((np.array([_wilson(heart_k[a], n[a]) for a in A]), 'darkmagenta', 'heart kill'))
+    for s, color, lbl in series:
+        ax.plot(A, s[:, 0], '-o', color=color, lw=2, ms=4, label=lbl)
+        ax.fill_between(A, s[:, 1], s[:, 2], color=color, alpha=0.15)
+    # annotate each heart-kill point with its percentage
+    if is_heart:
+        heart = series[-1][0]
+        for a in A:
+            if not np.isnan(heart[a, 0]):
+                ax.annotate(f'{heart[a, 0] * 100:.0f}', (a, heart[a, 0]), textcoords='offset points',
+                            xytext=(0, -11), ha='center', fontsize=7, color='darkmagenta')
+    # band averages (game-weighted)
+    txt = []
+    for lo, hi in [(0, 5), (6, 9), (10, 15), (16, 20)]:
+        sel = list(range(lo, hi + 1)); nn = n[sel].sum()
+        ww = win_k[sel].sum() / nn if nn else np.nan
+        line = f"A{lo}-{hi}: win {ww:.2f}"
+        if is_heart:
+            line += f" heart {heart_k[sel].sum() / nn:.2f}" if nn else " heart  -"
+        txt.append(line + f" (n={int(nn)})")
+    ax.text(0.02, 0.03, "\n".join(txt), transform=ax.transAxes, fontsize=9, va='bottom',
+            family='monospace', bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.9))
+    ax.set_xticks(A); ax.set_xlabel('Ascension level'); ax.set_ylabel('Rate'); ax.set_ylim(0, 1)
+    ax.set_title(f"{_asc_run['label']}: per-ascension snapshot "
+                 f"(pooled iters {it0}-{it1}, ~{int(np.median(n))} games/level)")
+    ax.grid(True, alpha=0.3); ax.legend(loc='upper right')
+    plt.tight_layout()
+    plt.show()
 
 # %%
 # Heart-run progress: outcome decomposition (heart kills vs act-3-only wins vs reaching act 4)
