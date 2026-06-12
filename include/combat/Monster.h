@@ -189,6 +189,7 @@ namespace sts {
         void rollMove(BattleContext &bc);
         void rollMoveFromInputs(BattleContext &bc, const MonsterRollInputs &in);  // immediate roll: draws rng now
         void materializePendingMove(BattleContext &bc);  // evaluate deferred rolls; no-op when none pending
+        void cancelPendingMove();  // discard deferred rolls at a forced move override (see impl comment)
         [[nodiscard]] static MonsterRollInputs captureRollInputs(const Monster &m, const BattleContext &bc);
 
         // todo make monsterData const as well and move logic to move actions

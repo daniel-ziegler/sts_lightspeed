@@ -595,6 +595,63 @@ namespace intentdist {
         return r;
     }
 
+    // Forced-override exactness (cancelPendingMove): vanilla evaluates the roll R and then the
+    // override shifts it into moveHistory[1]; the deferred path discards R. Equivalence claim:
+    // the next roll after the override is distributed identically (its slot-1 reads are masked
+    // by the override move in slot 0), so we compare that roll draw-for-draw. "power" counts
+    // trials where the two paths' moveHistory[1] actually differ going into the next roll --
+    // i.e. an unmasked slot-1 read or roll-time miscInfo write would have been caught.
+    CaseResult runOverrideCase(std::uint64_t seed, MonsterEncounter enc, MonsterId monsterId,
+                               MMID overrideMove, int trials) {
+        GameContext gc(CharacterClass::IRONCLAD, seed, 0);
+        BattleContext base;
+        base.init(gc, enc);
+        int mi = -1;
+        for (int i = 0; i < base.monsters.monsterCount; ++i) {
+            if (base.monsters.arr[i].id == monsterId) { mi = i; break; }
+        }
+        if (mi < 0) {
+            std::cerr << "verify_intent: monster not found in encounter" << std::endl;
+            std::exit(1);
+        }
+
+        CaseResult r;
+        for (int t = 0; t < trials; ++t) {
+            const Random streamA(seed * 7777777ULL + t);
+            const Random streamB(seed * 1000003ULL + t);
+
+            BattleContext a = base;                    // vanilla: roll R, override, next roll
+            a.intentsHidden = false;
+            a.rng = streamA;
+            a.monsters.arr[mi].rollMove(a);
+            a.monsters.arr[mi].setMove(overrideMove);
+            const auto aHist1 = a.monsters.arr[mi].moveHistory[1];  // == R
+            a.rng = streamB;
+            a.monsters.arr[mi].rollMove(a);
+
+            BattleContext b = base;                    // deferred: defer, cancel at override, defer, materialize
+            b.intentsHidden = true;
+            b.monsters.arr[mi].rollMove(b);
+            b.monsters.arr[mi].cancelPendingMove();
+            b.monsters.arr[mi].setMove(overrideMove);
+            const bool historiesDiffered = b.monsters.arr[mi].moveHistory[1] != aHist1;
+            b.monsters.arr[mi].rollMove(b);
+            b.rng = streamB;
+            b.monsters.arr[mi].materializePendingMove(b);
+
+            const auto &ma = a.monsters.arr[mi];
+            const auto &mb = b.monsters.arr[mi];
+            if (ma.moveHistory[0] != mb.moveHistory[0] || ma.miscInfo != mb.miscInfo
+                || mb.pendingMoveRolls != 0 || a.rng.counter != b.rng.counter) {
+                ++r.mismatches;
+            }
+            if (historiesDiffered) {
+                ++r.power;
+            }
+        }
+        return r;
+    }
+
     void run(std::uint64_t seed, int trials) {
         int failures = 0;
         auto report = [&](const char *name, const CaseResult &r, bool expectPower) {
@@ -678,6 +735,17 @@ namespace intentdist {
                 m.curHp = m.maxHp / 4;
                 bc.turn += 3;
             }, trials), false);
+
+        // Forced overrides: dropping the deferred roll must leave the post-override roll
+        // distributed exactly as vanilla (which evaluated and then shadowed the roll).
+        report("override shelledParasite stun", runOverrideCase(seed, ME::SHELL_PARASITE,
+            MonsterId::SHELLED_PARASITE, MMID::SHELLED_PARASITE_STUNNED, trials), true);
+        report("override byrd stun", runOverrideCase(seed, ME::THREE_BYRDS,
+            MonsterId::BYRD, MMID::BYRD_STUNNED, trials), true);
+        report("override awakened rebirth", runOverrideCase(seed, ME::AWAKENED_ONE,
+            MonsterId::AWAKENED_ONE, MMID::AWAKENED_ONE_REBIRTH, trials), true);
+        report("override darkling regrow", runOverrideCase(seed, ME::THREE_DARKLINGS,
+            MonsterId::DARKLING, MMID::DARKLING_REGROW, trials), true);
 
         std::cout << (failures == 0 ? "ALL OK" : "FAILURES: " + std::to_string(failures)) << std::endl;
     }
