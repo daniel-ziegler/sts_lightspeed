@@ -15,6 +15,7 @@
 #include "constants/Potions.h"
 #include "constants/Events.h"
 #include "constants/Cards.h"
+#include "constants/CardPools.h"
 #include "constants/Relics.h"
 #include "constants/MonsterIds.h"
 #include "constants/PlayerStatusEffects.h"
@@ -94,6 +95,17 @@ PYBIND11_MODULE(slaythespire, m) {
     m.def("getFixedObservation", &py::getFixedObservation, "get observation array given a GameContext");
     m.def("getFixedObservationMaximums", &py::getFixedObservationMaximums, "get the defined maximum values of the observation space");
     m.def("getNNRepresentation", &py::getNNRepresentation, "get the neural network representation of a GameContext");
+    m.def("get_card_pool", [](CharacterClass cc, CardType type, CardRarity rarity) {
+        std::vector<CardId> out;
+        const int n = TypeRarityCardPool::getPoolSize(cc, type, rarity);
+        for (int i = 0; i < n; ++i) {
+            out.push_back(TypeRarityCardPool::getCardFromPool(cc, type, rarity, i));
+        }
+        return out;
+    }, "the engine's obtainable-card pool for a class/type/rarity (what card rewards draw from)");
+    m.def("get_colorless_card_pool", []() {
+        return std::vector<CardId>(srcColorlessCardPool, srcColorlessCardPool + srcColorlessCardPoolSize);
+    }, "the engine's colorless card pool");
 
     pybind11::class_<search::EvalWeights>(m, "EvalWeights")
         .def(pybind11::init<>())
