@@ -1094,6 +1094,9 @@ void _SwordBoomerangAction::operator()(BattleContext &bc) const {
 }
 
 void _SpotWeaknessAction::operator()(BattleContext &bc) const {
+    // The card reads the target's intent, so a roll deferred by Runic Dome resolves here (the
+    // rng consumption makes this play a chance event in the search).
+    bc.monsters.arr[target].materializePendingMove(bc);
     if (bc.monsters.arr[target].isAttacking()) {
         bc.player.buff<PS::STRENGTH>(strength);
     }

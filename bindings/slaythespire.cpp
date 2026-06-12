@@ -732,6 +732,7 @@ PYBIND11_MODULE(slaythespire, m) {
     pybind11::class_<BattleContext> battleContext(m, "BattleContext");
     battleContext.def_readwrite("turn", &BattleContext::turn)
         .def_readwrite("potionCount", &BattleContext::potionCount)
+        .def_readwrite("intents_hidden", &BattleContext::intentsHidden)
         .def_property_readonly("player", [](BattleContext &bc) -> Player& {
             return bc.player; 
         }, pybind11::return_value_policy::reference_internal)
@@ -805,6 +806,7 @@ PYBIND11_MODULE(slaythespire, m) {
                 m.moveHistory[0] = static_cast<MonsterMoveId>(arr[0]); 
                 m.moveHistory[1] = static_cast<MonsterMoveId>(arr[1]); 
             })
+        .def_readonly("pending_move_rolls", &Monster::pendingMoveRolls)
         .def_readwrite("artifact", &Monster::artifact)
         .def_readwrite("strength", &Monster::strength)
         .def_readwrite("vulnerable", &Monster::vulnerable)

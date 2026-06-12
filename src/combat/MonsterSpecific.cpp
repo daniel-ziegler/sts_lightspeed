@@ -336,6 +336,10 @@ void Monster::preBattleAction(BattleContext &bc) {
 }
 
 void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that do not appear in the Colosseum event, adding rollMove to bot is unnecessary, because if they die before rollMove would have been triggered, it can't affect the next fight
+    // A roll deferred by Runic Dome materializes here, the moment before the move is acted on.
+    // This runs inside the end-turn action, so the search sees the intent resolve as chance.
+    materializePendingMove(bc);
+
     const int asc = bc.ascension;
 
     const bool asc2 = bc.ascension >= 2;
@@ -1884,7 +1888,9 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
     }
 }
 
-MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll) const {
+// Reads of state that can change between a roll's true time and a deferred evaluation must go
+// through `in` (captured at the true roll time) rather than bc/this -- see MonsterRollInputs.
+MMID Monster::getMoveForRoll(BattleContext &bc, const MonsterRollInputs &in, int &monsterData, const int roll) const {
     const bool asc17 = bc.ascension >= 17;
     const bool asc18 = bc.ascension >= 18;
     const bool asc19 = bc.ascension >= 19;
@@ -2153,7 +2159,7 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
             // 2 Defend
             // 3 Fury
 
-            const auto mysticAlive = bc.monsters.getAliveCount() > 1;
+            const auto mysticAlive = in.aliveCount > 1;
 
             if (roll >= 65
                 && !lastTwoMoves(MMID::CENTURION_DEFEND)
@@ -2186,9 +2192,8 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
             // 3 buff
 
             const auto healNeedAmt = asc17 ? 21 : 16;
-            const auto &knight = bc.monsters.arr[0];
 
-            if (maxHp-curHp >= healNeedAmt || knight.isAlive() && knight.maxHp-knight.curHp >= healNeedAmt) {
+            if (in.maxHp-in.curHp >= healNeedAmt || in.knightAlive && in.knightMaxHp-in.knightCurHp >= healNeedAmt) {
                 return (MMID::MYSTIC_HEAL);
                 break;
             }
@@ -2496,7 +2501,7 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
         }
 
         case MonsterId::LAGAVULIN: // called first turn only
-            if (hasStatus<MS::ASLEEP>()) {
+            if (in.asleep) {
                 return (MMID::LAGAVULIN_SLEEP);
             } else {
                 return (MMID::LAGAVULIN_SIPHON_SOUL);
@@ -2611,7 +2616,7 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
             }
 
             int myRoll = roll;
-            const bool canSpawn = bc.monsters.monstersAlive < 4;
+            const bool canSpawn = in.monstersAlive < 4;
 
             while (true) {
                 if (myRoll < 33) {
@@ -2861,12 +2866,12 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
                 }
 
             } else {
-                if (curHp < maxHp / 2) {
+                if (in.curHp < in.maxHp / 2) {
                     monsterData |= 0x4;
                     return (MMID::THE_CHAMP_ANGER);
                     break;
 
-                } else if ((bc.getMonsterTurnNumber()+1) % 4 == 0) {
+                } else if ((in.monsterTurnNumber+1) % 4 == 0) {
                     return (MMID::THE_CHAMP_TAUNT);
                     break;
                 }
@@ -2914,12 +2919,12 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
             }
 
             // always uses mega debuff turn 4
-            if (bc.getMonsterTurnNumber() == 3) {
+            if (in.monsterTurnNumber == 3) {
                 return (MMID::THE_COLLECTOR_MEGA_DEBUFF);
                 break;
             }
 
-            const auto canUseSpawn = bc.monsters.monstersAlive < 3
+            const auto canUseSpawn = in.monstersAlive < 3
                     && !lastMove(MMID::THE_COLLECTOR_SPAWN);
 
             if (roll <= 25 && canUseSpawn) {
@@ -3020,7 +3025,7 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
                 }
             }
 
-            if (halfDead) {
+            if (in.halfDead) {
                 return MMID::DARKLING_REINCARNATE;
             }
 
@@ -3045,12 +3050,12 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
 
             } else {
                 // one of last two moves was darkling nip
-                return getMoveForRoll(bc, monsterData, bc.rng.random(0, 99));
+                return getMoveForRoll(bc, in, monsterData, bc.rng.random(0, 99));
             }
         }
 
         case MonsterId::SPIRE_GROWTH: {
-            const auto useConstrict = !bc.player.hasStatus<PS::CONSTRICTED>()
+            const auto useConstrict = !in.playerConstricted
                                       && !lastMove(MMID::SPIRE_GROWTH_CONSTRICT)
                                       && (asc17 || roll >= 50);
             if (useConstrict) {
@@ -3163,7 +3168,7 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
             // 1 glare
             // 2 it is time
             // 3 count
-            if (bc.getMonsterTurnNumber() >= 4) {
+            if (in.monsterTurnNumber >= 4) {
                 return MMID::GIANT_HEAD_IT_IS_TIME;
             }
 
@@ -3189,7 +3194,7 @@ MMID Monster::getMoveForRoll(BattleContext &bc, int &monsterData, const int roll
             // 4 head slam
             // 5 haste
             const bool usedHaste = miscInfo;
-            const bool underHalfHp = curHp < maxHp/2;
+            const bool underHalfHp = in.curHp < in.maxHp/2;
             if (!usedHaste && underHalfHp) {
                 return MonsterMoveId::TIME_EATER_HASTE;
             }

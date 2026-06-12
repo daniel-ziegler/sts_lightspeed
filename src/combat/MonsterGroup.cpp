@@ -648,7 +648,9 @@ void MonsterGroup::print(std::ostream &os, const BattleContext &bc) const {
         if (!arr[i].isDeadOrEscaped()) {
             DamageInfo dInfo = this->arr[i].getMoveBaseDamage(bc);
             os << s << "nextActionDamage: ";
-            if (dInfo.attackCount == 0) {
+            if (arr[i].pendingMoveRolls > 0) {
+                os << "? (intent hidden)";
+            } else if (dInfo.attackCount == 0) {
                 os << "-";
             } else {
                 int damage = this->arr[i].calculateDamageToPlayer(bc, dInfo.damage);

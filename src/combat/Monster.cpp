@@ -418,6 +418,7 @@ void Monster::die(BattleContext &bc) {
         halfDead = true;
         removeDebuffs();
         removeStatus<MS::CURIOSITY>();
+        cancelPendingMove();
         setMove(MonsterMoveId::AWAKENED_ONE_REBIRTH);
         bc.cardQueue.clear();
 
@@ -433,6 +434,7 @@ void Monster::die(BattleContext &bc) {
 
     } else if (hasStatus<MS::REGROW>()) {
         resetAllStatusEffects();
+        cancelPendingMove();
         setMove(MMID::DARKLING_REGROW);
         halfDead = true;
 
@@ -483,6 +485,7 @@ void Monster::attackedUnblockedHelper(BattleContext &bc, int damage) { // todo, 
     } else if (hasStatus<MS::PLATED_ARMOR>()) {
         decrementStatus<MS::PLATED_ARMOR>();
         if(!hasStatus<MS::PLATED_ARMOR>() && id == MonsterId::SHELLED_PARASITE) {
+            cancelPendingMove();
             setMove(MMID::SHELLED_PARASITE_STUNNED);
         }
 
@@ -493,6 +496,7 @@ void Monster::attackedUnblockedHelper(BattleContext &bc, int damage) { // todo, 
     } else if (hasStatus<MS::FLIGHT>() && damage > 0) {
         auto flight = getStatus<MS::FLIGHT>();
         if (flight == 1) {
+            cancelPendingMove();
             setMove(MMID::BYRD_STUNNED);
             setHasStatus<MS::FLIGHT>(false);
         }
@@ -630,21 +634,25 @@ void Monster::damage(BattleContext &bc, int damage) {
 
 void Monster::onHpLost(BattleContext &bc, int amount) {
     const bool atOrBelowHalf = curHp <= maxHp/2;
+    // The forced move overrides below discard any deferred roll (see cancelPendingMove).
     switch (id) {
         case MonsterId::ACID_SLIME_L:
             if (atOrBelowHalf) {
+                cancelPendingMove();
                 moveHistory[0] = MMID::ACID_SLIME_L_SPLIT;
             }
             break;
 
         case MonsterId::SLIME_BOSS:
             if (atOrBelowHalf) {
+                cancelPendingMove();
                 moveHistory[0] = MMID::SLIME_BOSS_SPLIT;
             }
             break;
 
         case MonsterId::SPIKE_SLIME_L:
             if (atOrBelowHalf) {
+                cancelPendingMove();
                 moveHistory[0] = MMID::SPIKE_SLIME_L_SPLIT;
             }
             break;
@@ -654,6 +662,7 @@ void Monster::onHpLost(BattleContext &bc, int amount) {
                 const int newModeShiftAmount = getStatus<MS::MODE_SHIFT>() - amount;
                 if (newModeShiftAmount <= 0) {
                     removeStatus<MS::MODE_SHIFT>();
+                    cancelPendingMove();
                     setMove(MMID::THE_GUARDIAN_DEFENSIVE_MODE);
                     bc.addToBot( Actions::MonsterGainBlock(idx, 20) );
                 } else {
@@ -764,12 +773,73 @@ bool Monster::eitherLastTwo(MonsterMoveId moveId) const {
 }
 
 void Monster::rollMove(BattleContext &bc) {
-    auto miscInfoCopy = miscInfo;
+    // Runic Dome: the player can't see intents, so the roll's rng draws are deferred until the
+    // move first becomes observable (materializePendingMove). The volatile inputs are captured
+    // now, at the real game's roll time, which keeps the deferred roll's distribution exactly
+    // equal to an immediate one.
+    if (bc.intentsHidden) {
+        rollInputs = captureRollInputs(*this, bc);
+        if (pendingMoveRolls < 255) {
+            ++pendingMoveRolls;
+        }
+        return;
+    }
+    rollMoveFromInputs(bc, captureRollInputs(*this, bc));
+}
 
-    const auto move = getMoveForRoll(bc, miscInfoCopy, bc.rng.random(99));
+void Monster::rollMoveFromInputs(BattleContext &bc, const MonsterRollInputs &in) {
+    auto miscInfoCopy = in.miscInfo;
+
+    const auto move = getMoveForRoll(bc, in, miscInfoCopy, bc.rng.random(99));
 
     miscInfo = miscInfoCopy;
     setMove(move);
+}
+
+void Monster::materializePendingMove(BattleContext &bc) {
+    // Replays deferred rolls in order; moveHistory and miscInfo evolve through the chain exactly
+    // as immediate rolls would have. Consumes rng, so inside the search this point becomes the
+    // chance event for the hidden intent.
+    int n = pendingMoveRolls;
+    pendingMoveRolls = 0;
+    MonsterRollInputs in = rollInputs;
+    rollInputs = MonsterRollInputs{};
+    for (int i = 0; i < n; ++i) {
+        rollMoveFromInputs(bc, in);
+        in.miscInfo = miscInfo;  // later chained rolls see the evolved value
+    }
+}
+
+void Monster::cancelPendingMove() {
+    // A forced move override (stun, slime split, Guardian mode shift, rebirth/regrow) discards
+    // any deferred roll rather than evaluating it. This matches the real game exactly because
+    // the overridden roll is unobservable there: splits overwrite the move without shifting and
+    // remove the monster; for setMove overrides the rolled move would sit in moveHistory[1] for
+    // exactly one subsequent roll, and every slot-1 read those monsters make (lastTwoMoves) is
+    // masked by the override move occupying slot 0. No override-able monster's roll mutates
+    // miscInfo (only Book of Stabbing / Gremlin Wizard / Champ do). verify_intent's override
+    // cases test this; revisit if an override-able monster gains a lastMoveBefore/eitherLastTwo
+    // check or a roll-time miscInfo write.
+    pendingMoveRolls = 0;
+    rollInputs = MonsterRollInputs{};
+}
+
+MonsterRollInputs Monster::captureRollInputs(const Monster &m, const BattleContext &bc) {
+    MonsterRollInputs in;
+    in.curHp = static_cast<std::int16_t>(m.curHp);
+    in.maxHp = static_cast<std::int16_t>(m.maxHp);
+    in.miscInfo = m.miscInfo;
+    const auto &knight = bc.monsters.arr[0];
+    in.knightCurHp = static_cast<std::int16_t>(knight.curHp);
+    in.knightMaxHp = static_cast<std::int16_t>(knight.maxHp);
+    in.knightAlive = knight.isAlive();
+    in.monsterTurnNumber = static_cast<std::int16_t>(bc.getMonsterTurnNumber());
+    in.aliveCount = static_cast<std::int8_t>(bc.monsters.getAliveCount());
+    in.monstersAlive = static_cast<std::int8_t>(bc.monsters.monstersAlive);
+    in.playerConstricted = bc.player.hasStatus<PS::CONSTRICTED>();
+    in.asleep = m.hasStatus<MS::ASLEEP>();
+    in.halfDead = m.halfDead;
+    return in;
 }
 
 void Monster::setMove(MMID moveId) {
@@ -805,6 +875,8 @@ bool Monster::operator==(const Monster &rhs) const {
            isEscapingB == rhs.isEscapingB &&
            moveHistory[0] == rhs.moveHistory[0] &&
            moveHistory[1] == rhs.moveHistory[1] &&
+           pendingMoveRolls == rhs.pendingMoveRolls &&
+           rollInputs == rhs.rollInputs &&
            miscInfo == rhs.miscInfo;
 }
 

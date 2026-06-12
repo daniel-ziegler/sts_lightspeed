@@ -527,6 +527,231 @@ namespace drawdist {
 
 }
 
+namespace intentdist {
+
+    // Exactness check for Runic Dome's deferred move rolls. For each monster whose roll reads
+    // volatile state: defer a roll at state S1 (intentsHidden), mutate exactly that state, then
+    // materialize with the rng reseeded to a known stream. The result must match an immediate
+    // roll at S1 consuming the same stream, draw for draw (move, full history, miscInfo, and
+    // number of rng draws). "power" counts how often an immediate roll at the mutated state
+    // differs -- evidence the mutation matters and the test would catch a live (wrong) read.
+
+    struct CaseResult { int mismatches = 0; int power = 0; };
+
+    template <typename SetupF, typename MutateF>
+    CaseResult runCase(std::uint64_t seed, MonsterEncounter enc, MonsterId monsterId,
+                       SetupF setup, MutateF mutate, int trials, int pendingCount = 1) {
+        GameContext gc(CharacterClass::IRONCLAD, seed, 0);
+        BattleContext base;
+        base.init(gc, enc);
+        int mi = -1;
+        for (int i = 0; i < base.monsters.monsterCount; ++i) {
+            if (base.monsters.arr[i].id == monsterId) { mi = i; break; }
+        }
+        if (mi < 0) {
+            std::cerr << "verify_intent: monster not found in encounter" << std::endl;
+            std::exit(1);
+        }
+        setup(base, base.monsters.arr[mi]);
+
+        CaseResult r;
+        for (int t = 0; t < trials; ++t) {
+            const Random stream(seed * 1000003ULL + t);
+
+            BattleContext a = base;                    // immediate roll(s) at S1
+            a.intentsHidden = false;
+            a.rng = stream;
+            for (int k = 0; k < pendingCount; ++k) {
+                a.monsters.arr[mi].rollMove(a);
+            }
+
+            BattleContext b = base;                    // defer at S1, mutate, materialize
+            b.intentsHidden = true;
+            for (int k = 0; k < pendingCount; ++k) {
+                b.monsters.arr[mi].rollMove(b);        // consumes no rng
+            }
+            mutate(b);
+            b.rng = stream;
+            b.monsters.arr[mi].materializePendingMove(b);
+
+            BattleContext c = base;                    // immediate roll(s) at the mutated state
+            c.intentsHidden = false;
+            mutate(c);
+            c.rng = stream;
+            for (int k = 0; k < pendingCount; ++k) {
+                c.monsters.arr[mi].rollMove(c);
+            }
+
+            const auto &ma = a.monsters.arr[mi];
+            const auto &mb = b.monsters.arr[mi];
+            if (ma.moveHistory[0] != mb.moveHistory[0] || ma.moveHistory[1] != mb.moveHistory[1]
+                || ma.miscInfo != mb.miscInfo || a.rng.counter != b.rng.counter) {
+                ++r.mismatches;
+            }
+            if (c.monsters.arr[mi].moveHistory[0] != ma.moveHistory[0]) {
+                ++r.power;
+            }
+        }
+        return r;
+    }
+
+    // Forced-override exactness (cancelPendingMove): vanilla evaluates the roll R and then the
+    // override shifts it into moveHistory[1]; the deferred path discards R. Equivalence claim:
+    // the next roll after the override is distributed identically (its slot-1 reads are masked
+    // by the override move in slot 0), so we compare that roll draw-for-draw. "power" counts
+    // trials where the two paths' moveHistory[1] actually differ going into the next roll --
+    // i.e. an unmasked slot-1 read or roll-time miscInfo write would have been caught.
+    CaseResult runOverrideCase(std::uint64_t seed, MonsterEncounter enc, MonsterId monsterId,
+                               MMID overrideMove, int trials) {
+        GameContext gc(CharacterClass::IRONCLAD, seed, 0);
+        BattleContext base;
+        base.init(gc, enc);
+        int mi = -1;
+        for (int i = 0; i < base.monsters.monsterCount; ++i) {
+            if (base.monsters.arr[i].id == monsterId) { mi = i; break; }
+        }
+        if (mi < 0) {
+            std::cerr << "verify_intent: monster not found in encounter" << std::endl;
+            std::exit(1);
+        }
+
+        CaseResult r;
+        for (int t = 0; t < trials; ++t) {
+            const Random streamA(seed * 7777777ULL + t);
+            const Random streamB(seed * 1000003ULL + t);
+
+            BattleContext a = base;                    // vanilla: roll R, override, next roll
+            a.intentsHidden = false;
+            a.rng = streamA;
+            a.monsters.arr[mi].rollMove(a);
+            a.monsters.arr[mi].setMove(overrideMove);
+            const auto aHist1 = a.monsters.arr[mi].moveHistory[1];  // == R
+            a.rng = streamB;
+            a.monsters.arr[mi].rollMove(a);
+
+            BattleContext b = base;                    // deferred: defer, cancel at override, defer, materialize
+            b.intentsHidden = true;
+            b.monsters.arr[mi].rollMove(b);
+            b.monsters.arr[mi].cancelPendingMove();
+            b.monsters.arr[mi].setMove(overrideMove);
+            const bool historiesDiffered = b.monsters.arr[mi].moveHistory[1] != aHist1;
+            b.monsters.arr[mi].rollMove(b);
+            b.rng = streamB;
+            b.monsters.arr[mi].materializePendingMove(b);
+
+            const auto &ma = a.monsters.arr[mi];
+            const auto &mb = b.monsters.arr[mi];
+            if (ma.moveHistory[0] != mb.moveHistory[0] || ma.miscInfo != mb.miscInfo
+                || mb.pendingMoveRolls != 0 || a.rng.counter != b.rng.counter) {
+                ++r.mismatches;
+            }
+            if (historiesDiffered) {
+                ++r.power;
+            }
+        }
+        return r;
+    }
+
+    void run(std::uint64_t seed, int trials) {
+        int failures = 0;
+        auto report = [&](const char *name, const CaseResult &r, bool expectPower) {
+            const bool ok = r.mismatches == 0 && (!expectPower || r.power > 0);
+            if (!ok) ++failures;
+            std::cout << name << ": mismatches=" << r.mismatches << "/" << trials
+                      << " power=" << r.power << "/" << trials
+                      << (ok ? " OK" : " FAIL") << std::endl;
+        };
+
+        report("champ hp+turn", runCase(seed, ME::CHAMP, MonsterId::THE_CHAMP,
+            [](BattleContext &bc, Monster &m) {
+                m.setMove(MMID::THE_CHAMP_DEFENSIVE_STANCE);
+                bc.turn = 2;  // (turnNumber+1) % 4 == 0 -> taunt branch live at S1
+            },
+            [](BattleContext &bc) {
+                bc.turn = 3;
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;  // anger branch if read live
+            }, trials), true);
+
+        report("collector turnNumber", runCase(seed, ME::COLLECTOR, MonsterId::THE_COLLECTOR,
+            [](BattleContext &bc, Monster &m) {
+                m.setMove(MMID::THE_COLLECTOR_FIREBALL);
+                bc.turn = 2;  // turnNumber == 3 -> mega debuff at S1
+            },
+            [](BattleContext &bc) { bc.turn = 5; }, trials), true);
+
+        report("centurion allyAlive", runCase(seed, ME::CENTURION_AND_HEALER, MonsterId::CENTURION,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::CENTURION_SLASH); },
+            [](BattleContext &bc) {
+                bc.monsters.arr[1].curHp = 0;  // mystic dead if read live
+                --bc.monsters.monstersAlive;
+            }, trials), true);
+
+        report("mystic knightHp", runCase(seed, ME::CENTURION_AND_HEALER, MonsterId::MYSTIC,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::MYSTIC_BUFF); },
+            [](BattleContext &bc) { bc.monsters.arr[0].curHp = 1; }, trials), true);
+
+        report("reptomancer spawnCap", runCase(seed, ME::REPTOMANCER, MonsterId::REPTOMANCER,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::REPTOMANCER_SNAKE_STRIKE); },
+            [](BattleContext &bc) { bc.monsters.monstersAlive = 4; }, trials), true);
+
+        report("spireGrowth constricted", runCase(seed, ME::SPIRE_GROWTH, MonsterId::SPIRE_GROWTH,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::SPIRE_GROWTH_QUICK_TACKLE); },
+            [](BattleContext &bc) { bc.player.debuff<PS::CONSTRICTED>(10); }, trials), true);
+
+        report("timeEater halfHp", runCase(seed, ME::TIME_EATER, MonsterId::TIME_EATER,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::TIME_EATER_REVERBERATE); },
+            [](BattleContext &bc) {
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;
+            }, trials), true);
+
+        report("lagavulin wake", runCase(seed, ME::LAGAVULIN, MonsterId::LAGAVULIN,
+            [](BattleContext &bc, Monster &m) { (void)bc; (void)m; },
+            [](BattleContext &bc) { bc.monsters.arr[0].setHasStatus<MS::ASLEEP>(false); },
+            trials), true);
+
+        report("darkling halfDead", runCase(seed, ME::THREE_DARKLINGS, MonsterId::DARKLING,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::DARKLING_NIP); },
+            [](BattleContext &bc) { bc.monsters.arr[0].halfDead = true; }, trials), true);
+
+        // Chained rerolls (Writhing Mass REACTIVE): three deferred rolls replay through
+        // history/miscInfo identically to three immediate ones. Its roll reads no volatile
+        // state, so the (aggressive) mutation must have no effect: power is expected 0.
+        report("writhingMass chain", runCase(seed, ME::WRITHING_MASS, MonsterId::WRITHING_MASS,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::WRITHING_MASS_FLAIL); },
+            [](BattleContext &bc) {
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;
+                bc.turn += 3;
+            }, trials, 3), false);
+
+        // Non-volatile control: Jaw Worm reads only history/ascension; mutation must not
+        // matter for either path.
+        report("jawWorm control", runCase(seed, ME::JAW_WORM, MonsterId::JAW_WORM,
+            [](BattleContext &bc, Monster &m) { m.setMove(MMID::JAW_WORM_CHOMP); },
+            [](BattleContext &bc) {
+                auto &m = bc.monsters.arr[0];
+                m.curHp = m.maxHp / 4;
+                bc.turn += 3;
+            }, trials), false);
+
+        // Forced overrides: dropping the deferred roll must leave the post-override roll
+        // distributed exactly as vanilla (which evaluated and then shadowed the roll).
+        report("override shelledParasite stun", runOverrideCase(seed, ME::SHELL_PARASITE,
+            MonsterId::SHELLED_PARASITE, MMID::SHELLED_PARASITE_STUNNED, trials), true);
+        report("override byrd stun", runOverrideCase(seed, ME::THREE_BYRDS,
+            MonsterId::BYRD, MMID::BYRD_STUNNED, trials), true);
+        report("override awakened rebirth", runOverrideCase(seed, ME::AWAKENED_ONE,
+            MonsterId::AWAKENED_ONE, MMID::AWAKENED_ONE_REBIRTH, trials), true);
+        report("override darkling regrow", runOverrideCase(seed, ME::THREE_DARKLINGS,
+            MonsterId::DARKLING, MMID::DARKLING_REGROW, trials), true);
+
+        std::cout << (failures == 0 ? "ALL OK" : "FAILURES: " + std::to_string(failures)) << std::endl;
+    }
+
+}
+
 int mcts(int argc, const char *argv[]) {
     const auto saveFilePath = argv[2];
     const auto simulationCount = std::stoll(argv[3]);
@@ -591,7 +816,14 @@ static GameContext loadPreBattleState(const GameStateRecord &rec) {
                 bc.exitBattle(gc);
                 inBattle = false;
             } else {
-                search::Action(rec.actions[idx++]).execute(bc);
+                // Engine changes can make a recorded run play out differently (e.g. Runic Dome
+                // battles draw differently since deferred rolls); validate so divergence throws
+                // instead of executing a stale action on a mismatched state.
+                const search::Action a(rec.actions[idx++]);
+                if (!a.isValidAction(bc)) {
+                    throw std::runtime_error("loadPreBattleState: battle action diverged from prefix");
+                }
+                a.execute(bc);
             }
         } else {
             if (gc.outcome != GameOutcome::UNDECIDED) {
@@ -602,7 +834,11 @@ static GameContext loadPreBattleState(const GameStateRecord &rec) {
                 bc.init(gc);
                 inBattle = true;
             } else {
-                GameAction(rec.actions[idx++]).execute(gc);
+                const GameAction a(rec.actions[idx++]);
+                if (!a.isValidAction(gc)) {
+                    throw std::runtime_error("loadPreBattleState: game action diverged from prefix");
+                }
+                a.execute(gc);
             }
         }
     }
@@ -761,11 +997,17 @@ struct EvalStatesInfo {
     std::int64_t searchTimeMicros = 0;    // >0: search by time budget (us) instead of rollout count
     search::EvalWeights evalWeights;
     int simBudget = 0;
+    bool forceIntentsHidden = false;      // hideIntents=1: Runic Dome blindness without the relic
 
     double scoreSum = 0;
     int winCount = 0;
     double hpSum = 0;
     int n = 0;
+    // battle-end detail metrics (victims of the objective's blind spots)
+    std::int64_t goldLostSum = 0;   // gold escaped with thieves
+    int parasiteCount = 0;          // battles ending with a pending Parasite implant
+    std::int64_t maxHpGainSum = 0;  // max HP delta vs battle start
+    int skippedRecords = 0;         // prefixes that no longer replay on this engine
 };
 
 static void evalStatesRunner(EvalStatesInfo *info) {
@@ -779,9 +1021,26 @@ static void evalStatesRunner(EvalStatesInfo *info) {
             idx = info->next++;
         }
 
-        GameContext gc = loadPreBattleState((*info->records)[idx]);
+        GameContext gc;
+        try {
+            gc = loadPreBattleState((*info->records)[idx]);
+        } catch (const std::runtime_error &) {
+            // Engine changes can invalidate recorded action prefixes (e.g. runs that picked
+            // Runic Dome predate deferred rolls). Deterministic per record, so paired arms
+            // skip identical subsets.
+            std::scoped_lock lock(info->m);
+            ++info->skippedRecords;
+            continue;
+        }
         BattleContext bc;
         bc.init(gc);
+        if (info->forceIntentsHidden) {
+            // Set after init: first-turn moves were already rolled (visible), matching a battle
+            // where intents become hidden from the first decision onward is approximated by
+            // hiding all subsequent rolls. Measures pure blindness; energy is unchanged.
+            bc.intentsHidden = true;
+        }
+        const int startMaxHp = bc.player.maxHp;
 
         search::SearchAgent agent;
         agent.simulationCountBase = info->simBudget;
@@ -810,9 +1069,25 @@ static void evalStatesRunner(EvalStatesInfo *info) {
         // what the player actually carries forward.
         const double score = dead ? -200.0 : (bc.postBattleHealedHp() + 10.0 * bc.potionCount);
 
+        std::int64_t goldLost = 0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const auto &m = bc.monsters.arr[i];
+            const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
+            const bool escaped = m.curHp > 0 && (m.moveHistory[0] == MonsterMoveId::LOOTER_ESCAPE ||
+                                                 m.moveHistory[0] == MonsterMoveId::MUGGER_ESCAPE);
+            if (thief && escaped) goldLost += m.miscInfo;
+        }
+        const bool pendingParasite = bc.monsters.arr[0].id == MonsterId::WRITHING_MASS
+                && bc.monsters.arr[0].miscInfo
+                && (!bc.player.hasRelic<RelicId::OMAMORI>()
+                    || gc.relics.getRelicValue(RelicId::OMAMORI) == 0);
+
         {
             std::scoped_lock lock(info->m);
             info->stats.add(agent.searchStats);
+            info->goldLostSum += goldLost;
+            info->parasiteCount += pendingParasite ? 1 : 0;
+            info->maxHpGainSum += bc.player.maxHp - startMaxHp;
             info->scoreSum += score;
             if (!dead) {
                 ++info->winCount;
@@ -861,6 +1136,7 @@ static int evalStates(int argc, const char *argv[]) {
         else if (key == "goldLoss") info.evalWeights.goldLossWeight = val;
         else if (key == "maxHpWeight") info.evalWeights.maxHpWeight = val;
         else if (key == "parasitePenalty") info.evalWeights.parasitePenalty = val;
+        else if (key == "hideIntents") info.forceIntentsHidden = val != 0;
         else throw std::runtime_error("eval_states: unknown param: " + key);
     }
 
@@ -883,6 +1159,12 @@ static int evalStates(int argc, const char *argv[]) {
     const double winRate = info.n > 0 ? static_cast<double>(info.winCount) / info.n : 0.0;
     const double avgHp = info.winCount > 0 ? info.hpSum / info.winCount : 0.0;
     std::cout << "SCORE " << meanScore << ' ' << winRate << ' ' << avgHp << ' ' << info.n << std::endl;
+    if (info.skippedRecords > 0) {
+        std::cout << "SKIPPED " << info.skippedRecords << " unreplayable records" << std::endl;
+    }
+    std::cout << "DETAIL goldLost=" << (info.n ? (double)info.goldLostSum / info.n : 0)
+              << " parasiteRate=" << (info.n ? (double)info.parasiteCount / info.n : 0)
+              << " maxHpGain=" << (info.n ? (double)info.maxHpGainSum / info.n : 0) << '\n';
     const auto &st = info.stats;
     std::cout << "STATS steps=" << st.steps
               << " nodesCreated=" << st.nodesCreated
@@ -1134,6 +1416,9 @@ int main(int argc, const char* argv[]) {
     } else if (command == "verify_draw_dist") {
         // verify_draw_dist <startSeed> <numSeeds> <trialsPerSeed>
         drawdist::run(std::stoull(argv[2]), std::stoi(argv[3]), std::stoi(argv[4]));
+    } else if (command == "verify_intent") {
+        // verify_intent <seed> <trials> -- deferred (Runic Dome) move-roll exactness checks
+        intentdist::run(std::stoull(argv[2]), std::stoi(argv[3]));
     } else if (command == "playground") {
         Action a = Actions::MakeTempCardInHand(CardInstance(CardId::DEFEND_RED), 1);
         std::cout << a << '\n';
