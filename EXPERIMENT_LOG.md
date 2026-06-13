@@ -18,6 +18,68 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-12 (battle-outcome prediction: pretraining/aux task — design + datagen + SL gate launched)
+
+**Hypothesis**: making the trunk predict a SPECIFIC battle's ΔHP from (state, encounter) teaches
+combat-strength features the value/policy heads learn only weakly. Gate = held-out value EV on
+heart1 episodes (battle_value_sl.py; protocol = value_sl.py's seed-split). Design locked in
+`BATTLE_OUTCOME_PLAN.md`: 20-bucket %-of-maxHP output (DEATH / 5% damage bins / EXACT-0 / gains
+5%-fine to +20 then coarse — Burning Blood puts modal easy-win at ~+6HP) vs scaled-float
+comparison; encounter is HEAD-ONLY (trunk inputs identical to policy net → clean transfer).
+
+**Infra** (commits e0a411f, 108c65c, 727d102): `GameContext.copy()` + `playout_battle(gc,
+encounter=)` override bindings; all battle randomness (env + searcher) derives from
+`gc.seed+floorNum`, so seed reassignment on a copy = full honest reroll (verified 8/8 distinct).
+⚠ static `cardColors` table misaligned (Bullet Time→RED) — add-card mutation pool uses the
+engine's real reward pools (`get_card_pool`) instead. `gen_battle_outcomes.py`: heart1-iter-1035
+policy plays, every battle entry snapshotted, variants simmed to completion (2 real rerolls +
+6 deck mutations + 2 alt encounters from empirical (act,kind) pools); episode-schema parquet.
+Datagen on AWS spot c7a.16xlarge (~165 rows/game, 2000 games train + 120-game val with
+32 rerolls/(state,enc) for distribution-level eval). NOTE: datagen engine predates the Runic
+Dome merge (acabcd4) — Dome battles in the data are intent-clairvoyant (<1 HP/battle, accepted).
+
+**SL experiment queue** (heart1 box GPU; data 338k train / 201k val rows). Value-EV gate
+(held-out, seed-split; baseline `value_base` **0.8079**):
+
+| variant | val EV | |
+|---|---|---|
+| value_base / value_lr1e-4 | 0.8079 / 0.8048 | from-scratch baseline |
+| probe_random (frozen random trunk) | 0.6449 | linear-probe floor |
+| probe_b20 / probe_b0 (frozen battle-pretrained) | 0.6340 / 0.6430 | **at the random floor** |
+| finetune_b20 / finetune_b0 (warm-start, all params) | 0.7832 / 0.7814 | below baseline |
+| mt_b20_c1 / mt_b0_c1 / mt_b20_c03 (joint) | 0.7882 / 0.7899 / 0.7904 | below baseline |
+
+**Verdict: NEGATIVE — battle-outcome prediction does not improve the value fit, and mildly
+competes with it.** (1) Frozen battle-pretrained trunks probe at the random-init floor → the
+representation has ~zero linearly-decodable value signal beyond random projections
+(caveat-independent). (2) Warm-start and joint training all land ~2-3pp *below* from-scratch,
+across both head types and coef 1.0/0.3. (3) Distribution-level head eval (dedicated val,
+6279 groups × 32 rerolls; irreducible CE floor 1.59 raw / ~1.69 Miller-Madow): the battle head
+is itself a *reasonable* predictor — bucket CE 1.936 (KL ~0.34 above floor, ~0.24 bias-corrected;
+74% of the marginal→floor gap captured), float mean-ΔHP MAE 4.4% of maxHP (~3.5 HP). So the
+negative is not unlearnability. (4) The multitask heads are *worse* battle predictors than the
+dedicated pretrain (CE 1.98 vs 1.94; MSE 0.0069 vs 0.0044) — the two tasks share little useful
+structure and mildly interfere in a shared trunk.
+
+**Caveats.** The value-EV baseline is 0.81 (dense floor-bonus returns nearly saturated by
+trivial features — floor/HP/ascension), so the gate has limited headroom for *any* auxiliary
+signal and is a weak discriminator vs the old sparse 0.42-ceiling regime. And the gate measures
+only value EV — it does NOT test whether the aux loss helps the *policy* representation during
+RL. Per BATTLE_OUTCOME_PLAN.md's decision gate (no EV win + flat probe transfer ⇒ stop before RL
+spend), **Phase 4 RL integration is NOT justified on this evidence**; held pending user call.
+Results: `lambda_results/bvsl_results.jsonl`. Spot box terminated (338k+201k rows, ~$5, 3.2h).
+
+## 2026-06-11 (MCTS session: Runic Dome intent clairvoyance fixed)
+
+**Last known intent cheat closed** (`boss-eval@2563b1d`): with Runic Dome the search planned
+against the concrete rolled move; rolls now defer their rng under `bc.intentsHidden` with the
+volatile roll inputs snapshotted at the true roll time, materializing inside END_TURN (chance
+node) or at Spot Weakness. Distribution exactly vanilla — verify_intent harness 0/22000
+mismatches; winrate_mt byte-identical gate-off; gate-on diverges in exactly the 26/200
+Dome-picking games. **Open follow-up:** expert boss-relic picker still ranks Dome as the #1
+pick (ordering -1, tuned under clairvoyance) — needs re-rank + deployment gate; honest-Dome
+games are presumably weaker now until that lands. Details in COORD.md.
+
 ## 2026-06-10 (map-SL revival: choice-dependent reachability vs per-choice cone aggregate)
 
 **Motivation.** heart1 routes poorly to burning elites (emerald key, usually 2-4 rows ahead) —

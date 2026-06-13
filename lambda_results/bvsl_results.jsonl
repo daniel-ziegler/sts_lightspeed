@@ -1,0 +1,16 @@
+{"name": "value_base", "mode": "value", "buckets": 20, "ckpt": null, "finetune": false, "lr": 0.0003, "best_val_ev": 0.8078856068489149, "best_epoch": 2, "baseline_val_ev": 0.8176160241809965, "secs": 3204}
+{"name": "value_lr1e-4", "mode": "value", "buckets": 20, "ckpt": null, "finetune": false, "lr": 0.0001, "best_val_ev": 0.8048261952952915, "best_epoch": 4, "baseline_val_ev": 0.8121034987858302, "secs": 4099}
+{"name": "probe_random", "mode": "probe", "buckets": 20, "ckpt": null, "finetune": false, "lr": 0.001, "best_val_ev": 0.6448715489143548, "best_epoch": 19, "baseline_val_ev": 0.8097943288485492, "secs": 5414}
+{"name": "pretrain_b20", "mode": "pretrain", "buckets": 20, "best": 1.9264368234725842, "metric": "battle_ce", "best_epoch": 4, "ckpt_out": "pre_b20.pt", "secs": 6186}
+{"name": "pretrain_b0", "mode": "pretrain", "buckets": 0, "best": 0.01657620644114758, "metric": "battle_mse", "best_epoch": 6, "ckpt_out": "pre_b0.pt", "secs": 7742}
+{"name": "probe_b20", "mode": "probe", "buckets": 20, "ckpt": "pre_b20.pt", "finetune": false, "lr": 0.001, "best_val_ev": 0.6340248589879505, "best_epoch": 15, "baseline_val_ev": 0.8044720756832027, "secs": 5434}
+{"name": "probe_b0", "mode": "probe", "buckets": 0, "ckpt": "pre_b0.pt", "finetune": false, "lr": 0.001, "best_val_ev": 0.6430484117541548, "best_epoch": 18, "baseline_val_ev": 0.8051397484857776, "secs": 5297}
+{"name": "finetune_b20", "mode": "probe", "buckets": 20, "ckpt": "pre_b20.pt", "finetune": true, "lr": 0.0001, "best_val_ev": 0.7831559474062899, "best_epoch": 2, "baseline_val_ev": 0.7988005952382009, "secs": 3223}
+{"name": "finetune_b0", "mode": "probe", "buckets": 0, "ckpt": "pre_b0.pt", "finetune": true, "lr": 0.0001, "best_val_ev": 0.7814250227287266, "best_epoch": 1, "baseline_val_ev": 0.8000465834841409, "secs": 2747}
+{"name": "mt_b20_c1", "mode": "multitask", "buckets": 20, "coef": 1.0, "best_val_ev": 0.7881788694600336, "best_epoch": 2, "baseline_val_ev": 0.7997978325412058, "secs": 6752}
+{"name": "mt_b0_c1", "mode": "multitask", "buckets": 0, "coef": 1.0, "best_val_ev": 0.789872892966448, "best_epoch": 3, "baseline_val_ev": 0.8027746736983254, "secs": 7590}
+{"name": "mt_b20_c03", "mode": "multitask", "buckets": 20, "coef": 0.3, "best_val_ev": 0.7904319773438973, "best_epoch": 1, "baseline_val_ev": 0.8027770388869695, "secs": 5644}
+{"name": "eval_pre_b20", "mode": "evalhead", "buckets": 20, "ckpt": "pre_b20.pt", "n_groups": 6279, "mean_ce": 1.9363717711687107, "emp_entropy": 1.5923674106778805, "mean_kl": 0.3440043604908303, "exp_acc": 0.31090738971173754}
+{"name": "eval_pre_b0", "mode": "evalhead", "buckets": 0, "ckpt": "pre_b0.pt", "n_groups": 6279, "mean_mse": 0.004359803932924717, "mean_mae": 0.044056656335766116}
+{"name": "eval_mt_b20", "mode": "evalhead", "buckets": 20, "ckpt": "mt_b20.pt", "n_groups": 6279, "mean_ce": 1.9804934209963474, "emp_entropy": 1.5923674106778805, "mean_kl": 0.38812601031846694, "exp_acc": 0.29916188883580186}
+{"name": "eval_mt_b0", "mode": "evalhead", "buckets": 0, "ckpt": "mt_b0.pt", "n_groups": 6279, "mean_mse": 0.006912789706575647, "mean_mae": 0.05702113800736852}
