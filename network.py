@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
+import torch.utils.checkpoint  # submodule isn't auto-imported by `import torch`; forward() needs it
 
 import slaythespire as sts
 from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace, EmbedCache, FixedVecEmbedding
