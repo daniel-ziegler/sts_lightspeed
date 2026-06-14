@@ -21,23 +21,27 @@ import threading
 
 import optuna
 
-# Float eval_states params to tune.
+# Float eval_states params to tune. Exploration (det + chance UCB constants) is tuned jointly
+# with the rollout/eval gradation knobs: the richer value signal may shift the search's optimum.
 SPACE = {
-    "lossDamageWeight": (0.0, 0.2, False),
+    "lossDamageWeight":  (0.0, 0.2, False),
+    "exploration":       (3.0, 60.0, True),
+    "explorationChance": (3.0, 60.0, True),
 }
 # Env knobs to tune (int, per-mille). name -> (env var, lo, hi).
 ENV_SPACE = {
     "cardEps":   ("STS_ROLLOUT_CARD_EPSILON",   0, 400),
     "potionEps": ("STS_ROLLOUT_POTION_EPSILON", 0, 400),
 }
-# Production search config -- eval_states defaults are stale, so pin the deployed values.
+# Pinned at production (eval_states' own widening defaults are stale). Exploration is in SPACE.
 FIXED = {
-    "exploration": 25.0, "explorationChance": 25.0,
     "wideningC": 3.7028, "wideningAlpha": 0.52389,
     "endTurnWideningC": 3.7028, "endTurnWideningAlpha": 0.52389,
 }
-# Baseline (all knobs off == current production); enqueued first so trial 0 is the value to beat.
-WARM_BASELINE = {"lossDamageWeight": 0.0, "cardEps": 0, "potionEps": 0}
+# Baseline (== current production: exploration 25/25, all gradation knobs off); enqueued first so
+# trial 0 is the value to beat.
+WARM_BASELINE = {"lossDamageWeight": 0.0, "exploration": 25.0, "explorationChance": 25.0,
+                 "cardEps": 0, "potionEps": 0}
 
 _logfile = None
 _loglock = threading.Lock()
@@ -147,10 +151,11 @@ def main():
               flush=True)
         results.append((t, ho))
 
-    # Baseline on holdout for reference.
+    # Baseline on holdout for reference (production: exploration 25/25, gradation knobs off).
     if args.holdout_file and os.path.exists(args.holdout_file):
         b = run_eval(args.test_bin, args.holdout_file, args.threads,
-                     {"lossDamageWeight": 0.0}, {"cardEps": 0, "potionEps": 0},
+                     {"lossDamageWeight": 0.0, "exploration": 25.0, "explorationChance": 25.0},
+                     {"cardEps": 0, "potionEps": 0},
                      args.search_budget, args.holdout_limit)
         print(f"  BASELINE holdout mean={b[0]:.3f} win={b[1]:.3f}", flush=True)
 
