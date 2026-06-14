@@ -26,6 +26,7 @@
 #include "game/SaveFile.h"
 #include "combat/BattleContext.h"
 #include "sim/ConsoleSimulator.h"
+#include "sim/StateReplay.h"
 #include "sim/PrintHelpers.h"
 #include "sim/RandomAgent.h"
 #include "sim/search/SearchAgent.h"
@@ -794,63 +795,8 @@ int mcts(int argc, const char *argv[]) {
 
 // ---- Pre-battle state collection + hyperparameter evaluation ----
 
-struct GameStateRecord {
-    int charInt;
-    std::uint64_t seed;
-    int ascension;
-    std::vector<std::uint32_t> actions;
-};
-
-// Reconstruct the GameContext sitting right at the start of the target battle by
-// replaying a recorded mixed GameAction/search::Action stream (no search). Mirrors
-// replayActionFile, but the prefix ends exactly when the battle screen is reached.
-static GameContext loadPreBattleState(const GameStateRecord &rec) {
-    GameContext gc(static_cast<CharacterClass>(rec.charInt), rec.seed, rec.ascension);
-    BattleContext bc;
-    bool inBattle = false;
-    std::size_t idx = 0;
-
-    while (idx < rec.actions.size()) {
-        if (inBattle) {
-            if (bc.outcome != sts::Outcome::UNDECIDED) {
-                bc.exitBattle(gc);
-                inBattle = false;
-            } else {
-                // Engine changes can make a recorded run play out differently (e.g. Runic Dome
-                // battles draw differently since deferred rolls); validate so divergence throws
-                // instead of executing a stale action on a mismatched state.
-                const search::Action a(rec.actions[idx++]);
-                if (!a.isValidAction(bc)) {
-                    throw std::runtime_error("loadPreBattleState: battle action diverged from prefix");
-                }
-                a.execute(bc);
-            }
-        } else {
-            if (gc.outcome != GameOutcome::UNDECIDED) {
-                throw std::runtime_error("loadPreBattleState: game ended before consuming prefix");
-            }
-            if (gc.screenState == ScreenState::BATTLE) {
-                bc = {};
-                bc.init(gc);
-                inBattle = true;
-            } else {
-                const GameAction a(rec.actions[idx++]);
-                if (!a.isValidAction(gc)) {
-                    throw std::runtime_error("loadPreBattleState: game action diverged from prefix");
-                }
-                a.execute(gc);
-            }
-        }
-    }
-
-    if (inBattle) {
-        throw std::runtime_error("loadPreBattleState: prefix ended mid-battle");
-    }
-    if (gc.screenState != ScreenState::BATTLE) {
-        throw std::runtime_error("loadPreBattleState: prefix did not end at a battle");
-    }
-    return gc;
-}
+// GameStateRecord / loadStateRecords / replayToPreBattle live in sim/StateReplay.h (shared with
+// the console simulator's `replay` mode).
 
 struct GenStatesInfo {
     std::mutex m;
@@ -950,36 +896,6 @@ static int genStates(int argc, const char *argv[]) {
     return 0;
 }
 
-static std::vector<GameStateRecord> loadRecords(const std::string &path, int limit) {
-    std::ifstream ifs(path);
-    if (!ifs) {
-        throw std::runtime_error("cannot open state file: " + path);
-    }
-    std::vector<GameStateRecord> records;
-    std::string line;
-    while (std::getline(ifs, line)) {
-        if (line.empty()) {
-            continue;
-        }
-        std::istringstream iss(line);
-        GameStateRecord rec;
-        int n = 0;
-        iss >> rec.charInt;
-        iss >> std::hex >> rec.seed;
-        iss >> std::dec >> rec.ascension >> n;
-        rec.actions.resize(n);
-        iss >> std::hex;
-        for (int i = 0; i < n; ++i) {
-            iss >> rec.actions[i];
-        }
-        records.push_back(std::move(rec));
-        if (limit > 0 && static_cast<int>(records.size()) >= limit) {
-            break;
-        }
-    }
-    return records;
-}
-
 struct EvalStatesInfo {
     search::SearchStats stats;
     std::mutex m;
@@ -1023,7 +939,7 @@ static void evalStatesRunner(EvalStatesInfo *info) {
 
         GameContext gc;
         try {
-            gc = loadPreBattleState((*info->records)[idx]);
+            gc = replayToPreBattle((*info->records)[idx]);
         } catch (const std::runtime_error &) {
             // Engine changes can invalidate recorded action prefixes (e.g. runs that picked
             // Runic Dome predate deferred rolls). Deterministic per record, so paired arms
@@ -1140,7 +1056,7 @@ static int evalStates(int argc, const char *argv[]) {
         else throw std::runtime_error("eval_states: unknown param: " + key);
     }
 
-    const std::vector<GameStateRecord> records = loadRecords(stateFile, stateLimit);
+    const std::vector<GameStateRecord> records = loadStateRecords(stateFile, stateLimit);
     info.records = &records;
 
     std::vector<std::unique_ptr<std::thread>> threads;
@@ -1189,9 +1105,9 @@ static int evalStates(int argc, const char *argv[]) {
 static int showStates(int argc, const char *argv[]) {
     const std::string stateFile = argv[2];
     const int count = std::stoi(argv[3]);
-    const std::vector<GameStateRecord> records = loadRecords(stateFile, count);
+    const std::vector<GameStateRecord> records = loadStateRecords(stateFile, count);
     for (std::size_t i = 0; i < records.size(); ++i) {
-        const GameContext gc = loadPreBattleState(records[i]);
+        const GameContext gc = replayToPreBattle(records[i]);
         std::cout << "===== state " << i << "  seed=" << records[i].seed
                   << "  (prefix " << records[i].actions.size() << " actions) =====\n";
         std::cout << "  floor " << gc.floorNum << "  act " << gc.act

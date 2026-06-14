@@ -49,6 +49,14 @@ void ConsoleSimulator::setupGameFromSaveFile(const SaveFile &save) {
 }
 
 
+void ConsoleSimulator::setupGameFromContext(const GameContext &src) {
+    delete gc;
+    gc = new GameContext(src);
+    if (gc->screenState == ScreenState::BATTLE) {
+        battleSim.initBattle(*gc);
+    }
+}
+
 void ConsoleSimulator::reset() {
     delete gc;
 }

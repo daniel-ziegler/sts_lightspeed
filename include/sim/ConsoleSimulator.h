@@ -50,6 +50,7 @@ namespace sts {
         ConsoleSimulator() = default;
         void setupGame(std::uint64_t seed, CharacterClass c, int ascension);
         void setupGameFromSaveFile(const SaveFile &save);
+        void setupGameFromContext(const GameContext &src);  // adopt a prebuilt state (e.g. a replayed pre-battle state)
         void reset();
 
         void play(std::istream &is, std::ostream &os, SimulatorContext &c);

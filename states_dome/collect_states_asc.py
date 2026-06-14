@@ -44,12 +44,17 @@ def load_policy_net(model_path, torch_compile_mode="default"):
 
 
 def collect_game(seed: int, net: NNService | None, sim_count: int,
-                 k: int, temperature: float, ascension: int):
+                 k: int, temperature: float, ascension: int,
+                 only_losses: bool = False):
     """Play one game with the NN policy; return up to k pre-battle records.
 
-    Each record is (seed, prefix_bits_list, floor_at_battle). The prefix is the
-    mixed action stream up to (but not including) the chosen battle's in-battle
-    actions.
+    Each record is (seed, prefix_bits_list, floor_at_battle, ascension). The prefix
+    is the mixed action stream up to (but not including) the chosen battle's
+    in-battle actions.
+
+    With only_losses, return just the single record for the battle the MCTS lost
+    (the game-ending battle of a lost game) -- the "teleport in and try again"
+    target. Won games yield nothing.
     """
     gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, ascension)
     rng = random.Random(seed)
@@ -91,6 +96,14 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
 
     if not battle_starts:
         return []
+
+    if only_losses:
+        # Only the final battle of a lost game is a battle the MCTS lost (a loss ends
+        # the game), so its prefix is the last battle entry.
+        if gc.outcome != sts.GameOutcome.PLAYER_LOSS:
+            return []
+        prefix_len = battle_starts[-1]
+        return [(seed, stream[:prefix_len], battle_floors[-1], ascension)]
 
     # Pick up to k distinct random battle entries from this game.
     n = min(k, len(battle_starts))
@@ -140,7 +153,8 @@ def main(args):
         futures = {
             executor.submit(collect_game, s, net, args.mcts_simulations,
                             args.k, args.temperature,
-                            args.ascension_min + s % (args.ascension_max - args.ascension_min + 1)): s
+                            args.ascension_min + s % (args.ascension_max - args.ascension_min + 1),
+                            args.only_losses): s
             for s in seeds
         }
         for fut in as_completed(futures):
@@ -218,6 +232,8 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--ascension-min", type=int, default=0)
     parser.add_argument("--ascension-max", type=int, default=0)
+    parser.add_argument("--only-losses", action="store_true",
+                        help="emit only the battle each lost game died in (MCTS losses)")
     parser.add_argument("--torch-compile", type=str, default="default",
                         choices=["no", "default", "reduce-overhead",
                                  "max-autotune"])
