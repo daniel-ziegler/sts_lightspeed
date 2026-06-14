@@ -57,6 +57,11 @@ namespace sts {
         int movesThisTurn = 0;
         int energyWasted = 0;
         int cardsDrawn = 0;
+        // Total unblocked HP removed from monsters over the battle. Unlike current-HP, this keeps
+        // counting through splits/new spawns (Slime Boss, Reptomancer), giving the loss-branch
+        // eval a progress signal that doesn't reset. Approximate under transposition (not part of
+        // equalForSearch), used only as an optional EvalWeights.lossDamageWeight gradation term.
+        int cumulativeMonsterDamage = 0;
         // end for debugging purposes
 
         Random rng;

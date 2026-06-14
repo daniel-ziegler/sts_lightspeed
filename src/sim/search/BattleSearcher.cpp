@@ -893,7 +893,8 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
         const double drawBonus = bc.cardsDrawn * evalWeights.drawWeight;
         const double aliveScore = bc.monsters.monstersAlive * -evalWeights.aliveWeight;
 
-        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight);
+        const double lossDamageBonus = evalWeights.lossDamageWeight * bc.cumulativeMonsterDamage;
+        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + lossDamageBonus;
     }
 }
 

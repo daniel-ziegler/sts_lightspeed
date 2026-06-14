@@ -39,6 +39,9 @@ namespace sts::search {
         double goldLossWeight = 0.25; // per gold permanently lost to an escaped Looter/Mugger
         double maxHpWeight = 2.0;     // per point of max HP gained vs the search root (Feed, Darkstone)
         double parasitePenalty = 12;  // flat penalty when Writhing Mass's implant will add a Parasite
+        // Loss-branch gradation: reward total monster HP removed over the battle (cumulative, so
+        // it counts progress through splits the current-HP term misses). Default 0 = off.
+        double lossDamageWeight = 0;
     };
 
     // Deterministic search-graph telemetry: counts are exact properties of the search

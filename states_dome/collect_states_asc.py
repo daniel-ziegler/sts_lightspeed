@@ -43,9 +43,23 @@ def load_policy_net(model_path, torch_compile_mode="default"):
     return net
 
 
+def _boss_encounter_set():
+    names = ["SLIME_BOSS", "THE_GUARDIAN", "HEXAGHOST", "AUTOMATON", "COLLECTOR", "CHAMP",
+             "TIME_EATER", "AWAKENED_ONE", "DONU_AND_DECA", "THE_HEART", "SHIELD_AND_SPEAR"]
+    s = set()
+    for n in names:
+        m = getattr(sts.MonsterEncounter, n, None)
+        if m is not None:
+            s.add(m)
+    return s
+
+
+BOSS_ENCOUNTERS = _boss_encounter_set()
+
+
 def collect_game(seed: int, net: NNService | None, sim_count: int,
                  k: int, temperature: float, ascension: int,
-                 only_losses: bool = False):
+                 only_losses: bool = False, boss_only: bool = False):
     """Play one game with the NN policy; return up to k pre-battle records.
 
     Each record is (seed, prefix_bits_list, floor_at_battle, ascension). The prefix
@@ -69,6 +83,7 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
     stream: list[int] = []          # mixed GameAction / search::Action bits, in order
     battle_starts: list[int] = []   # len(stream) at the moment each battle began
     battle_floors: list[int] = []   # floor_num when each battle began
+    battle_is_boss: list[bool] = [] # whether each battle is a boss encounter
     death_battle_start = None       # stream pos of the battle whose playout produced the loss
     death_battle_floor = None
 
@@ -78,6 +93,7 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
             bfloor = gc.floor_num
             battle_starts.append(bstart)
             battle_floors.append(bfloor)
+            battle_is_boss.append(gc.encounter in BOSS_ENCOUNTERS)
             pre = len(agent.game_action_history)
             agent.playout_battle(gc)
             # in-battle search::Action bits, in the order they were taken
@@ -115,9 +131,12 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
             return []
         return [(seed, stream[:death_battle_start], death_battle_floor, ascension)]
 
-    # Pick up to k distinct random battle entries from this game.
-    n = min(k, len(battle_starts))
-    idxs = rng.sample(range(len(battle_starts)), n)
+    # Pick up to k distinct random battle entries from this game (boss encounters only if asked).
+    candidates = [i for i in range(len(battle_starts)) if (not boss_only or battle_is_boss[i])]
+    if not candidates:
+        return []
+    n = min(k, len(candidates))
+    idxs = rng.sample(candidates, n)
     records = []
     for i in idxs:
         prefix_len = battle_starts[i]
@@ -164,7 +183,7 @@ def main(args):
             executor.submit(collect_game, s, net, args.mcts_simulations,
                             args.k, args.temperature,
                             args.ascension_min + s % (args.ascension_max - args.ascension_min + 1),
-                            args.only_losses): s
+                            args.only_losses, args.boss_only): s
             for s in seeds
         }
         for fut in as_completed(futures):
@@ -244,6 +263,8 @@ if __name__ == "__main__":
     parser.add_argument("--ascension-max", type=int, default=0)
     parser.add_argument("--only-losses", action="store_true",
                         help="emit only the battle each lost game died in (MCTS losses)")
+    parser.add_argument("--boss-only", action="store_true",
+                        help="record only boss-encounter battles")
     parser.add_argument("--torch-compile", type=str, default="default",
                         choices=["no", "default", "reduce-overhead",
                                  "max-autotune"])

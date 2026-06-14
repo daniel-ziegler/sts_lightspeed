@@ -531,6 +531,7 @@ void Monster::attackedUnblockedHelper(BattleContext &bc, int damage) { // todo, 
         buff<MS::SHACKLED>(damage);
     }
 
+    bc.cumulativeMonsterDamage += std::max(0, std::min(damage, curHp));
     curHp -= damage;
     if (curHp <= 0) {
         curHp = 0;
@@ -591,6 +592,7 @@ void Monster::damageUnblockedHelper(BattleContext &bc, int damage) {
         buff<MS::SHACKLED>(damage);
     }
 
+    bc.cumulativeMonsterDamage += std::max(0, std::min(damage, curHp));
     curHp = std::max(0, curHp-damage);
     if (curHp == 0) {
         die(bc);

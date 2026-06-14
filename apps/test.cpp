@@ -1052,6 +1052,7 @@ static int evalStates(int argc, const char *argv[]) {
         else if (key == "goldLoss") info.evalWeights.goldLossWeight = val;
         else if (key == "maxHpWeight") info.evalWeights.maxHpWeight = val;
         else if (key == "parasitePenalty") info.evalWeights.parasitePenalty = val;
+        else if (key == "lossDamageWeight") info.evalWeights.lossDamageWeight = val;
         else if (key == "hideIntents") info.forceIntentsHidden = val != 0;
         else throw std::runtime_error("eval_states: unknown param: " + key);
     }
@@ -1148,6 +1149,7 @@ static void applyGlobalParam(const std::string &arg) {
     else if (key == "goldLoss") g_evalWeights.goldLossWeight = val;
     else if (key == "maxHpWeight") g_evalWeights.maxHpWeight = val;
     else if (key == "parasitePenalty") g_evalWeights.parasitePenalty = val;
+    else if (key == "lossDamageWeight") g_evalWeights.lossDamageWeight = val;
     else throw std::runtime_error("unknown param: " + key);
 }
 

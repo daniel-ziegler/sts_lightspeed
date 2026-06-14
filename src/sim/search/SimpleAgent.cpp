@@ -52,6 +52,14 @@ static const int rolloutEndTurnAlways = policyEnvInt("STS_END_TURN_ALWAYS", 0);
 //       kill-confirm, weak vs a big attack, fear/poison on a tanky target, blood when wounded;
 //       buffs/utility drink immediately).
 static const int rolloutPotionMode    = policyEnvInt("STS_ROLLOUT_POTION_MODE", 0);
+// STS_ROLLOUT_CARD_EPSILON (per-mille): with this probability per card-play decision a rollout
+// plays a uniform-random playable card instead of the heuristic best -- card-order variety so
+// value estimates aren't pinned to one deterministic line. 0 = off (no rng draw, byte-identical).
+static const int rolloutCardEpsilon   = policyEnvInt("STS_ROLLOUT_CARD_EPSILON", 0);
+// STS_ROLLOUT_POTION_EPSILON (per-mille): with this probability per card-play decision a rollout
+// drinks a potion even under potion mode 0 -- a gentle potion-value signal without the always-on
+// heuristic timing that lost the boss gate. 0 = off (no rng draw, byte-identical).
+static const int rolloutPotionEpsilon = policyEnvInt("STS_ROLLOUT_POTION_EPSILON", 0);
 
 static bool haveInitMaps = false;
 static int cardPriorityMap[372] {};
@@ -503,6 +511,13 @@ bool search::SimpleAgent::chooseOpportunePotionAction(const BattleContext &bc, A
 }
 
 bool search::SimpleAgent::choosePotionAction(const BattleContext &bc, Action &outAction) {
+    // Epsilon potion play: a small fraction of decisions drink a potion regardless of mode, so
+    // the search gets some signal that potions have value (gated so epsilon 0 draws no rng).
+    if (rolloutPotionEpsilon > 0
+        && std::uniform_int_distribution<int>(0, 999)(rng) < rolloutPotionEpsilon
+        && chooseDumpPotionAction(bc, randomize, rng, outAction)) {
+        return true;
+    }
     switch (rolloutPotionMode) {
         case 1:
             return isBossEncounter(bc.encounter)
@@ -574,6 +589,25 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
 
     if (playableCardsIdxs.empty()) {
         return Action(ActionType::END_TURN);
+    }
+
+    // Epsilon-greedy card-order variety: occasionally play a uniform-random playable card instead
+    // of the heuristic best (gated so epsilon 0 draws no rng -> byte-identical default).
+    if (rolloutCardEpsilon > 0
+        && std::uniform_int_distribution<int>(0, 999)(rng) < rolloutCardEpsilon) {
+        const int handIdx = playableCardsIdxs[
+            std::uniform_int_distribution<int>(0, playableCardsIdxs.size() - 1)(rng)];
+        const auto &c = bc.cards.hand[handIdx];
+        if (!c.requiresTarget()) {
+            return Action(ActionType::CARD, handIdx);
+        }
+        fixed_list<int,5> alive;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            if (bc.monsters.arr[i].isTargetable()) alive.push_back(i);
+        }
+        const int tgt = alive.empty() ? 0
+            : alive[std::uniform_int_distribution<int>(0, alive.size()-1)(rng)];
+        return Action(ActionType::CARD, handIdx, tgt);
     }
 
     if (rolloutRandomPolicy) {
