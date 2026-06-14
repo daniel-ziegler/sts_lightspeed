@@ -280,7 +280,7 @@ GameAction search::SearchAgent::pickOutOfCombatAction(const GameContext &gc) {
             int bestIdx = 0;
 
             for (int i = 0; i < 3; ++i) {
-                int value = search::Expert::getBossRelicOrdering(gc.info.bossRelics[i], gc.ascension);
+                int value = search::Expert::getBossRelicOrdering(gc.info.bossRelics[i]);
                 if (value < best) {
                     best = value;
                     bestIdx = i;

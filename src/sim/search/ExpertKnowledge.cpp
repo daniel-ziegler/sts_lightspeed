@@ -200,17 +200,7 @@ int sts::search::Expert::getPlayOrdering(CardId id) {
 
 }
 
-int search::Expert::getBossRelicOrdering(RelicId id, int ascension) {
-    // Runic Dome plays honestly now (hidden intents, deferred rolls); the searcher still plans
-    // over the exact intent distribution, so the blindness cost is ascension-dependent rather
-    // than ruinous. Measured paired @1000 sims: asc 0 (548 h1dev states) -0.8 eval-score
-    // (<1 HP/battle), -0.2pp battle wins; asc 16-20 (450 heart1 states) -4.7 score, -1.6pp.
-    // So +1 energy ranks just behind the unconditional energy relics at low ascension, and
-    // with the real-downside energy relics (Choker/Snecko tier) at high ascension.
-    if (id == RelicId::RUNIC_DOME) {
-        return ascension >= 10 ? 2 : 1;
-    }
-
+int search::Expert::getBossRelicOrdering(RelicId id) {
     switch (id) {
         case RelicId::ECTOPLASM:
         case RelicId::COFFEE_DRIPPER:
@@ -223,6 +213,15 @@ int search::Expert::getBossRelicOrdering(RelicId id, int ascension) {
         case RelicId::SOZU:
             return 1;
 
+        // Runic Dome plays honestly now (hidden intents, deferred rolls); the searcher still
+        // plans over the exact intent distribution, so the blindness cost is modest and driven
+        // by battle DEPTH/complexity (multi-monster block sequencing), not ascension. Measured
+        // paired @1000 sims (hideIntents A/B): trivial low-floor battles -0.8 eval-score /
+        // -0.2pp wins; deep acts-1-4 battles a Dome holder plays through -4.7 / -1.6pp; genuine
+        // asc 16-20 (shallow, policy dies in act 1-2) only -1.6 / -0.7pp. The decision-relevant
+        // cost (deep battles, since Dome is carried for the rest of the run) puts +1 energy with
+        // the real-downside energy relics rather than the free ones.
+        case RelicId::RUNIC_DOME:
         case RelicId::VELVET_CHOKER:
         case RelicId::SNECKO_EYE:
         case RelicId::SLAVERS_COLLAR:
