@@ -85,6 +85,7 @@ def load_run_data(filename):
         'clipfracs': np.array([d.get('clipfrac', np.nan) for d in data]),
         'explained_variances': np.array([d.get('explained_variance', np.nan) for d in data]),
         'adv_norm_stds': np.array([d.get('adv_norm_std', np.nan) for d in data]),
+        'entropy_coefs': np.array([d.get('entropy_coef', np.nan) for d in data]),
         'num_experiences': np.array([d.get('num_experiences', np.nan) for d in data]),
         'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
         # Heart-run breakdown (present only for reward-function=heart runs).
@@ -501,9 +502,14 @@ for _hr in _heart_runs:
 # to the x-axis. Segments are sized by a fixed *vertical* extent and axis limits are pinned to
 # the data. PPO normalizes advantages by the (logged) adv_norm_std, so the effective per-return
 # coefficient is entropy_coef * adv_norm_std (times the decisions-per-trajectory factor applied
-# in the loop below). Runs with a decaying entropy_coef use the logged per-iteration value.
-ENTROPY_COEF = {'ppo_hient': 0.05, 'honest1': 0.05, 'honest1asc': 0.05, 'heart1': 0.05}
+# in the loop below). The slope reflects the LATEST operating point: the entropy coef is the most
+# recent logged per-iteration value (so decayed runs show their current, not start-of-run, coef),
+# adv_norm_std and the dot are already latest, and dr/dx + decisions/traj are fit over the last
+# SLOPE_TAIL_ITERS iterations rather than the whole (early-learning-dominated) run.
+# ENTROPY_COEF_FALLBACK is used only for old runs whose stats predate the entropy_coef field.
+ENTROPY_COEF_FALLBACK = {'ppo_hient': 0.05, 'honest1': 0.05, 'honest1asc': 0.05, 'heart1': 0.0166667}
 PPO_NORMALIZED = {'ppo_hient', 'honest1', 'honest1asc', 'heart1'}  # adv / (logged) adv_norm_std
+SLOPE_TAIL_ITERS = 60  # window for the local dr/dx + decisions/traj fits (the "latest" slope)
 
 def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     """unit_scale: indifference slope is annotated per (unit_scale of x), e.g. 0.01 win rate."""
@@ -524,9 +530,13 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
 
     xlim, ylim = ax.get_xlim(), ax.get_ylim()  # pin axes to the trajectory/dot data
     for gi, (gkey, members) in enumerate(group_list):
-        if gkey not in ENTROPY_COEF:
+        # Latest (decayed) entropy coef: the most recent logged per-iteration value; fall back to
+        # the start-of-run constant only for old runs whose stats predate the entropy_coef field.
+        _, ecoef = _avg_over_iters(members, 'entropy_coefs')
+        ecoef = ecoef[~np.isnan(ecoef)]
+        coef = float(ecoef[-1]) if ecoef.size else ENTROPY_COEF_FALLBACK.get(gkey)
+        if coef is None:
             continue
-        coef = ENTROPY_COEF[gkey]
         if gkey in PPO_NORMALIZED:  # PPO divides advantages by the (logged) EWMA std
             _, stds = _avg_over_iters(members, 'adv_norm_stds')
             stds = stds[~np.isnan(stds)]
@@ -543,7 +553,7 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
         okn = ~(np.isnan(nexp) | np.isnan(ntraj)) & (ntraj > 0)
         if okn.sum() == 0:
             continue
-        n_per_traj = float(np.mean(nexp[okn] / ntraj[okn]))
+        n_per_traj = float(np.mean((nexp[okn] / ntraj[okn])[-SLOPE_TAIL_ITERS:]))  # recent
         coef = coef * n_per_traj
         color = _gcolor(gi, gkey)
         _, xv = _avg_over_iters(members, xfield)
@@ -552,7 +562,12 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
         ok = ~(np.isnan(xv) | np.isnan(rw))
         if ok.sum() < 5:
             continue
-        dr_dx = np.polyfit(xv[ok], rw[ok], 1)[0]   # empirical reward per unit of x
+        # Local reward-vs-x slope over the recent window (the latest exchange rate). Fall back to
+        # the full run if the recent x-range is too narrow to fit a stable slope (e.g. a plateaued
+        # floor); the reward panel is x==reward so dr_dx==1 either way.
+        xo, ro = xv[ok], rw[ok]
+        xt, rt = xo[-SLOPE_TAIL_ITERS:], ro[-SLOPE_TAIL_ITERS:]
+        dr_dx = np.polyfit(xt, rt, 1)[0] if np.ptp(xt) > 1e-6 else np.polyfit(xo, ro, 1)[0]
         slope = -dr_dx / coef                      # nats of entropy per unit of x, at indifference
         x0, h0 = _smooth(xv)[-1], _smooth(en)[-1]
         dy = 0.15 * (ylim[1] - ylim[0])            # segment half-height: 15% of the y-range
