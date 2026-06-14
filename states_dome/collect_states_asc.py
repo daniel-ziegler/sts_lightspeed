@@ -69,15 +69,26 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
     stream: list[int] = []          # mixed GameAction / search::Action bits, in order
     battle_starts: list[int] = []   # len(stream) at the moment each battle began
     battle_floors: list[int] = []   # floor_num when each battle began
+    death_battle_start = None       # stream pos of the battle whose playout produced the loss
+    death_battle_floor = None
 
     while gc.outcome == sts.GameOutcome.UNDECIDED:
         if gc.screen_state == sts.ScreenState.BATTLE:
-            battle_starts.append(len(stream))
-            battle_floors.append(gc.floor_num)
+            bstart = len(stream)
+            bfloor = gc.floor_num
+            battle_starts.append(bstart)
+            battle_floors.append(bfloor)
             pre = len(agent.game_action_history)
             agent.playout_battle(gc)
             # in-battle search::Action bits, in the order they were taken
             stream.extend(int(b) for b in agent.game_action_history[pre:])
+            # The MCTS lost iff THIS battle's playout ended the game. A game can also end in a
+            # loss out of combat (an event's HP loss at low HP), or after winning the last
+            # battle entered -- those are NOT battles the MCTS lost, so attributing the game
+            # loss to the last battle entered is wrong.
+            if gc.outcome == sts.GameOutcome.PLAYER_LOSS:
+                death_battle_start = bstart
+                death_battle_floor = bfloor
         else:
             obs = sts.getNNRepresentation(gc)
             actions = sts.GameAction.getAllActionsInState(gc)
@@ -98,12 +109,11 @@ def collect_game(seed: int, net: NNService | None, sim_count: int,
         return []
 
     if only_losses:
-        # Only the final battle of a lost game is a battle the MCTS lost (a loss ends
-        # the game), so its prefix is the last battle entry.
-        if gc.outcome != sts.GameOutcome.PLAYER_LOSS:
+        # The battle the MCTS actually lost (its playout ended the game). None when the game
+        # was won or died out of combat -> not a lost-battle candidate.
+        if death_battle_start is None:
             return []
-        prefix_len = battle_starts[-1]
-        return [(seed, stream[:prefix_len], battle_floors[-1], ascension)]
+        return [(seed, stream[:death_battle_start], death_battle_floor, ascension)]
 
     # Pick up to k distinct random battle entries from this game.
     n = min(k, len(battle_starts))
