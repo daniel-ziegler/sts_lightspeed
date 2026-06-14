@@ -115,7 +115,7 @@ def main():
     study = optuna.create_study(
         direction="maximize", study_name=args.study_name,
         storage=args.storage, load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(seed=1, multivariate=True, n_startup_trials=20),
+        sampler=optuna.samplers.TPESampler(seed=1, multivariate=True, n_startup_trials=30),
     )
     if len(study.trials) == 0:
         study.enqueue_trial(dict(WARM_BASELINE))
