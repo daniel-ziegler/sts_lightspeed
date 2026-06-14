@@ -20,9 +20,11 @@ namespace {
 void printUsage() {
     std::cout <<
         "usage:\n"
-        "  main                         interactive: prompts 'seed character(I/S/D/W) ascensionLevel'\n"
-        "  main list <stateFile> [n]    list recorded pre-battle states (floor / encounter / hp)\n"
-        "  main replay <stateFile> <i>  teleport into recorded pre-battle state #i and play it\n";
+        "  main                              interactive: prompts 'seed character(I/S/D/W) ascensionLevel'\n"
+        "  main list <stateFile> [n]         list recorded pre-battle states (floor / encounter / hp)\n"
+        "  main replay <stateFile> <i>       teleport into recorded pre-battle state #i and play it\n"
+        "  main replay <stateFile> <i> --mcts [sims]\n"
+        "                                    watch the MCTS agent fight state #i, printing every action + state\n";
 }
 
 // One-line summary of a replayed pre-battle GameContext.
@@ -51,7 +53,7 @@ int listStates(const std::string &stateFile, int limit) {
     return 0;
 }
 
-int replayState(const std::string &stateFile, int index) {
+int replayState(const std::string &stateFile, int index, bool mcts, int sims) {
     const std::vector<GameStateRecord> records = loadStateRecords(stateFile, 0);
     if (index < 0 || index >= static_cast<int>(records.size())) {
         std::cerr << "index " << index << " out of range (" << records.size() << " records)\n";
@@ -60,11 +62,19 @@ int replayState(const std::string &stateFile, int index) {
     GameContext gc = replayToPreBattle(records[index]);
     std::cout << "Teleported to state #" << index << ":\n";
     printStateSummary(std::cout, index, gc);
-    std::cout << "You are now playing this battle. Good luck.\n\n";
 
     ConsoleSimulator sim;
     sim.setupGameFromContext(gc);
     SimulatorContext simCtx;
+    if (mcts) {
+        // Let the MCTS agent fight, printing every action + full battle state.
+        simCtx.autoBattleMode = true;
+        simCtx.autoBattleVerbosity = 2;
+        simCtx.autoBattleSimCount = sims;
+        std::cout << "Watching the MCTS agent (" << sims << " sims) fight this battle.\n\n";
+    } else {
+        std::cout << "You are now playing this battle. Good luck.\n\n";
+    }
     sim.play(std::cin, std::cout, simCtx);
     return 0;
 }
@@ -79,7 +89,18 @@ int main(int argc, char **argv) {
             return listStates(argv[2], limit);
         }
         if (mode == "replay" && argc >= 4) {
-            return replayState(argv[2], std::stoi(argv[3]));
+            bool mcts = false;
+            int sims = 5000;
+            for (int i = 4; i < argc; ++i) {
+                const std::string a = argv[i];
+                if (a == "--mcts") {
+                    mcts = true;
+                    if (i + 1 < argc && argv[i + 1][0] != '-') {
+                        sims = std::stoi(argv[++i]);
+                    }
+                }
+            }
+            return replayState(argv[2], std::stoi(argv[3]), mcts, sims);
         }
         printUsage();
         return 1;

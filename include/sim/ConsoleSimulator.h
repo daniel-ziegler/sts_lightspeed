@@ -37,6 +37,7 @@ namespace sts {
         // auto-battle settings
         bool autoBattleMode = false;
         int autoBattleVerbosity = 1; // 0=quiet, 1=concise, 2=full
+        int autoBattleSimCount = 5000; // MCTS simulationCountBase for auto-fought battles
     };
 
     struct ConsoleSimulator {
