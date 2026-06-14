@@ -56,24 +56,34 @@ exactness harness (incl. 4 override cases) 0/30000 mismatches; winrate_mt 200@10
 diverge.
 
 **Heads-ups for RL:**
-- Pull `boss-eval@814dc78` for the next .so rebuild (new pybind: `bc.intents_hidden`,
+- Pull `boss-eval@b959617` (or later) for the next .so rebuild (new pybind: `bc.intents_hidden`,
   `monster.pending_move_rolls`).
-- **Measured blindness cost is ascension-dependent** (eval_states `hideIntents=1` =
-  intentsHidden without the relic, pure blindness, no energy change; paired @1000 sims):
-  - asc 0, 548 h1dev states: score −0.81 (<1 HP/battle), battle wins −0.18pp — tiny.
-  - **asc 16-20, 450 heart1-iter1035 states** (`states_dome/h2asc_battles.txt`, collected on
-    the new engine, floor mix 188/163/93/6 acts 1-4): score 61.17→56.44 (**−4.73**), battle
-    wins 96.0→94.4 (**−1.56pp**) — ~6× the asc-0 cost; the realization buys real blocking
-    decisions when monster damage is lethal-range.
-  Expert picker re-ranked accordingly (`e289471`): `getBossRelicOrdering` now takes ascension;
-  Dome = tier 1 (Pandora's/Cursed Key/Sozu) below asc 10, tier 2 (Choker/Snecko) at 10+.
-  For your NN: at heart1's asc range the honest-Dome downside is ~1.6pp per battle — its
-  clairvoyance-learned Dome preference is now somewhat optimistic; worth a look eventually.
+- **Blindness cost is driven by battle DEPTH/complexity, not ascension** (eval_states
+  `hideIntents=1` = intentsHidden without the relic, pure blindness, no energy change; paired
+  @1000 sims, Δscore / Δbattle-wins):
+  - trivial low-floor battles (548 h1dev states): **−0.81 / −0.18pp**.
+  - deep acts-1-4 battles a Dome holder plays through (450 heart1 states, median floor 20):
+    **−4.73 / −1.56pp**.
+  - genuine asc 16-20 (450 heart1 states, shallow — policy dies in act 1-2, median floor 10):
+    **−1.60 / −0.67pp**.
+  So multi-monster / multi-turn block sequencing is where knowing the intent pays; raw ascension
+  is *not* the driver (the deepest set is asc 0; the genuine-asc-20 set costs little). ⚠
+  **Correction**: my earlier "asc 16-20 = −4.73" (`e289471`, ascension-conditional rank) was a
+  mislabel — that collection silently defaulted to asc 0; the −4.73 set is asc-0-deep. Fixed in
+  `b959617`: `getBossRelicOrdering` reverts to a plain `(RelicId)` signature and Dome sits at a
+  single **tier 2** (Choker/Snecko tier), since the decision-relevant cost is over the deep
+  battles Dome is carried through. For your NN: the honest-Dome per-battle downside is modest
+  (≤1.6pp), so its clairvoyance-learned Dome preference is only mildly optimistic.
 - **Recorded action-prefix states from Dome runs no longer replay** (deferred rolls shift the
-  rng stream). `loadPreBattleState` now validates each replayed action and throws on
-  divergence; eval_states skips + counts them (`SKIPPED n unreplayable records` — 52/600 ≈ 9%
-  of h1dev). Same-arm subsets are deterministic, so paired comparisons stay valid; regenerate
-  sets on the new engine when convenient.
+  rng stream). `replayToPreBattle` (now in `sim/StateReplay.h`, shared) validates each replayed
+  action and throws on divergence; eval_states skips + counts them (`SKIPPED n unreplayable
+  records` — ~9% of h1dev). Same-arm subsets are deterministic, so paired comparisons stay
+  valid; regenerate sets on the new engine when convenient.
+- **New: console teleport** (`b959617`/`7e84551`). `./main replay <stateFile> <i>` drops a human
+  into the exact pre-battle state a recorded run reached (faithful RNG via seed+floorNum) to
+  retry a battle by hand; `./main list <stateFile>` shows floor/encounter/hp. Source losing
+  battles with `collect_states_asc.py --only-losses` under a checkpoint. (Example A20-loss set:
+  `states_dome/a20_losses.txt`, heart1 iter_1230.)
 - All pre-2026-06-11 evals of Dome-carrying games were intent-clairvoyant (on top of the
   draw-order caveat era distinctions).
 

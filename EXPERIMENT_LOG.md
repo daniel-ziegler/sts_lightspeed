@@ -69,6 +69,20 @@ RL. Per BATTLE_OUTCOME_PLAN.md's decision gate (no EV win + flat probe transfer 
 spend), **Phase 4 RL integration is NOT justified on this evidence**; held pending user call.
 Results: `lambda_results/bvsl_results.jsonl`. Spot box terminated (338k+201k rows, ~$5, 3.2h).
 
+## 2026-06-13/14 (MCTS session: Dome rank corrected + console teleport)
+
+**Dome blindness cost is battle-DEPTH-driven, not ascension** (eval_states `hideIntents=1`, pure
+blindness no energy, paired @1000 sims, Δscore / Δbattle-wins): trivial low-floor (h1dev) −0.81 /
+−0.18pp; deep acts-1-4 (heart1, median fl 20) −4.73 / −1.56pp; genuine asc 16-20 (heart1, shallow
+fl~10 — policy dies early) −1.60 / −0.67pp. ⚠ The "asc 16-20 = −4.73" behind the earlier
+ascension-conditional rank (`e289471`) was a MISLABEL — that collection silently defaulted to
+asc 0; the −4.73 set is asc-0-deep. `b959617` reverts `getBossRelicOrdering(RelicId)` to a single
+**tier 2** for Dome (Choker/Snecko tier), since the decision-relevant cost is the deep battles a
+Dome holder carries it through. **New tooling:** console teleport (`7e84551`) — `./main replay
+<stateFile> <i>` drops a human into a recorded pre-battle state (faithful RNG) to retry a lost
+battle; `collect_states_asc.py --only-losses` sources MCTS losses under a checkpoint (shared
+replay in `sim/StateReplay.h`). The teleport's `list` command is what caught the mislabel.
+
 ## 2026-06-11 (MCTS session: Runic Dome intent clairvoyance fixed)
 
 **Last known intent cheat closed** (`boss-eval@2563b1d`): with Runic Dome the search planned
