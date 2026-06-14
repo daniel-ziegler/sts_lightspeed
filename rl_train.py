@@ -215,6 +215,14 @@ class TrainConfig:
     # when running with many more simulations so long boss fights aren't cut off mid-search.
     battle_timeout: float = 30.0
 
+    # Pipeline collection with training: collect iter N+1 in a background thread while the
+    # learner trains on iter N (the NNService keeps its own weight clone, so the frozen-snapshot
+    # collector and the mutating learner net never race). Train hides under the longer collect
+    # phase -> ~1.34x throughput. Cost: collection runs one update stale (1-step off-policy);
+    # PPO's stored old_log_prob importance-corrects it and at KL~0.003/iter the effect is
+    # negligible. Default off (byte-identical sequential path).
+    pipeline: bool = False
+
     # Training settings
     num_iterations: int = 1000
     separate_networks: bool = False  # Use separate policy and value networks
@@ -629,6 +637,14 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         boss_state_records=_boss_records,
         ascension=ascension,
     )
+
+
+def _timed_collect(config: TrainConfig, service: NNService, reward_fn, jobs):
+    """collect_experience wrapped to return (trajectories, wall_seconds) -- the background
+    half of the pipelined train loop."""
+    t0 = time.time()
+    trajectories = collect_experience(config, service, reward_fn, jobs)
+    return trajectories, time.time() - t0
 
 
 def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs) -> List[Trajectory]:
@@ -1435,17 +1451,41 @@ def main():
     # Persistent advantage normalizer (EWMA of mean/std across iterations).
     adv_norm = RunningMoments(config.adv_norm_decay)
 
+    # Pipeline mode: a single-thread executor runs the next iteration's collection while this
+    # iteration trains. `pending` holds the in-flight Future; it is always joined before the
+    # next update_weights, so the NNService's weight clone is never mutated mid-collection.
+    collect_pool = ThreadPoolExecutor(max_workers=1) if config.pipeline else None
+    pending = None
+
     try:
         for iteration in range(config.resume_from_step, config.num_iterations):
             print(f"\nIteration {iteration + 1}/{config.num_iterations}")
-            
-            # Collect experience
-            start_time = time.time()
-            service.update_weights(service_net)
-            jobs = algo.collection_plan(config, iteration)
-            trajectories = collect_experience(config, service, reward_fn, jobs)
-            collect_time = time.time() - start_time
-            
+            iter_wall_start = time.time()
+
+            # Collect experience (pipelined: take the prefetched batch, then prefetch the next;
+            # sequential: collect inline).
+            if config.pipeline:
+                if pending is None:
+                    # Prime the pipeline: first iteration collects synchronously.
+                    service.update_weights(service_net)
+                    trajectories, collect_time = _timed_collect(
+                        config, service, reward_fn, algo.collection_plan(config, iteration))
+                else:
+                    trajectories, collect_time = pending.result()
+                # Kick off the NEXT iteration's collection now, against the current (pre-train)
+                # weights, so it overlaps this iteration's training.
+                if iteration + 1 < config.num_iterations:
+                    service.update_weights(service_net)
+                    pending = collect_pool.submit(
+                        _timed_collect, config, service, reward_fn,
+                        algo.collection_plan(config, iteration + 1))
+            else:
+                start_time = time.time()
+                service.update_weights(service_net)
+                jobs = algo.collection_plan(config, iteration)
+                trajectories = collect_experience(config, service, reward_fn, jobs)
+                collect_time = time.time() - start_time
+
             if not trajectories:
                 print("No trajectories collected, skipping iteration")
                 continue
@@ -1536,6 +1576,11 @@ def main():
                 'iteration': iteration + 1,
                 'num_trajectories': len(trajectories),
                 'collect_time': collect_time,
+                # Effective per-iteration wall. In pipeline mode collect/train overlap, so this
+                # is < collect_time + train_time (it counts the prefetch wait + train, the true
+                # iteration cadence); in sequential mode it ~= collect_time + train_time.
+                'iter_wall': time.time() - iter_wall_start,
+                'pipelined': bool(config.pipeline),
                 'win_rate': win_rate,
                 'avg_floor': avg_floor,
                 'avg_reward': avg_reward,
@@ -1586,8 +1631,12 @@ def main():
                     # Save optimizer state
                     torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer.iter_{iteration + 1}")
                     print(f"Saved model checkpoint at iteration {iteration + 1}")
-    
+
     finally:
+        if collect_pool is not None:
+            if pending is not None:
+                pending.cancel()
+            collect_pool.shutdown(wait=False)
         service.stop()
     
     # Save final model. This runs at process teardown, where the just-finished training loop's
