@@ -28,6 +28,8 @@ SPACE = {
     "exploration":       (3.0, 60.0, True),
     "explorationChance": (3.0, 60.0, True),
 }
+# Boolean eval_states params to tune (suggested as 0/1, passed as int keys).
+BOOL_SPACE = ["lossAbsoluteHp"]
 # Env knobs to tune (int, per-mille). name -> (env var, lo, hi).
 ENV_SPACE = {
     "cardEps":   ("STS_ROLLOUT_CARD_EPSILON",   0, 400),
@@ -41,15 +43,18 @@ FIXED = {
 # Baseline (== current production: exploration 25/25, all gradation knobs off); enqueued first so
 # trial 0 is the value to beat.
 WARM_BASELINE = {"lossDamageWeight": 0.0, "exploration": 25.0, "explorationChance": 25.0,
-                 "cardEps": 0, "potionEps": 0}
+                 "lossAbsoluteHp": 0, "cardEps": 0, "potionEps": 0}
 
 _logfile = None
 _loglock = threading.Lock()
 
 
-def run_eval(test_bin, state_file, threads, params, env_params, budget, limit, logf=None):
+def run_eval(test_bin, state_file, threads, params, env_params, budget, limit, logf=None,
+             bool_params=None):
+    bool_params = bool_params or {}
     cmd = [test_bin, "eval_states", str(threads), state_file, str(budget), str(limit)]
     cmd += [f"{k}={v:.6f}" for k, v in {**FIXED, **params}.items()]
+    cmd += [f"{k}={int(v)}" for k, v in bool_params.items()]
     env = dict(os.environ)
     for name, (var, _lo, _hi) in ENV_SPACE.items():
         env[var] = str(env_params[name])
@@ -63,6 +68,7 @@ def run_eval(test_bin, state_file, threads, params, env_params, budget, limit, l
         with _loglock:
             row = ([budget, limit]
                    + [f"{params[k]:.6f}" for k in SPACE]
+                   + [int(bool_params.get(k, 0)) for k in BOOL_SPACE]
                    + [env_params[k] for k in ENV_SPACE]
                    + [mean, winrate, avghp, n])
             logf.writerow(row)
@@ -73,8 +79,9 @@ def run_eval(test_bin, state_file, threads, params, env_params, budget, limit, l
 
 def split_params(allp):
     fp = {k: allp[k] for k in SPACE}
+    bp = {k: allp[k] for k in BOOL_SPACE}
     ep = {k: allp[k] for k in ENV_SPACE}
-    return fp, ep
+    return fp, bp, ep
 
 
 def main():
@@ -97,18 +104,19 @@ def main():
     _logfile = open(args.log, "a", newline="")
     logf = csv.writer(_logfile)
     if os.stat(args.log).st_size == 0:
-        logf.writerow(["budget", "limit"] + list(SPACE) + list(ENV_SPACE)
+        logf.writerow(["budget", "limit"] + list(SPACE) + BOOL_SPACE + list(ENV_SPACE)
                       + ["mean", "winrate", "avghp", "n"])
         _logfile.flush()
 
     def objective(trial):
         params = {name: trial.suggest_float(name, lo, hi, log=log)
                   for name, (lo, hi, log) in SPACE.items()}
+        bool_params = {name: trial.suggest_int(name, 0, 1) for name in BOOL_SPACE}
         env_params = {name: trial.suggest_int(name, lo, hi)
                       for name, (_var, lo, hi) in ENV_SPACE.items()}
         mean, winrate, avghp, n = run_eval(
             args.test_bin, args.state_file, args.threads, params, env_params,
-            args.search_budget, args.search_limit, logf)
+            args.search_budget, args.search_limit, logf, bool_params=bool_params)
         trial.set_user_attr("winrate", winrate)
         return mean
 
@@ -126,7 +134,7 @@ def main():
     def cb(st, tr):
         b = st.best_trial
         cfg = " ".join(f"{k}={b.params[k]:.3f}" for k in SPACE)
-        cfg += " " + " ".join(f"{k}={b.params[k]}" for k in ENV_SPACE)
+        cfg += " " + " ".join(f"{k}={b.params[k]}" for k in BOOL_SPACE + list(ENV_SPACE))
         print(f"trial {tr.number}: {tr.value:.3f} win {tr.user_attrs.get('winrate',0):.3f} "
               f"| best {b.value:.3f} win {b.user_attrs.get('winrate', 0):.3f} @ {cfg}", flush=True)
 
@@ -139,13 +147,13 @@ def main():
     seen = sorted(completed, key=lambda t: -t.value)[:8]
     results = []
     for t in seen:
-        fp, ep = split_params(t.params)
+        fp, bp, ep = split_params(t.params)
         ho = None
         if args.holdout_file and os.path.exists(args.holdout_file):
             ho = run_eval(args.test_bin, args.holdout_file, args.threads, fp, ep,
-                          args.search_budget, args.holdout_limit)
+                          args.search_budget, args.holdout_limit, bool_params=bp)
         cfg = " ".join(f"{k}={t.params[k]:.3f}" for k in SPACE) + " " \
-              + " ".join(f"{k}={t.params[k]}" for k in ENV_SPACE)
+              + " ".join(f"{k}={t.params[k]}" for k in BOOL_SPACE + list(ENV_SPACE))
         ho_str = f" | holdout mean={ho[0]:.3f} win={ho[1]:.3f}" if ho else ""
         print(f"  dev mean={t.value:8.3f} win={t.user_attrs.get('winrate',0):.3f}{ho_str}  @ {cfg}",
               flush=True)
@@ -156,12 +164,12 @@ def main():
         b = run_eval(args.test_bin, args.holdout_file, args.threads,
                      {"lossDamageWeight": 0.0, "exploration": 25.0, "explorationChance": 25.0},
                      {"cardEps": 0, "potionEps": 0},
-                     args.search_budget, args.holdout_limit)
+                     args.search_budget, args.holdout_limit, bool_params={"lossAbsoluteHp": 0})
         print(f"  BASELINE holdout mean={b[0]:.3f} win={b[1]:.3f}", flush=True)
 
     best = max(results, key=lambda r: (r[1][0] if r[1] else r[0].value))
-    fp, ep = split_params(best[0].params)
-    print(f"\nBEST (by holdout): {fp} {ep}", flush=True)
+    fp, bp, ep = split_params(best[0].params)
+    print(f"\nBEST (by holdout): {fp} {bp} {ep}", flush=True)
 
 
 if __name__ == "__main__":

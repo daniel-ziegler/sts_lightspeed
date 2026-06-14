@@ -42,6 +42,10 @@ namespace sts::search {
         // Loss-branch gradation: reward total monster HP removed over the battle (cumulative, so
         // it counts progress through splits the current-HP term misses). Default 0 = off.
         double lossDamageWeight = 0;
+        // Loss-branch monster term: false = fraction of current monsters' HP removed (default);
+        // true = absolute HP left (per-HP gradient, so a 150-HP boss grades finer than a 30-HP
+        // monster). Only affects in-search move ranking, not the eval_states outcome metric.
+        bool lossAbsoluteHp = false;
     };
 
     // Deterministic search-graph telemetry: counts are exact properties of the search

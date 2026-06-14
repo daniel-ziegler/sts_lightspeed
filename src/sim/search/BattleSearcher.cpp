@@ -851,6 +851,18 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
     return (double)curHpTotal / maxHpTotal;
 }
 
+// Absolute current HP across non-minion monsters (for the lossAbsoluteHp eval mode).
+int getNonMinionMonsterCurHpAbs(const BattleContext &bc) {
+    int curHpTotal = 0;
+    for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+        const auto &m = bc.monsters.arr[i];
+        if (!m.hasStatus<MS::MINION>() && m.id != sts::MonsterId::INVALID) {
+            curHpTotal += m.curHp;
+        }
+    }
+    return curHpTotal;
+}
+
 double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     const double potionScore = bc.potionCount * evalWeights.potionWeight;
 
@@ -894,7 +906,12 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
         const double aliveScore = bc.monsters.monstersAlive * -evalWeights.aliveWeight;
 
         const double lossDamageBonus = evalWeights.lossDamageWeight * bc.cumulativeMonsterDamage;
-        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + lossDamageBonus;
+        // Monster-progress term: fraction of current monsters' HP removed (default), or absolute
+        // HP left scaled to ~monsterDamageWeight per 100 HP (per-HP gradient). Only ranks moves.
+        const double monsterTerm = evalWeights.lossAbsoluteHp
+            ? -getNonMinionMonsterCurHpAbs(bc) * evalWeights.monsterDamageWeight / 100.0
+            : (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight;
+        return monsterTerm + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + lossDamageBonus;
     }
 }
 
