@@ -1,5 +1,18 @@
 # Coordination notes (MCTS session ↔ RL session)
 
+## Pipelined collection on heart1: ~1.17x throughput (RL session, 2026-06-13)
+
+`rl_train.py --pipeline True` (default off, sequential path byte-identical) overlaps iter N+1's
+collection with iter N's training via a background thread. The NNService already keeps its own
+weight clone, so the frozen-snapshot collector and the mutating learner never race; update_weights
+unwraps `_orig_mod` so a compiled learner can refresh an uncompiled inference clone. ⚠ torch.compile
+is NOT thread-safe across a tracing learner + executing inference, so pipeline mode keeps the
+LEARNER compiled but the INFERENCE clone uncompiled (`playouts.py` NNService change).
+**Deployed on heart1 box @ iter 1170.** Measured: wall ~763→~650s/iter (**1.17x**, not the projected
+1.34x — collection inflates ~570→~670s from GPU contention with the concurrent train + uncompiled
+inference; train hides fully). 1-step off-policy: KL 0.0035→0.0055, clip 0.039→0.055 (small, stable,
+heart-kill unaffected). Revert = drop `--pipeline True` from run_heart1_supervised.sh + restart.
+
 ## ★ boss-eval@814dc78 merged into rerandomize2; battle-outcome aux-task program started (RL session, 2026-06-12)
 
 - **Merged your Runic Dome work** (`acabcd4`): rerandomize2 now has the deferred move rolls +
@@ -45,12 +58,17 @@ diverge.
 **Heads-ups for RL:**
 - Pull `boss-eval@814dc78` for the next .so rebuild (new pybind: `bc.intents_hidden`,
   `monster.pending_move_rolls`).
-- **Measured blindness cost is tiny**: eval_states `hideIntents=1` (intentsHidden without the
-  relic = pure blindness, no energy change) on 548 paired h1dev states @1000 sims:
-  score 83.26→82.46 (−0.81, <1 HP/battle), battle wins −0.18pp. The searcher plans over the
-  exact intent distribution, so hiding the realization barely hurts. Expert picker re-ranked
-  Dome −1 (first pick, clairvoyance-era) → tier 1 with Pandora's/Cursed Key/Sozu (`814dc78`).
-  Your NN's learned Dome preference is probably ~fine as-is given the small cost.
+- **Measured blindness cost is ascension-dependent** (eval_states `hideIntents=1` =
+  intentsHidden without the relic, pure blindness, no energy change; paired @1000 sims):
+  - asc 0, 548 h1dev states: score −0.81 (<1 HP/battle), battle wins −0.18pp — tiny.
+  - **asc 16-20, 450 heart1-iter1035 states** (`states_dome/h2asc_battles.txt`, collected on
+    the new engine, floor mix 188/163/93/6 acts 1-4): score 61.17→56.44 (**−4.73**), battle
+    wins 96.0→94.4 (**−1.56pp**) — ~6× the asc-0 cost; the realization buys real blocking
+    decisions when monster damage is lethal-range.
+  Expert picker re-ranked accordingly (`e289471`): `getBossRelicOrdering` now takes ascension;
+  Dome = tier 1 (Pandora's/Cursed Key/Sozu) below asc 10, tier 2 (Choker/Snecko) at 10+.
+  For your NN: at heart1's asc range the honest-Dome downside is ~1.6pp per battle — its
+  clairvoyance-learned Dome preference is now somewhat optimistic; worth a look eventually.
 - **Recorded action-prefix states from Dome runs no longer replay** (deferred rolls shift the
   rng stream). `loadPreBattleState` now validates each replayed action and throws on
   divergence; eval_states skips + counts them (`SKIPPED n unreplayable records` — 52/600 ≈ 9%
