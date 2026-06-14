@@ -27,6 +27,7 @@ SPACE = {
     "lossDamageWeight":  (0.0, 0.2, False),
     "exploration":       (3.0, 60.0, True),
     "explorationChance": (3.0, 60.0, True),
+    "monsterDamage":     (10.0, 120.0, True),   # loss-branch damage-term coefficient (default 37)
 }
 # Boolean eval_states params to tune (suggested as 0/1, passed as int keys).
 BOOL_SPACE = ["lossAbsoluteHp"]
@@ -43,7 +44,9 @@ FIXED = {
 # Baseline (== current production: exploration 25/25, all gradation knobs off); enqueued first so
 # trial 0 is the value to beat.
 WARM_BASELINE = {"lossDamageWeight": 0.0, "exploration": 25.0, "explorationChance": 25.0,
-                 "lossAbsoluteHp": 0, "cardEps": 0, "potionEps": 0}
+                 "monsterDamage": 37.0, "lossAbsoluteHp": 0, "cardEps": 0, "potionEps": 0}
+# Default for params absent from a warm-start source study (e.g. monsterDamage before it was tuned).
+WARM_DEFAULTS = {"monsterDamage": 37.0}
 
 _logfile = None
 _loglock = threading.Lock()
@@ -98,6 +101,9 @@ def main():
     ap.add_argument("--storage", default="sqlite:///tune_rollout.db")
     ap.add_argument("--study-name", default="rollout_v1")
     ap.add_argument("--log", default="tune_rollout_evals.csv")
+    ap.add_argument("--warm-from-study", default="",
+                    help="seed a fresh study with the top-K completed trials of this prior study")
+    ap.add_argument("--warm-k", type=int, default=8)
     args = ap.parse_args()
 
     global _logfile
@@ -127,6 +133,13 @@ def main():
     )
     if len(study.trials) == 0:
         study.enqueue_trial(dict(WARM_BASELINE))
+        if args.warm_from_study:
+            prior = optuna.load_study(study_name=args.warm_from_study, storage=args.storage)
+            top = sorted((t for t in prior.trials if t.value is not None),
+                         key=lambda t: -t.value)[:args.warm_k]
+            for t in top:
+                study.enqueue_trial({**WARM_DEFAULTS, **t.params})
+            print(f"warm-started {len(top)} trials from {args.warm_from_study}", flush=True)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     done = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
