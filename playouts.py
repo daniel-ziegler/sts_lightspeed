@@ -552,8 +552,15 @@ class NNService:
         return clone
     
     def update_weights(self, net):
-        """Update the inference network weights from the training network"""
-        self.net.load_state_dict(net.state_dict())
+        """Update the inference network weights from the training network.
+
+        Unwrap torch.compile's OptimizedModule (._orig_mod) on BOTH sides before copying, so a
+        compiled learner can update an uncompiled inference clone (pipeline mode) and vice versa
+        -- their state_dict key prefixes ('_orig_mod.') otherwise mismatch. For the matched case
+        (both compiled or both plain) this is equivalent to the direct load."""
+        src = getattr(net, '_orig_mod', net)
+        dst = getattr(self.net, '_orig_mod', self.net)
+        dst.load_state_dict(src.state_dict())
     
     def _process_requests(self):
         while not self.shutdown_event.is_set():

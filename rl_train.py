@@ -1430,7 +1430,13 @@ def main():
         orig_net = nets = service_net = net  # lol TODO
         print(f"Using single network (value_head={algo.requires_value_head})")
     
-    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=args.torch_compile)
+    # In pipeline mode the inference clone runs CONCURRENTLY with training; torch.compile/dynamo
+    # is not thread-safe across a tracing learner and an executing inference net (it raises
+    # "using FX to symbolically trace a dynamo-optimized function"). Keep the learner compiled
+    # but leave the inference clone uncompiled -- inference is a small part of MCTS-bound
+    # collection, so the cost is minor and the collision is eliminated deterministically.
+    inf_compile = 'no' if config.pipeline else args.torch_compile
+    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=inf_compile)
 
     # Compile networks after service creation to ensure same compilation state
     if args.torch_compile != 'no':
