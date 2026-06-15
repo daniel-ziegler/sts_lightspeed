@@ -175,6 +175,7 @@ class TrainConfig:
     # these explicitly together with matching eval weights.
     mcts_simulations: int = 1000
     mcts_exploration: Optional[float] = None
+    mcts_exploration_chance: Optional[float] = None   # UCB constant for chance-node child edges
     mcts_widening_c: Optional[float] = None
     mcts_widening_alpha: Optional[float] = None
     mcts_boss_widening_c: Optional[float] = None      # None = engine's boss-gated default
@@ -192,6 +193,8 @@ class TrainConfig:
     mcts_energy_waste_weight: Optional[float] = None
     mcts_draw_weight: Optional[float] = None
     mcts_turn_survival_weight: Optional[float] = None
+    mcts_loss_damage_weight: Optional[float] = None   # loss-branch reward per cumulative monster HP removed
+    mcts_loss_absolute_hp: Optional[bool] = None      # loss-branch: absolute HP left vs fraction removed
 
     # Reward shaping (potential-based). We extend the existing telescoping potential
     # Phi(s) with shape(s) = shaping_hp_coef*(cur_hp/max_hp) + shaping_upg_coef*num_upgraded.
@@ -407,6 +410,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
     # None = leave the engine's jointly-tuned search defaults in place (see TrainConfig).
     if config.mcts_exploration is not None:
         agent.exploration_parameter = config.mcts_exploration
+    if config.mcts_exploration_chance is not None:
+        agent.exploration_parameter_chance = config.mcts_exploration_chance
     if config.mcts_widening_c is not None:
         agent.chance_widening_c = config.mcts_widening_c
     if config.mcts_widening_alpha is not None:
@@ -433,6 +438,8 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         ('energy_waste_weight', config.mcts_energy_waste_weight),
         ('draw_weight', config.mcts_draw_weight),
         ('turn_survival_weight', config.mcts_turn_survival_weight),
+        ('loss_damage_weight', config.mcts_loss_damage_weight),
+        ('loss_absolute_hp', config.mcts_loss_absolute_hp),
     ]
     if any(v is not None for _, v in _ew_overrides):
         ew = agent.eval_weights

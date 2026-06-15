@@ -119,7 +119,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("turn_survival_weight", &search::EvalWeights::turnSurvivalWeight)
         .def_readwrite("gold_loss_weight", &search::EvalWeights::goldLossWeight, "penalty per gold permanently lost to an escaped Looter/Mugger")
         .def_readwrite("max_hp_weight", &search::EvalWeights::maxHpWeight, "bonus per max HP gained vs the search root (Feed, Darkstone)")
-        .def_readwrite("parasite_penalty", &search::EvalWeights::parasitePenalty, "flat penalty when Writhing Mass's implant will add a Parasite");
+        .def_readwrite("parasite_penalty", &search::EvalWeights::parasitePenalty, "flat penalty when Writhing Mass's implant will add a Parasite")
+        .def_readwrite("loss_damage_weight", &search::EvalWeights::lossDamageWeight, "loss-branch reward per cumulative monster HP removed (counts through splits)")
+        .def_readwrite("loss_absolute_hp", &search::EvalWeights::lossAbsoluteHp, "loss-branch monster term: absolute HP left (true) vs fraction removed (false)");
 
     pybind11::class_<search::BattleSnapshot>(m, "BattleSnapshot")
         .def_readonly("floor", &search::BattleSnapshot::floor)

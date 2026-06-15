@@ -49,6 +49,12 @@ def main():
                     help='intervention arm: uniform-random path choices (prices the routing policy)')
     ap.add_argument('--ascension', type=int, default=0,
                     help='play every game at this ascension level')
+    # rollout/eval gradation knob gate (tuned candidates). Widening stays at engine default.
+    ap.add_argument('--exploration-chance', type=float, default=None)
+    ap.add_argument('--loss-damage-weight', type=float, default=None)
+    ap.add_argument('--loss-absolute-hp', type=int, default=None, choices=[0, 1])
+    ap.add_argument('--monster-damage', type=float, default=None,
+                    help='override monsterDamageWeight (loss-branch coefficient)')
     args = ap.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -89,6 +95,14 @@ def main():
     elif not args.legacy_config and args.boss_widening == 'off':
         # pin boss widening to the general tuned values (engine default is the boss-gated set)
         legacy = dict(mcts_boss_widening_c=4.6, mcts_boss_widening_alpha=0.37)
+    # Rollout/eval gradation knobs (card/potion epsilons are env vars, set in the shell). These
+    # merge onto whatever search config was selected above; widening stays at engine default.
+    for k, v in [('mcts_exploration_chance', args.exploration_chance),
+                 ('mcts_loss_damage_weight', args.loss_damage_weight),
+                 ('mcts_loss_absolute_hp', None if args.loss_absolute_hp is None else bool(args.loss_absolute_hp)),
+                 ('mcts_monster_damage_weight', args.monster_damage)]:
+        if v is not None:
+            legacy[k] = v
     config = TrainConfig(
         mcts_simulations=args.mcts_sims,
         log_battle_outcomes=args.battle_csv is not None,
