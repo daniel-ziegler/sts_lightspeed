@@ -1,6 +1,7 @@
 # %%
 from __future__ import annotations
 
+import os
 import random
 import copy
 from enum import IntEnum, auto
@@ -551,8 +552,15 @@ class NNService:
         return clone
     
     def update_weights(self, net):
-        """Update the inference network weights from the training network"""
-        self.net.load_state_dict(net.state_dict())
+        """Update the inference network weights from the training network.
+
+        Unwrap torch.compile's OptimizedModule (._orig_mod) on BOTH sides before copying, so a
+        compiled learner can update an uncompiled inference clone (pipeline mode) and vice versa
+        -- their state_dict key prefixes ('_orig_mod.') otherwise mismatch. For the matched case
+        (both compiled or both plain) this is equivalent to the direct load."""
+        src = getattr(net, '_orig_mod', net)
+        dst = getattr(self.net, '_orig_mod', self.net)
+        dst.load_state_dict(src.state_dict())
     
     def _process_requests(self):
         while not self.shutdown_event.is_set():
@@ -769,7 +777,30 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                 fixed_actions.append({'action': FixedAction.SKIP})
                 fixed_actions_list.append(action)
-                
+            elif action.rewards_action_type == sts.RewardsActionType.KEY:
+                # Sapphire (chest) or emerald (burning elite) key for act 4.
+                fixed_actions.append({'action': FixedAction.TAKE_KEY})
+                fixed_actions_list.append(action)
+
+    elif gc.screen_state == sts.ScreenState.TREASURE_ROOM:
+        # Chest: open (idx1 0) or walk past (idx1 1). A policy decision -- with Cursed Key
+        # opening costs a curse, and the sapphire key sits behind chests for heart runs.
+        # STS_FORCE_CHEST=open|skip pins the decision (intervention evals): the desired
+        # action is offered twice so the NN's sample is forced without touching the
+        # sampling loop.
+        force = os.environ.get('STS_FORCE_CHEST')
+        for action in actions:
+            if force is not None and action.idx1 != (0 if force == 'open' else 1):
+                continue
+            if action.idx1 == 0:
+                fixed_actions.append({'action': FixedAction.OPEN_CHEST})
+            else:
+                fixed_actions.append({'action': FixedAction.SKIP})
+            fixed_actions_list.append(action)
+        if force is not None and len(fixed_actions_list) == 1:
+            fixed_actions.append(dict(fixed_actions[-1]))
+            fixed_actions_list.append(fixed_actions_list[-1])
+
     elif gc.screen_state == sts.ScreenState.SHOP_ROOM:
         # Shop cards are now returned as [card_set] where card_set contains all shop cards
         all_shop_relics = gc.screen_state_info.shop.relics

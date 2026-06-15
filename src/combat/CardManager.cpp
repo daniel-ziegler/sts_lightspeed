@@ -5,10 +5,12 @@
 #include "combat/CardManager.h"
 
 #include <set>
+#include <cstdlib>
+#include <execinfo.h>
+
 #include <algorithm>
 
 #include "combat/BattleContext.h"
-
 #include "game/GameContext.h"
 #include "game/Card.h"
 
@@ -193,27 +195,23 @@ void CardManager::moveToExhaustPile(const CardInstance &c) {
 
 
 void CardManager::moveToDrawPileBottom(const CardInstance &c) {
-#ifdef sts_asserts
+    // An INVALID instance reaching a pile move is a rare engine bug (first observed with
+    // chest relics in play, ~1/1000 games, timing-dependent). Dropping the card keeps the
+    // battle playable; asserting would abort the whole hosting process. The warning line
+    // is the detection signal -- grep logs for "WARNING: dropped INVALID".
     if (c.getId() == CardId::INVALID) {
-        std::cerr << *g_debug_bc << '\n';
-        search::g_debug_scum_search->printSearchStack(std::cerr, true);
-        std::cerr << "attempted to insert invalid card to draw pile" << std::endl;
-        assert(false);
+        std::cerr << "WARNING: dropped INVALID card on moveToDrawPileBottom" << std::endl;
+        return;
     }
-#endif
     notifyAddToDrawPile(c);
     drawPile.addToBottom(c);
 }
 
 void CardManager::moveToDrawPileTop(const CardInstance &c) {
-#ifdef sts_asserts
     if (c.getId() == CardId::INVALID) {
-        std::cerr << *g_debug_bc << '\n';
-        search::g_debug_scum_search->printSearchStack(std::cerr, true);
-        std::cerr << "attempted to move invalid card to draw pile" << std::endl;
-        assert(false);
+        std::cerr << "WARNING: dropped INVALID card on moveToDrawPileTop" << std::endl;
+        return;
     }
-#endif
     notifyAddToDrawPile(c);
     drawPile.addToTop(c);
 }
@@ -225,14 +223,48 @@ void CardManager::shuffleIntoDrawPile(Random &rng, const CardInstance &c) {
 
 void CardManager::moveToDiscardPile(const CardInstance &c) {
     // todo check flurries, weave
-#ifdef sts_asserts
     if (c.getId() == CardId::INVALID) {
-        std::cerr << *g_debug_bc << '\n';
-        search::g_debug_scum_search->printSearchStack(std::cerr, true);
-        std::cerr << "attempted to move invalid card to discard pile" << std::endl;
-        assert(false);
+        // One-line battle fingerprint for root-causing (g_debug_bc is thread_local, set by
+        // the executing battle): seed/turn/monster identify the fight class.
+        // STS_INVALID_VERBOSE=1 additionally dumps the full battle state + search action
+        // stack on the first occurrence (debug sessions only -- the dump is large).
+        std::cerr << "WARNING: dropped INVALID card on moveToDiscardPile";
+        if (g_debug_bc != nullptr) {
+            std::cerr << " [seed " << g_debug_bc->seed << " turn " << g_debug_bc->turn
+                      << " m0 " << static_cast<int>(g_debug_bc->monsters.arr[0].id)
+                      << " mAlive " << g_debug_bc->monsters.monstersAlive
+                      << " cardQ " << g_debug_bc->cardQueue.size
+                      << " hand " << g_debug_bc->cards.cardsInHand << "]";
+        }
+        std::cerr << std::endl;
+        static bool dumped = false;
+        if (!dumped && std::getenv("STS_INVALID_VERBOSE") != nullptr && g_debug_bc != nullptr) {
+            dumped = true;
+            std::cerr << *g_debug_bc << '\n';
+            if (search::g_debug_scum_search != nullptr) {
+                search::g_debug_scum_search->printSearchStack(std::cerr, true);
+            }
+            std::cerr << "curCardQueueItem: card " << g_debug_bc->curCardQueueItem.card
+                      << " isEndTurn " << g_debug_bc->curCardQueueItem.isEndTurn
+                      << " triggerOnUse " << g_debug_bc->curCardQueueItem.triggerOnUse
+                      << " purgeOnUse " << g_debug_bc->curCardQueueItem.purgeOnUse << '\n';
+            std::cerr << "actionQueue (" << g_debug_bc->actionQueue.size << "):";
+            {
+                int ci = g_debug_bc->actionQueue.front;
+                for (int i = 0; i < g_debug_bc->actionQueue.size; ++i) {
+                    if (ci >= g_debug_bc->actionQueue.getCapacity()) ci = 0;
+                    std::cerr << ' ' << g_debug_bc->actionQueue.arr[ci];
+                    ++ci;
+                }
+            }
+            std::cerr << '\n';
+            void *frames[32];
+            const int n = backtrace(frames, 32);
+            backtrace_symbols_fd(frames, n, 2);
+            std::cerr.flush();
+        }
+        return;
     }
-#endif
     notifyAddToDiscardPile(c);
     discardPile.add(c);
 }

@@ -39,7 +39,7 @@ namespace sts {
             return result;
         }
 
-        static constexpr int fixed_observation_space_size = 6;
+        static constexpr int fixed_observation_space_size = 10;
         static constexpr int playerHpMax = 200;
         static constexpr int playerGoldMax = 1800;
         static constexpr int cardCountMax = 7;
@@ -64,7 +64,8 @@ namespace sts {
             pybind11::array_t<int> ys;
             pybind11::array_t<Room> roomTypes;
             pybind11::array_t<int> pathXs;  // 2D array: [num_rooms, 3] where each row is [left_x, straight_x, right_x] or -1 if no edge
-            // todo burning elite pos
+            int burningEliteX = -1;  // (-1,-1) when no burning elite on this map (e.g. emerald key held)
+            int burningEliteY = -1;
 
             pybind11::dict as_dict() const;
         };

@@ -127,7 +127,7 @@ class PPOAlgorithm(Algorithm):
         return _gae(trajectories, config, adv_norm, debug_traj=debug_traj)
 
     def compute_loss(self, batch, net_output, config):
-        new_logits, new_values = net_output
+        new_logits, new_values, aux_room_logits = net_output
         device = new_logits.device
         old_log_probs = torch.clamp(batch['old_log_prob'].to(device), min=-LOG_PROB_CLAMP, max=LOG_PROB_CLAMP)
         advantages = batch['advantage'].to(device)
@@ -148,6 +148,17 @@ class PPOAlgorithm(Algorithm):
             'kl_div': kl_div, 'clipfrac': clipfrac,
             'ev_target': target_values, 'ev_pred': new_values,
         }
+
+        # Self-supervised grounding scaffold: classify each path option's destination room.
+        # Batches whose rows are all non-path decisions (every label -100) yield a NaN
+        # cross-entropy and simply contribute no aux term.
+        if aux_room_logits is not None and config.aux_dest_room_coef > 0:
+            labels = batch['aux_dest_room'].to(device)
+            aux_loss = F.cross_entropy(aux_room_logits.reshape(-1, aux_room_logits.shape[-1]),
+                                       labels.reshape(-1), ignore_index=-100)
+            if not torch.isnan(aux_loss):
+                total_loss = total_loss + config.aux_dest_room_coef * aux_loss
+                aux['aux_room_loss'] = aux_loss
         return total_loss, aux
 
 

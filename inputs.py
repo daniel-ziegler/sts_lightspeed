@@ -105,7 +105,7 @@ class IntSpace(ScalarSpace[int]):
     def __init__(self, limit: int):
         self.limit = limit
         super().__init__()
-    
+
     def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
         return cache.build(self, dim, lambda: nn.Embedding(self.limit, dim))
 

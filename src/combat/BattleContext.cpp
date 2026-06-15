@@ -714,6 +714,11 @@ void BattleContext::clearPostCombatActions() {
         }
         ++curIdx;
     }
+    // Restore the ring invariant back == front + size (mod capacity). Without this, the next
+    // pushBack lands past the compacted region and later pops walk through the stale gap,
+    // resurrecting cleared/already-executed actions (e.g. a stale OnAfterCardUsed disposing
+    // the consumed-power husk in curCardQueueItem -> INVALID card pile moves).
+    actionQueue.back = (actionQueue.front + actionQueue.size) % actionQueue.getCapacity();
 }
 
 void BattleContext::cleanCardQueue() {
@@ -969,7 +974,7 @@ void BattleContext::useNoTriggerCard() {
     }
 
     cards.removeFromHandById(c.uniqueId);
-    addToBot(Actions::DiscardNoTriggerCard()); // todo what if havoc plays one of these
+    addToBot(Actions::DiscardNoTriggerCard(c));
 }
 
 void BattleContext::useAttackCard() {

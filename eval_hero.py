@@ -45,6 +45,10 @@ def main():
                          '1.0/0.5 incl. boss, old eval weights) instead of the engine defaults')
     ap.add_argument('--battle-csv', default=None,
                     help='also write one row per battle (boss analysis) to this path')
+    ap.add_argument('--randomize-paths', action='store_true',
+                    help='intervention arm: uniform-random path choices (prices the routing policy)')
+    ap.add_argument('--ascension', type=int, default=0,
+                    help='play every game at this ascension level')
     args = ap.parse_args()
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -88,6 +92,8 @@ def main():
     config = TrainConfig(
         mcts_simulations=args.mcts_sims,
         log_battle_outcomes=args.battle_csv is not None,
+        randomize_path_choices=args.randomize_paths,
+        fixed_ascension=args.ascension,
         **legacy,
         shaping_hp_coef=0.0, shaping_upg_coef=0.0,
         shaping_offset=0.0, shaping_relic_coef=0.0, shaping_maxhp_coef=0.0,

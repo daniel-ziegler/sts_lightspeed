@@ -15,6 +15,7 @@
 #include "constants/Potions.h"
 #include "constants/Events.h"
 #include "constants/Cards.h"
+#include "constants/CardPools.h"
 #include "constants/Relics.h"
 #include "constants/MonsterIds.h"
 #include "constants/PlayerStatusEffects.h"
@@ -57,7 +58,9 @@ pybind11::dict py::NNMapRepresentation::as_dict() const {
     return pybind11::dict("xs"_a=xs,
                           "ys"_a=ys,
                           "roomTypes"_a=roomTypes,
-                          "pathXs"_a=pathXs);
+                          "pathXs"_a=pathXs,
+                          "burningEliteX"_a=burningEliteX,
+                          "burningEliteY"_a=burningEliteY);
 }
 
 pybind11::dict py::NNRepresentation::as_dict() const {
@@ -92,6 +95,17 @@ PYBIND11_MODULE(slaythespire, m) {
     m.def("getFixedObservation", &py::getFixedObservation, "get observation array given a GameContext");
     m.def("getFixedObservationMaximums", &py::getFixedObservationMaximums, "get the defined maximum values of the observation space");
     m.def("getNNRepresentation", &py::getNNRepresentation, "get the neural network representation of a GameContext");
+    m.def("get_card_pool", [](CharacterClass cc, CardType type, CardRarity rarity) {
+        std::vector<CardId> out;
+        const int n = TypeRarityCardPool::getPoolSize(cc, type, rarity);
+        for (int i = 0; i < n; ++i) {
+            out.push_back(TypeRarityCardPool::getCardFromPool(cc, type, rarity, i));
+        }
+        return out;
+    }, "the engine's obtainable-card pool for a class/type/rarity (what card rewards draw from)");
+    m.def("get_colorless_card_pool", []() {
+        return std::vector<CardId>(srcColorlessCardPool, srcColorlessCardPool + srcColorlessCardPoolSize);
+    }, "the engine's colorless card pool");
 
     pybind11::class_<search::EvalWeights>(m, "EvalWeights")
         .def(pybind11::init<>())
@@ -136,10 +150,17 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("record_actions", &search::SearchAgent::recordActions, "record taken actions into game_action_history")
         .def_readwrite("game_action_history", &search::SearchAgent::gameActionHistory, "bits of actions taken (in-battle search::Actions via playout_battle)")
         .def("pick_gameaction", &search::SearchAgent::pickOutOfCombatAction)
-        .def("playout_battle", [](search::SearchAgent &agent, GameContext &gc) {
+        .def("playout_battle", [](search::SearchAgent &agent, GameContext &gc,
+                                  std::optional<MonsterEncounter> encounter) {
             pybind11::gil_scoped_release release;
             BattleContext bc;
-            bc.init(gc);
+            // None = use the encounter the game rolled (gc.info.encounter); otherwise
+            // force the given encounter against this state.
+            if (encounter.has_value() && *encounter != MonsterEncounter::INVALID) {
+                bc.init(gc, *encounter);
+            } else {
+                bc.init(gc);
+            }
 
             const auto battleEncounter = bc.encounter;
             agent.playoutBattle(bc);
@@ -151,7 +172,8 @@ PYBIND11_MODULE(slaythespire, m) {
                                            static_cast<int>(gc.deck.size()),
                                            static_cast<int>(battleEncounter)});
             }
-        }, "playout a battle")
+        }, "gc"_a, "encounter"_a = pybind11::none(),
+           "playout a battle; optionally force a specific encounter instead of the rolled one")
         .def("playout", &search::SearchAgent::playout);
 
     // ActionType enum binding
@@ -449,6 +471,8 @@ PYBIND11_MODULE(slaythespire, m) {
     gameContext
         .def_readwrite("act", &GameContext::act)
         .def_readwrite("floor_num", &GameContext::floorNum)
+        .def_readwrite("ascension", &GameContext::ascension)
+        .def_readwrite("skip_battles", &GameContext::skipBattles)
 
         .def_readwrite("seed", &GameContext::seed)
         .def_readwrite("map", &GameContext::map)
@@ -488,7 +512,11 @@ PYBIND11_MODULE(slaythespire, m) {
         }, "sync changes from BattleContext back to GameContext")
         .def("clear_deck", [](GameContext &gc) {
             gc.deck.cards.clear();
-        }, "clear all cards from the deck");
+        }, "clear all cards from the deck")
+        .def("copy", [](const GameContext &gc) { return GameContext(gc); },
+             "value copy for snapshot/mutate/simulate workflows. The Map is shared (shared_ptr), "
+             "not deep-copied -- fine for battle sims, which never mutate the map. Vary `seed` on "
+             "the copy to reroll battle randomness (battle + search rng derive from seed+floor).");
 
     // Enum-typed fields bound by value (snapshot) to avoid reference_internal aliasing.
     def_value(gameContext, "outcome", &GameContext::outcome);

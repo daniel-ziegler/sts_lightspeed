@@ -249,9 +249,11 @@ void _MakeTempCardInDiscard::operator()(BattleContext &bc) const {
 }
 
 void _DiscardNoTriggerCard::operator()(BattleContext &bc) const {
-    const auto &c = bc.curCardQueueItem.card;
-    bc.cards.notifyRemoveFromHand(c);
-    bc.cards.moveToDiscardPile(c);
+    // The card is captured at queue time: curCardQueueItem is mutable shared state that
+    // later card-queue dequeues (incl. the INVALID-carded end-turn item) overwrite before
+    // this deferred action runs. The hand removal (and its notify) already happened in
+    // useNoTriggerCard; this action only delivers the card to the discard pile.
+    bc.cards.moveToDiscardPile(card);
 }
 
 void _ClearCardQueue::operator()(BattleContext &bc) const {

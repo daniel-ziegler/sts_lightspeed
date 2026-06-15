@@ -6,9 +6,10 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
+import torch.utils.checkpoint  # submodule isn't auto-imported by `import torch`; forward() needs it
 
 import slaythespire as sts
-from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace, EmbedCache
+from inputs import FixedVecSpace, SequenceSpace, EnumSpace, DictSpace, TupleAddSpace, IntSpace, DictAddSpace, ScalarToSequenceSpace, EmbedCache, FixedVecEmbedding
 
 @dataclass
 class ModelHP:
@@ -26,11 +27,15 @@ class ModelHP:
 # Constants for data processing
 MAX_DECK_SIZE = 96  # Should be enough for most decks
 MAX_UPGRADE = 21
-MAX_RELICS = 25     # Maximum number of relics a player typically has
+MAX_RELICS = 40     # collate padding cap; 25 overflowed once chests started granting relics
 MAX_FIXED_ACTIONS = 5  # Maximum number of fixed actions in choices
 MAX_MAP_NODES = 100
 MAX_GOLD = 1000
 MAX_PATH_CHOICES = 7  # all possible columns from the start
+# Flat-logit offset of the paths section: collate_fn pads the choice sections to fixed widths
+# (cards MAX_DECK_SIZE, relics 3, potions MAX_POTION_CAPACITY, fixed MAX_FIXED_ACTIONS) and
+# DictSpace consumes them in declaration order, so path-option tokens start here.
+CHOICE_PATHS_OFFSET = MAX_DECK_SIZE + 3 + sts.MAX_POTION_CAPACITY + MAX_FIXED_ACTIONS
 
 
 class ActionType(IntEnum):
@@ -301,6 +306,13 @@ class FixedAction(IntEnum):
     OMINOUS_FORGE_LOSE_HP = auto()
     OMINOUS_FORGE_LEAVE = auto()
 
+    # Combat/chest reward: take the sapphire or emerald key (RewardsActionType.KEY).
+    # Appended last so older checkpoints' FixedAction embeddings load unchanged.
+    TAKE_KEY = auto()
+
+    # Treasure room: open or skip the chest (skip is FixedAction.SKIP).
+    OPEN_CHEST = auto()
+
 
 class EventFixedInfo(IntEnum):
     NONE = 0
@@ -319,21 +331,78 @@ relic_space = EnumSpace(sts.RelicId)
 potion_space = EnumSpace(sts.Potion)
 upgrade_space = IntSpace(MAX_UPGRADE)
 
+
+class IsReachable(IntEnum):
+    """Whether a map node is reachable from the current position's forward frontier."""
+    NO = 0
+    YES = 1
+
+
+# Cap for the dist-to-rest aggregate; also the [0,1] scale divisor for all map aggregates.
+# Map aggregate features are SCALED into [0,1]: unscaled magnitudes inside the DictAdd token
+# sum drown the other components (measured: unscaled aggregates cost ~40pp on unrelated tasks).
+MAP_AGG_CAP = 15
+
+# Boss id, ascension, and the act-4 key flags are categorical; the remaining
+# fixed-observation scalars stay sinusoidal.
+_FIXED_OBS_MAXES = list(sts.getFixedObservationMaximums())
+_BOSS_OBS_IDX = 4
+_ASC_OBS_IDX = 6
+_KEY_OBS_IDXS = (7, 8, 9)  # ruby, emerald, sapphire
+_FIXED_OBS_SCALAR_MAXES = [m for i, m in enumerate(_FIXED_OBS_MAXES)
+                           if i not in (_BOSS_OBS_IDX, _ASC_OBS_IDX) + _KEY_OBS_IDXS]
+
 obs_space = DictSpace({
     'deck': SequenceSpace(TupleAddSpace(card_space, upgrade_space)),
     'relics': SequenceSpace(relic_space),
     'potions': SequenceSpace(potion_space),
     'fixed_obs': ScalarToSequenceSpace(DictAddSpace({
-        'fixed_observation': FixedVecSpace(sts.getFixedObservationMaximums()),
+        'fixed_observation': FixedVecSpace(_FIXED_OBS_SCALAR_MAXES),
+        'boss': IntSpace(10),
+        'ascension': IntSpace(21),
+        'key_ruby': IntSpace(2),
+        'key_emerald': IntSpace(2),
+        'key_sapphire': IntSpace(2),
         'screen_state': EnumSpace(sts.ScreenState),
     })),
+    # Per-node map features. Beyond the raw structure (room/pos/edges), nodes carry
+    # ego-relative coords, a reachability flag, and scaled DAG aggregates (min/max elites
+    # ahead, dist to nearest rest) -- these make path grounding and map queries learnable
+    # at weak signal strength (see EXPERIMENT_LOG.md, repr lab).
     'map_nodes': SequenceSpace(DictAddSpace({
         'room': EnumSpace(sts.Room),
         'is_current': EnumSpace(IsCurrentNode),
         'pos': FixedVecSpace([7, 16]),
         'path_xs': FixedVecSpace([7, 7, 7]),  # can accept -1
+        'rel': FixedVecSpace([15, 31]),       # (dx, dy) from current position
+        'reachable': EnumSpace(IsReachable),
+        'agg': FixedVecSpace([2, 2, 2]),      # (min_elites, max_elites, dist_rest) / MAP_AGG_CAP
+        'burning': IntSpace(2),               # burning elite here (emerald key fight)
     })),
 })
+
+# Zero-initialized embedding variants: a new DictAdd component built from one of these is an
+# exact no-op at init (it adds 0 to the token sum), so adding it to the obs/choice encoding
+# warm-starts an existing checkpoint bit-identically -- the component only starts to matter once
+# trained. Used for the per-path-choice forward-cone features added below.
+class ZeroInitIntSpace(IntSpace):
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            e = nn.Embedding(self.limit, dim)
+            nn.init.zeros_(e.weight)
+            return e
+        return cache.build(self, dim, make)
+
+
+class ZeroInitFixedVecSpace(FixedVecSpace):
+    def build_embed(self, dim: int, cache: EmbedCache) -> nn.Module:
+        def make():
+            e = FixedVecEmbedding(dim, self.limits)
+            nn.init.zeros_(e.proj.weight)
+            nn.init.zeros_(e.proj.bias)
+            return e
+        return cache.build(self, dim, make)
+
 
 choice_space = DictSpace({
     'cards': SequenceSpace(TupleAddSpace(card_space, upgrade_space, EnumSpace(sts.CardSelectScreenType))),
@@ -346,7 +415,21 @@ choice_space = DictSpace({
         'relic': relic_space,
         'info': EnumSpace(EventFixedInfo),
     })),
-    'paths': SequenceSpace(FixedVecSpace([7])),
+    # Each path option carries its destination's room type alongside the x coordinate, so
+    # option grounding is a lookup instead of a learned multi-hop attention program. It also
+    # carries a forward-cone summary of what taking it leads to -- the destination node's
+    # (minE, maxE, dist_rest) DAG aggregates (scaled) and a bit for whether the burning elite
+    # (emerald key) is reachable down this option. Precomputing the lookahead onto the option
+    # the policy scores is what makes multi-hop routing (e.g. reaching a burning elite 2-4 rows
+    # ahead) learnable -- the SL repr-lab showed raw per-node reachability isn't aggregated by
+    # the net at a realistic budget, while this per-choice cone solves it (EXPERIMENT_LOG
+    # 2026-06-10). Zero-init so it warm-starts existing checkpoints bit-identically.
+    'paths': SequenceSpace(DictAddSpace({
+        'x': FixedVecSpace([7]),
+        'room': EnumSpace(sts.Room),
+        'cone': ZeroInitFixedVecSpace([2, 2, 2]),   # (minE, maxE, dist_rest) / MAP_AGG_CAP
+        'reaches_burn': ZeroInitIntSpace(2),
+    })),
 })
 
 
@@ -411,6 +494,10 @@ class NN(nn.Module):
         self.choice_logits = nn.Linear(H.dim, 1, bias=True)
         nn.init.uniform_(self.choice_logits.weight, -0.01, 0.01)
         nn.init.zeros_(self.choice_logits.bias)
+
+        # Auxiliary head: per-path-option destination-room classifier. Self-supervised
+        # grounding scaffold (labels come free from the map obs at collate time).
+        self.aux_room_head = nn.Linear(H.dim, len(sts.Room), bias=True)
         
         # Add value-specific layers if specified
         if H.num_value_layers > 0:
@@ -424,10 +511,16 @@ class NN(nn.Module):
             nn.init.zeros_(self.value_head.bias)
 
 
-    def forward(self, batch: dict):
+    def forward(self, batch: dict, return_aux: bool = False, return_pooled: bool = False):
         """
         Process a batch of inputs through the network.
-        
+
+        With return_aux=True, additionally returns aux_room_logits
+        [batch, MAX_PATH_CHOICES, n_rooms] for the destination-room auxiliary loss.
+        With return_pooled=True (value head required, exclusive with return_aux),
+        additionally returns the pooled trunk embedding [batch, dim] that the value
+        head reads — the attachment point for auxiliary prediction heads.
+
         Args:
             batch: Dictionary containing observation data and choices data.
                    The 'choices' key is popped and processed separately as action logits.
@@ -494,7 +587,12 @@ class NN(nn.Module):
         action_xs = xn[:, obs_mask.size(1):, :]
         choice_logits = self.choice_logits(action_xs).squeeze(-1).float()
         choice_logits = choice_logits.masked_fill(choice_mask, float('-inf'))
-        
+
+        aux_room_logits = None
+        if return_aux:
+            path_tokens = action_xs[:, CHOICE_PATHS_OFFSET:CHOICE_PATHS_OFFSET + MAX_PATH_CHOICES, :]
+            aux_room_logits = self.aux_room_head(path_tokens).float()
+
         # Compute value if value head is enabled
         if self.H.use_value_head:
             # Use separate value layers if specified
@@ -522,13 +620,37 @@ class NN(nn.Module):
             seq_lengths = (~pos_mask).sum(dim=1, keepdim=True).float()  # [batch_size, 1]
             pooled = value_xn.masked_fill(pos_mask.unsqueeze(-1), 0).sum(dim=1) / seq_lengths  # [batch_size, dim]
             values = self.value_head(pooled).squeeze(-1).float()  # [batch_size]
+            if return_aux:
+                return choice_logits.clone(), values.clone(), aux_room_logits
+            if return_pooled:
+                return choice_logits.clone(), values.clone(), pooled
             return choice_logits.clone(), values.clone()
         else:
+            if return_aux:
+                return choice_logits.clone(), aux_room_logits
             return choice_logits.clone()
     
     @property
     def device(self):
         return next(self.parameters()).device
+
+
+class BattleOutcomeHead(nn.Module):
+    """Predicts a specific battle's ΔHP outcome (battle_buckets scheme) from the trunk's
+    pooled embedding and the encounter. The encounter is a HEAD-ONLY input — the trunk never
+    sees it, so the trunk representation stays identical to the policy/value net's and the
+    head is forced to read combat strength out of the state embedding and cross it with the
+    encounter here. out_dim = NUM_BUCKETS for the bucketed CE head, 1 for the scaled-float
+    (ΔHP / maxHP) regression head."""
+
+    def __init__(self, dim: int, out_dim: int):
+        super().__init__()
+        self.enc_embed = nn.Embedding(len(sts.MonsterEncounter), dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * dim, dim), nn.SiLU(), nn.Linear(dim, out_dim))
+
+    def forward(self, pooled: torch.Tensor, encounter: torch.Tensor) -> torch.Tensor:
+        return self.mlp(torch.cat([pooled, self.enc_embed(encounter)], dim=-1)).float()
 
 
 def load_network_backward_compatible(net: NN, state_dict: dict) -> NN:
@@ -638,6 +760,85 @@ class SlayDataset(torch.utils.data.Dataset):
         }
 
 
+def map_dag_features(x):
+    """Exact map-DAG features for one flattened observation: per-node (min_elites, max_elites,
+    dist_rest) aggregates, reachability from the current frontier, and the destination room of
+    each offered path option.
+
+    Frontier = successors of the current node, or all y=0 roots at act start (mapY < 0).
+    dist_rest counts steps from the node itself (0 if the node is a rest site) and is capped
+    at MAP_AGG_CAP, which is also the [0,1] scale divisor used by the caller.
+    Returns (minE, maxE, dR, reach, dest_rooms) as python lists.
+    """
+    xs = [int(v) for v in x['obs.map.xs']]
+    ys = [int(v) for v in x['obs.map.ys']]
+    rts = [int(v) for v in x['obs.map.roomTypes']]
+    pxs = x['obs.map.pathXs']
+    idx = {(xc, yc): j for j, (xc, yc) in enumerate(zip(xs, ys))}
+    n = len(xs)
+    succ = [[] for _ in range(n)]
+    for j in range(n):
+        for e in pxs[j]:
+            e = int(e)
+            k = idx.get((e, ys[j] + 1))
+            if e >= 0 and k is not None:
+                succ[j].append(k)
+    ELITE, REST = int(sts.Room.ELITE), int(sts.Room.REST)
+    minE, maxE, dR = [0] * n, [0] * n, [MAP_AGG_CAP] * n
+    for j in sorted(range(n), key=lambda j: -ys[j]):
+        e = 1 if rts[j] == ELITE else 0
+        minE[j] = e + (min(minE[k] for k in succ[j]) if succ[j] else 0)
+        maxE[j] = e + (max(maxE[k] for k in succ[j]) if succ[j] else 0)
+        if rts[j] == REST:
+            dR[j] = 0
+        elif succ[j]:
+            dR[j] = min(MAP_AGG_CAP, 1 + min(dR[k] for k in succ[j]))
+
+    # Can each node forward-reach the burning elite (emerald key)? Reverse-y DP: a node reaches
+    # it iff it IS it or any successor does. (-1,-1 burningElite => no burning elite this map.)
+    bx, by = int(x.get('obs.map.burningEliteX', -1)), int(x.get('obs.map.burningEliteY', -1))
+    bn = idx.get((bx, by)) if bx >= 0 else None
+    reaches_burn = [False] * n
+    if bn is not None:
+        for j in sorted(range(n), key=lambda j: -ys[j]):
+            reaches_burn[j] = (j == bn) or any(reaches_burn[k] for k in succ[j])
+
+    cur = idx.get((int(x['obs.mapX']), int(x['obs.mapY'])))
+    if cur is not None:
+        frontier = list(succ[cur])
+    else:  # act start: every y=0 node is enterable
+        frontier = [j for j in range(n) if ys[j] == 0]
+    # Offered path options can exceed the current node's edges (Winged Boots ignores them);
+    # the true frontier is their union.
+    ydest_f = int(x['obs.mapY']) + 1
+    for px in x['paths_offered']:
+        k = idx.get((int(px), ydest_f))
+        if k is not None and k not in frontier:
+            frontier.append(k)
+    reach = [False] * n
+    stack = list(frontier)
+    while stack:
+        j = stack.pop()
+        if not reach[j]:
+            reach[j] = True
+            stack.extend(succ[j])
+
+    ydest = int(x['obs.mapY']) + 1
+    dest_rooms = []
+    opt_cone = []   # per offered option: the destination node's (minE, maxE, dist_rest)
+    opt_burn = []   # per offered option: does its forward cone reach the burning elite
+    for px in x['paths_offered']:
+        k = idx.get((int(px), ydest))
+        dest_rooms.append(rts[k] if k is not None else 0)
+        if k is not None:
+            opt_cone.append((minE[k], maxE[k], dR[k]))
+            opt_burn.append(reaches_burn[k])
+        else:
+            opt_cone.append((0, 0, MAP_AGG_CAP))
+            opt_burn.append(False)
+    return minE, maxE, dR, reach, dest_rooms, opt_cone, opt_burn
+
+
 def collate_fn(batch):
     # Extract observation and choices data
     chosen_idx_list = []
@@ -658,7 +859,12 @@ def collate_fn(batch):
             'mask': torch.ones((len(batch), sts.MAX_POTION_CAPACITY), dtype=torch.bool)
         },
         'fixed_obs': {
-            'fixed_observation': torch.zeros((len(batch), len(sts.getFixedObservationMaximums())), dtype=torch.int32),
+            'fixed_observation': torch.zeros((len(batch), len(_FIXED_OBS_SCALAR_MAXES)), dtype=torch.int32),
+            'boss': torch.zeros((len(batch),), dtype=torch.int32),
+            'ascension': torch.zeros((len(batch),), dtype=torch.int32),
+            'key_ruby': torch.zeros((len(batch),), dtype=torch.int32),
+            'key_emerald': torch.zeros((len(batch),), dtype=torch.int32),
+            'key_sapphire': torch.zeros((len(batch),), dtype=torch.int32),
             'screen_state': torch.zeros((len(batch),), dtype=torch.int32)
         },
         'map_nodes': {
@@ -667,6 +873,10 @@ def collate_fn(batch):
                 'is_current': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
                 'pos': torch.full((len(batch), MAX_MAP_NODES, 2), 0, dtype=torch.int32),  # [x, y]
                 'path_xs': torch.full((len(batch), MAX_MAP_NODES, 3), -1, dtype=torch.int32),   # left, straight, right
+                'rel': torch.full((len(batch), MAX_MAP_NODES, 2), 0, dtype=torch.int32),  # (dx, dy) from current
+                'reachable': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
+                'agg': torch.zeros((len(batch), MAX_MAP_NODES, 3), dtype=torch.float32),  # scaled DAG aggregates
+                'burning': torch.full((len(batch), MAX_MAP_NODES), 0, dtype=torch.int32),
             },
             'mask': torch.ones((len(batch), MAX_MAP_NODES), dtype=torch.bool)
         },
@@ -697,10 +907,17 @@ def collate_fn(batch):
             'mask': torch.ones((len(batch), MAX_FIXED_ACTIONS), dtype=torch.bool)
         },
         'paths': {
-            'value': torch.full((len(batch), MAX_PATH_CHOICES, 1), -1, dtype=torch.int32),
+            'value': {
+                'x': torch.full((len(batch), MAX_PATH_CHOICES, 1), -1, dtype=torch.int32),
+                'room': torch.full((len(batch), MAX_PATH_CHOICES), 0, dtype=torch.int32),
+                'cone': torch.zeros((len(batch), MAX_PATH_CHOICES, 3), dtype=torch.float32),
+                'reaches_burn': torch.zeros((len(batch), MAX_PATH_CHOICES), dtype=torch.int32),
+            },
             'mask': torch.ones((len(batch), MAX_PATH_CHOICES), dtype=torch.bool)
         },
     }
+    # Per-option destination room labels for the auxiliary grounding loss (-100 = no option).
+    aux_dest_room = torch.full((len(batch), MAX_PATH_CHOICES), -100, dtype=torch.long)
     
     # Fill the batched tensors with assertions to ensure data fits
     for i, x in enumerate(batch):
@@ -724,8 +941,19 @@ def collate_fn(batch):
         batch_obs['potions']['value'][i, :potions_len] = torch.tensor(potions, dtype=torch.int32)
         batch_obs['potions']['mask'][i, :potions_len] = torch.zeros(potions_len, dtype=torch.bool)
         
-        # Set fixed observation components
-        batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(x['obs.fixed_observation'], dtype=torch.int32)
+        # Set fixed observation components (boss/ascension/key flags split out as
+        # categoricals). Records from before an input existed default to 0 (6-entry
+        # records predate ascension; 7-entry records predate the act-4 key flags).
+        fo = list(x['obs.fixed_observation'])
+        keys = [fo.pop(j) for j in reversed(_KEY_OBS_IDXS)][::-1] if len(fo) > _KEY_OBS_IDXS[-1] else [0, 0, 0]
+        ascension = fo.pop(_ASC_OBS_IDX) if len(fo) > _ASC_OBS_IDX else 0
+        boss = fo.pop(_BOSS_OBS_IDX)
+        batch_obs['fixed_obs']['fixed_observation'][i] = torch.tensor(fo, dtype=torch.int32)
+        batch_obs['fixed_obs']['boss'][i] = int(boss)
+        batch_obs['fixed_obs']['ascension'][i] = int(ascension)
+        batch_obs['fixed_obs']['key_ruby'][i] = int(keys[0])
+        batch_obs['fixed_obs']['key_emerald'][i] = int(keys[1])
+        batch_obs['fixed_obs']['key_sapphire'][i] = int(keys[2])
         batch_obs['fixed_obs']['screen_state'][i] = x['screen_state']
         
         # Set map observation components
@@ -738,13 +966,24 @@ def collate_fn(batch):
         nodes_len = len(map_xs)
         assert nodes_len <= MAX_MAP_NODES, f"Map nodes count {nodes_len} exceeds maximum {MAX_MAP_NODES}"
         
-        # Create node data: (room_type, is_current, x, y, path_xs)
+        # Create node data: raw structure + ego-relative coords, reachability, DAG aggregates
+        minE, maxE, dR, reach, dest_rooms, opt_cone, opt_burn = map_dag_features(x)
+        # Burning-elite flag (emerald key). Records from before the field default to no flag.
+        burn_x = int(x.get('obs.map.burningEliteX', -1))
+        burn_y = int(x.get('obs.map.burningEliteY', -1))
         for j in range(nodes_len):
             is_current = 1 if (map_xs[j] == map_x_pos and map_ys[j] == map_y_pos) else 0
             batch_obs['map_nodes']['value']['room'][i, j] = torch.tensor(int(map_room_types[j]), dtype=torch.int32)
             batch_obs['map_nodes']['value']['is_current'][i, j] = torch.tensor(is_current, dtype=torch.int32)
             batch_obs['map_nodes']['value']['pos'][i, j] = torch.tensor([map_xs[j], map_ys[j]], dtype=torch.int32)
             batch_obs['map_nodes']['value']['path_xs'][i, j] = torch.tensor(map_path_xs[j], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['rel'][i, j] = torch.tensor(
+                [int(map_xs[j]) - int(map_x_pos), int(map_ys[j]) - int(map_y_pos)], dtype=torch.int32)
+            batch_obs['map_nodes']['value']['reachable'][i, j] = 1 if reach[j] else 0
+            batch_obs['map_nodes']['value']['agg'][i, j] = torch.tensor(
+                [minE[j] / MAP_AGG_CAP, maxE[j] / MAP_AGG_CAP, dR[j] / MAP_AGG_CAP], dtype=torch.float32)
+            if burn_x >= 0 and map_xs[j] == burn_x and map_ys[j] == burn_y:
+                batch_obs['map_nodes']['value']['burning'][i, j] = 1
         batch_obs['map_nodes']['mask'][i, :nodes_len] = torch.zeros(nodes_len, dtype=torch.bool)
         
         # Build choices data inline
@@ -774,7 +1013,14 @@ def collate_fn(batch):
         paths_offered = x['paths_offered']
         choice_paths_len = len(paths_offered)
         assert choice_paths_len <= MAX_PATH_CHOICES, f"Choice paths count {choice_paths_len} exceeds maximum {MAX_PATH_CHOICES}"  # max 3 paths from any node
-        batch_choices['paths']['value'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
+        if choice_paths_len > 0:
+            batch_choices['paths']['value']['x'][i, :choice_paths_len, 0] = torch.tensor(paths_offered, dtype=torch.int32)
+            batch_choices['paths']['value']['room'][i, :choice_paths_len] = torch.tensor(dest_rooms, dtype=torch.int32)
+            aux_dest_room[i, :choice_paths_len] = torch.tensor(dest_rooms, dtype=torch.long)
+            batch_choices['paths']['value']['cone'][i, :choice_paths_len] = torch.tensor(
+                opt_cone, dtype=torch.float32) / MAP_AGG_CAP
+            batch_choices['paths']['value']['reaches_burn'][i, :choice_paths_len] = torch.tensor(
+                opt_burn, dtype=torch.int32)
         batch_choices['paths']['mask'][i, :choice_paths_len] = torch.zeros(choice_paths_len, dtype=torch.bool)
         
         fixed_actions = x['fixed_actions']
@@ -801,6 +1047,7 @@ def collate_fn(batch):
         'choices': batch_choices,
         'chosen_idx': torch.tensor(chosen_idx_list, dtype=torch.int64),
         'outcome': torch.tensor(outcome_list, dtype=torch.float32),
+        'aux_dest_room': aux_dest_room,
     }
 
 def move_to_device(obj, device):

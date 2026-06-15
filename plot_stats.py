@@ -22,18 +22,19 @@ import numpy as np
 import glob
 import os
 
-# Current/relevant runs only (older experiments -- the shape_* upg-coefficient sweep, the hero
-# lr/entropy forks, the grpo_b variants -- are concluded; their stats remain in lambda_results/
-# if ever needed again):
-#   hero      PPO from-scratch baseline (v1: iters 1-99) + continuation (v2: 100-177)
-#   heroe2    PPO num_epochs=2 fork -- the best policy (0.706 @ 10k-sim eval), paused @ iter 270
-#   grpo_a    GRPO (critic-free RLOO), from scratch
-#   ppo_hient PPO epochs=2, entropy_coef 0.05 ┐
-#   ppo_ent10 PPO epochs=2, entropy_coef 0.10 ├ entropy bracket: can PPO hold GRPO-like entropy?
-#   ppo_ent25 PPO epochs=2, entropy_coef 0.25 ┘ (0.25 over-flattened; killed)
+# Current/relevant runs only (concluded experiments' stats remain in lambda_results/).
+# NOTE: ppo_hient trained on the CLAIRVOYANT engine (see EXPERIMENT_LOG.md) -- its win rates
+# are inflated and not comparable to honest-era curves. All pre-heart runs also played
+# chest-less (the chest-skip bug, fixed 2026-06-07) -- ~7pp handicap vs heart1's game.
+#   ppo_hient PPO epochs=2, entropy_coef 0.05 + decay -- cheat-era champion (0.768 @ 10k)
+#   honest1   honest-era from-scratch hero (champion iter_440 = 0.794 honest, 1k sims)
+#   honest1asc  ascension mixture (0-5 -> 0-15 @40 -> 0-20 @105), warm start honest1 iter_155;
+#               headline win_rate is over the mixture
+#   heart1    from scratch: heart objective (act-4 keys, act3 win 0.25 / heart 0.5), A0-20
+#             uniform, chests fixed
 stats_files = []
-for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl', 'grpo_a.pt.stats.jsonl',
-           'ppo_hient.pt.stats.jsonl', 'ppo_ent10.pt.stats.jsonl', 'ppo_ent25.pt.stats.jsonl'):
+for _p in ('ppo_hient.pt.stats.jsonl',
+           'honest1.pt.stats.jsonl', 'honest1asc.pt.stats.jsonl', 'heart1.pt.stats.jsonl'):
     _fp = f'lambda_results/{_p}'
     if os.path.exists(_fp):
         stats_files.append(_fp)
@@ -41,8 +42,8 @@ for _p in ('hero.pt.stats.jsonl', 'heroe2.pt.stats.jsonl', 'grpo_a.pt.stats.json
 # Color palette for different runs
 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
 # Per-group color overrides (takes precedence over the palette). Use to highlight headline runs.
-GROUP_COLORS = {'hero': 'black', 'heroe2': 'darkorange', 'grpo_a': 'magenta',
-                'ppo_hient': 'royalblue', 'ppo_ent10': 'navy', 'ppo_ent25': 'darkviolet'}
+GROUP_COLORS = {'ppo_hient': 'royalblue',
+                'honest1': 'crimson', 'honest1asc': 'darkgreen', 'heart1': 'darkmagenta'}
 GROUP_LW = {k: 2.8 for k in GROUP_COLORS}   # all headline runs
 
 def load_run_data(filename):
@@ -84,8 +85,23 @@ def load_run_data(filename):
         'clipfracs': np.array([d.get('clipfrac', np.nan) for d in data]),
         'explained_variances': np.array([d.get('explained_variance', np.nan) for d in data]),
         'adv_norm_stds': np.array([d.get('adv_norm_std', np.nan) for d in data]),
+        'entropy_coefs': np.array([d.get('entropy_coef', np.nan) for d in data]),
         'num_experiences': np.array([d.get('num_experiences', np.nan) for d in data]),
         'num_trajectories': np.array([d.get('num_trajectories', np.nan) for d in data]),
+        # Heart-run breakdown (present only for reward-function=heart runs).
+        'heart_win_rates': np.array([d.get('heart_win_rate', np.nan) for d in data]),
+        'act3_win_rates': np.array([d.get('act3_win_rate', np.nan) for d in data]),
+        'act4_reach_rates': np.array([d.get('act4_reach_rate', np.nan) for d in data]),
+        'avg_keys': np.array([d.get('avg_keys', np.nan) for d in data]),
+        # Per-ascension-level breakdown (present only for ascension-mixture runs).
+        **{f'win_rates_asc{a}': np.array([d.get(f'win_rate_asc{a}', np.nan) for d in data])
+           for a in range(21)},
+        # Per-level heart-kill rate (heart runs only).
+        **{f'heart_win_rates_asc{a}': np.array([d.get(f'heart_win_rate_asc{a}', np.nan) for d in data])
+           for a in range(21)},
+        # Per-level game counts (for pooling / Wilson CIs).
+        **{f'num_games_asc{a}': np.array([d.get(f'num_games_asc{a}', 0) for d in data])
+           for a in range(21)},
     }
 
 # Load all runs
@@ -290,15 +306,18 @@ plt.tight_layout()
 plt.show()
 
 # %%
-# From-scratch GRPO vs from-scratch PPO at matched WALL TIME (the fair learning-speed view —
-# the iteration axis hides that the algorithms do different amounts of work per iteration).
-# PPO baseline = hero v1 (iters 1-99, before the iter-100 hyperparameter change). Caveat: the
-# GRPO runs share the box with each other (16 of 30 workers each) while hero v1 had it alone
-# (20 workers), so GRPO wall times are inflated by contention.
+# honest1 vs cheat-era from-scratch runs at matched WALL TIME. Win rates are NOT directly
+# comparable across eras (the cheat-era engine was draw-order clairvoyant, worth ~tens of pp);
+# floor progress is closer to comparable. This view shows learning-curve SHAPE and whether the
+# R5b encoding + aux scaffold buys faster early learning despite the harder honest battles.
 _LR = 'lambda_results'
 hero_file = f'{_LR}/hero.pt.stats.jsonl'
-GRPO_RUNS = [
-    ('grpo_a (RLOO, lr 1e-4)', f'{_LR}/grpo_a.pt.stats.jsonl', 'magenta'),
+CHEAT_BASELINES = [
+    ('ppo_hient (cheat era, from scratch)', f'{_LR}/ppo_hient.pt.stats.jsonl', 'royalblue', 195),
+]
+HONEST_RUNS = [
+    ('honest1 (honest engine, R5b+aux)', f'{_LR}/honest1.pt.stats.jsonl', 'crimson'),
+    ('heart1 (heart objective, A0-20, chests fixed)', f'{_LR}/heart1.pt.stats.jsonl', 'darkmagenta'),
 ]
 
 def _wall_hours(run, max_iter=None):
@@ -307,49 +326,190 @@ def _wall_hours(run, max_iter=None):
     times = (run['collect_times'][keep] + run['train_times'][keep])
     return np.cumsum(times) / 3600, keep
 
-ppo_scratch = load_run_data(hero_file)
-grpo_runs = [(lbl, load_run_data(f), c) for lbl, f, c in GRPO_RUNS]
-if ppo_scratch is not None and any(r is not None for _, r, _ in grpo_runs):
+honest_runs = [(lbl, load_run_data(f), c) for lbl, f, c in HONEST_RUNS]
+if any(r is not None for _, r, _ in honest_runs):
     fig, (ax_win, ax_floor) = plt.subplots(1, 2, figsize=(14, 5))
-    px, pkeep = _wall_hours(ppo_scratch, max_iter=99)  # hero v1 = the from-scratch portion
     for ax, field, ylabel in ((ax_win, 'win_rates', 'Win rate'), (ax_floor, 'avg_floors', 'Avg floor')):
-        py = ppo_scratch[field][pkeep]
-        ax.plot(px, py, color='black', alpha=0.18, linewidth=1)
-        ax.plot(px, _smooth(py), color='black', linewidth=2.4, label='PPO from scratch (hero v1)')
-        for lbl, run, c in grpo_runs:
+        for lbl, f, c, mx in CHEAT_BASELINES:
+            run = load_run_data(f)
+            if run is None:
+                continue
+            px, pkeep = _wall_hours(run, max_iter=mx)  # from-scratch portion only
+            py = run[field][pkeep]
+            ax.plot(px, py, color=c, alpha=0.14, linewidth=1)
+            ax.plot(px, _smooth(py), color=c, linewidth=1.8, linestyle='--', label=lbl)
+        for lbl, run, c in honest_runs:
             if run is None:
                 continue
             gx, gkeep = _wall_hours(run)
             gy = run[field][gkeep]
             ax.plot(gx, gy, color=c, alpha=0.18, linewidth=1)
-            ax.plot(gx, _smooth(gy), color=c, linewidth=2.4, label=lbl)
+            ax.plot(gx, _smooth(gy), color=c, linewidth=2.6, label=lbl)
         ax.set_xlabel('Wall time (hours)'); ax.set_ylabel(ylabel)
-        ax.set_title(f'{ylabel} vs wall time — from-scratch GRPO vs PPO')
+        ax.set_title(f'{ylabel} vs wall time — honest1 vs cheat-era from-scratch (win rates not era-comparable)')
         ax.grid(True, alpha=0.3); ax.legend(fontsize=8, loc='best')
     plt.tight_layout()
     plt.show()
 else:
-    print("GRPO wall-time figure skipped (missing stats files)")
+    print("honest wall-time figure skipped (missing stats files)")
+
+# %%
+# honest1asc per-ascension win rates: one line per level + the bold mixture rate. honest1's
+# A0 curve is overlaid shifted by its fork point (honest1asc iter 1 continues honest1 iter 155),
+# so the crimson line shows what staying at A0 (with annealing) did from the same checkpoint --
+# the green A0 line holding near it means the mixture isn't costing A0 competence.
+ASC_FORK_ITER = 155  # honest1asc forked from honest1 at this iteration
+_asc_runs = [r for r in runs
+             if any(not np.all(np.isnan(r[f'win_rates_asc{a}'])) for a in range(21))]
+for _asc_run in _asc_runs:
+    ASC_RUN = _asc_run['label']
+    # Heart runs: plot per-level HEART-KILL rate (the run's actual objective) and the
+    # heart-kill mixture; other mixtures plot any-win rate.
+    is_heart = not np.all(np.isnan(_asc_run['heart_win_rates']))
+    asc_prefix = 'heart_win_rates_asc' if is_heart else 'win_rates_asc'
+    mix_field = 'heart_win_rates' if is_heart else 'win_rates'
+    metric = 'heart-kill rate' if is_heart else 'win rate'
+    fig, ax = plt.subplots(figsize=(13, 6))
+    asc_colors = plt.cm.viridis(np.linspace(0.0, 0.92, 21))
+    for a in range(21):
+        y = _asc_run[f'{asc_prefix}{a}']
+        if np.all(np.isnan(y)):
+            continue
+        ax.plot(_asc_run['iterations'], y, color=asc_colors[a], alpha=0.15, linewidth=0.8)
+        ax.plot(_asc_run['iterations'], _smooth(y), color=asc_colors[a], linewidth=1.6,
+                label=f'A{a}')
+    ax.plot(_asc_run['iterations'], _smooth(_asc_run[mix_field]),
+            color=GROUP_COLORS.get(ASC_RUN, 'black'), linewidth=3.0, label='mixture')
+    if ASC_RUN == 'honest1asc':
+        _h1 = next((r for r in runs if r['label'] == 'honest1'), None)
+        if _h1 is not None:
+            keep = _h1['iterations'] >= ASC_FORK_ITER
+            ax.plot(_h1['iterations'][keep] - ASC_FORK_ITER, _smooth(_h1['win_rates'][keep]),
+                    color='crimson', linewidth=1.6, linestyle='--', alpha=0.8,
+                    label='honest1 A0 from same fork (annealed)')
+        ax.set_xlabel(f'Iteration (0 = fork from honest1 iter {ASC_FORK_ITER})')
+    else:
+        ax.set_xlabel('Iteration')
+    ax.set_ylabel(metric.capitalize())
+    ax.set_title(f'{ASC_RUN}: per-ascension {metric} (uniform mixture)')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=7, ncol=3, loc='best')
+    plt.tight_layout()
+    plt.show()
+if not _asc_runs:
+    print("per-ascension figures skipped (no mixture runs loaded)")
+
+# %%
+# Per-ascension SNAPSHOT: win + heart-kill vs ascension level, pooled (game-weighted) over the
+# last POOL_ITERS iters. A single iter samples only ~24 games/level (±0.1 noise); pooling ~40
+# iters tightens that to a readable curve with Wilson CIs. This is the "where do we stand at each
+# ascension right now" view, complementary to the per-level-over-time figure above.
+import math
+POOL_ITERS = 40
+
+def _wilson(k, n, z=1.96):
+    if n == 0:
+        return (np.nan, np.nan, np.nan)
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return p, max(0.0, c - h), min(1.0, c + h)
+
+for _asc_run in _asc_runs:
+    is_heart = not np.all(np.isnan(_asc_run['heart_win_rates']))
+    # pool the last POOL_ITERS iters that actually have per-level games
+    has_games = np.array([_asc_run[f'num_games_asc{a}'] for a in range(21)]).sum(axis=0) > 0
+    idx = np.where(has_games)[0][-POOL_ITERS:]
+    if idx.size == 0:
+        continue
+    it0, it1 = int(_asc_run['iterations'][idx[0]]), int(_asc_run['iterations'][idx[-1]])
+    win_k = np.zeros(21); heart_k = np.zeros(21); n = np.zeros(21)
+    for a in range(21):
+        g = _asc_run[f'num_games_asc{a}'][idx]
+        n[a] = np.nansum(g)
+        win_k[a] = np.nansum(np.nan_to_num(_asc_run[f'win_rates_asc{a}'][idx]) * g)
+        if is_heart:
+            heart_k[a] = np.nansum(np.nan_to_num(_asc_run[f'heart_win_rates_asc{a}'][idx]) * g)
+    A = np.arange(21)
+    win = np.array([_wilson(win_k[a], n[a]) for a in A])
+    fig, ax = plt.subplots(figsize=(12, 6))
+    # win_rate = heart_win_rate + act3_win_rate: a "win" is a heart kill OR taking the act-3
+    # boss victory. The blue/red gap is act-3-only wins (not act-4 deaths).
+    series = [(win, 'steelblue', 'any win (heart kill or act-3 victory)')]
+    if is_heart:
+        series.append((np.array([_wilson(heart_k[a], n[a]) for a in A]), 'darkmagenta', 'heart kill'))
+    for s, color, lbl in series:
+        ax.plot(A, s[:, 0], '-o', color=color, lw=2, ms=4, label=lbl)
+        ax.fill_between(A, s[:, 1], s[:, 2], color=color, alpha=0.15)
+    # annotate each heart-kill point with its percentage
+    if is_heart:
+        heart = series[-1][0]
+        for a in A:
+            if not np.isnan(heart[a, 0]):
+                ax.annotate(f'{heart[a, 0] * 100:.0f}', (a, heart[a, 0]), textcoords='offset points',
+                            xytext=(0, -11), ha='center', fontsize=7, color='darkmagenta')
+    # band averages (game-weighted)
+    txt = []
+    for lo, hi in [(0, 5), (6, 9), (10, 15), (16, 20)]:
+        sel = list(range(lo, hi + 1)); nn = n[sel].sum()
+        ww = win_k[sel].sum() / nn if nn else np.nan
+        line = f"A{lo}-{hi}: win {ww:.2f}"
+        if is_heart:
+            line += f" heart {heart_k[sel].sum() / nn:.2f}" if nn else " heart  -"
+        txt.append(line + f" (n={int(nn)})")
+    ax.text(0.02, 0.03, "\n".join(txt), transform=ax.transAxes, fontsize=9, va='bottom',
+            family='monospace', bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.9))
+    ax.set_xticks(A); ax.set_xlabel('Ascension level'); ax.set_ylabel('Rate'); ax.set_ylim(0, 1)
+    ax.set_title(f"{_asc_run['label']}: per-ascension snapshot "
+                 f"(pooled iters {it0}-{it1}, ~{int(np.median(n))} games/level)")
+    ax.grid(True, alpha=0.3); ax.legend(loc='upper right')
+    plt.tight_layout()
+    plt.show()
+
+# %%
+# Heart-run progress: outcome decomposition (heart kills vs act-3-only wins vs reaching act 4)
+# and key acquisition.
+_heart_runs = [r for r in runs if not np.all(np.isnan(r['heart_win_rates']))]
+for _hr in _heart_runs:
+    fig, (axw, axk) = plt.subplots(1, 2, figsize=(14, 5))
+    for field, color, lbl in (('win_rates', 'gray', 'any win'),
+                              ('act3_win_rates', 'darkorange', 'act3-only win'),
+                              ('act4_reach_rates', 'steelblue', 'reached act 4'),
+                              ('heart_win_rates', 'darkmagenta', 'HEART KILL')):
+        axw.plot(_hr['iterations'], _hr[field], color=color, alpha=0.15, linewidth=0.8)
+        axw.plot(_hr['iterations'], _smooth(_hr[field]), color=color, linewidth=2.0, label=lbl)
+    axw.set_xlabel('Iteration'); axw.set_ylabel('Rate')
+    axw.set_title(f'{_hr["label"]}: outcome decomposition')
+    axw.grid(True, alpha=0.3); axw.legend(fontsize=8)
+    axk.plot(_hr['iterations'], _hr['avg_keys'], color='seagreen', alpha=0.2, linewidth=0.8)
+    axk.plot(_hr['iterations'], _smooth(_hr['avg_keys']), color='seagreen', linewidth=2.2)
+    axk.set_ylim(0, 3.05); axk.axhline(3.0, color='gray', linewidth=0.8, linestyle='--')
+    axk.set_xlabel('Iteration'); axk.set_ylabel('Avg keys at game end (3 = act-4 access)')
+    axk.set_title(f'{_hr["label"]}: key acquisition')
+    axk.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 # %%
 # Entropy phase plots: each run's training trajectory through (x, entropy) space as a faint
 # EMA-smoothed line, ending at a strong dot for its current/final state, for x = avg floor and
-# x = win rate. PPO runs sharpen (entropy falls) as they improve; the critic-free GRPO runs
-# improve while staying far more stochastic.
+# x = win rate.
 #
-# Dashed segments through the GRPO dots are objective-indifference lines. GRPO's advantages are
-# raw return differences (no normalization), so its objective is exactly E[return] +
-# entropy_coef*H: the optimizer trades entropy_coef nats per unit of return. Each run's empirical
-# d(reward)/dx (fit over the run; includes the win bonus and shaping) converts that to the x-axis:
-# points along the dashed line score equally under the training objective. The slopes are steep
-# (near-vertical at this aspect ratio), so segments are sized by a fixed *vertical* extent and
-# axis limits are pinned to the data. PPO lines need adv_norm_std (now logged by rl_train) since
-# its advantages are EWMA-normalized: effective exchange rate = entropy_coef * adv_norm_std.
-# Effective entropy/return exchange rate per run, in RAW-return units (the axis the plot uses):
-#   GRPO uses raw advantages          -> effective coef = entropy_coef
-#   PPO normalizes advantages by std  -> effective coef = entropy_coef * adv_norm_std
-ENTROPY_COEF = {'grpo_a': 0.01, 'ppo_hient': 0.05, 'ppo_ent10': 0.10, 'ppo_ent25': 0.25}
-PPO_NORMALIZED = {'ppo_hient', 'ppo_ent10', 'ppo_ent25'}  # divide advantages by the (logged) adv_norm_std
+# Dashed segments through the dots are objective-indifference lines: points along a line score
+# equally under that run's training objective E[return] + coef_eff*H. Each run's empirical
+# d(reward)/dx (fit over the run; includes the win bonus and shaping) converts the exchange rate
+# to the x-axis. Segments are sized by a fixed *vertical* extent and axis limits are pinned to
+# the data. PPO normalizes advantages by the (logged) adv_norm_std, so the effective per-return
+# coefficient is entropy_coef * adv_norm_std (times the decisions-per-trajectory factor applied
+# in the loop below). The slope reflects the LATEST operating point: the entropy coef is the most
+# recent logged per-iteration value (so decayed runs show their current, not start-of-run, coef),
+# adv_norm_std and the dot are already latest, and dr/dx + decisions/traj are fit over the last
+# SLOPE_TAIL_ITERS iterations rather than the whole (early-learning-dominated) run.
+# ENTROPY_COEF_FALLBACK is used only for old runs whose stats predate the entropy_coef field.
+ENTROPY_COEF_FALLBACK = {'ppo_hient': 0.05, 'honest1': 0.05, 'honest1asc': 0.05, 'heart1': 0.0166667}
+PPO_NORMALIZED = {'ppo_hient', 'honest1', 'honest1asc', 'heart1'}  # adv / (logged) adv_norm_std
+SLOPE_TAIL_ITERS = 60  # window for the local dr/dx + decisions/traj fits (the "latest" slope)
 
 def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     """unit_scale: indifference slope is annotated per (unit_scale of x), e.g. 0.01 win rate."""
@@ -370,9 +530,13 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
 
     xlim, ylim = ax.get_xlim(), ax.get_ylim()  # pin axes to the trajectory/dot data
     for gi, (gkey, members) in enumerate(group_list):
-        if gkey not in ENTROPY_COEF:
+        # Latest (decayed) entropy coef: the most recent logged per-iteration value; fall back to
+        # the start-of-run constant only for old runs whose stats predate the entropy_coef field.
+        _, ecoef = _avg_over_iters(members, 'entropy_coefs')
+        ecoef = ecoef[~np.isnan(ecoef)]
+        coef = float(ecoef[-1]) if ecoef.size else ENTROPY_COEF_FALLBACK.get(gkey)
+        if coef is None:
             continue
-        coef = ENTROPY_COEF[gkey]
         if gkey in PPO_NORMALIZED:  # PPO divides advantages by the (logged) EWMA std
             _, stds = _avg_over_iters(members, 'adv_norm_stds')
             stds = stds[~np.isnan(stds)]
@@ -389,7 +553,7 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
         okn = ~(np.isnan(nexp) | np.isnan(ntraj)) & (ntraj > 0)
         if okn.sum() == 0:
             continue
-        n_per_traj = float(np.mean(nexp[okn] / ntraj[okn]))
+        n_per_traj = float(np.mean((nexp[okn] / ntraj[okn])[-SLOPE_TAIL_ITERS:]))  # recent
         coef = coef * n_per_traj
         color = _gcolor(gi, gkey)
         _, xv = _avg_over_iters(members, xfield)
@@ -398,7 +562,12 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
         ok = ~(np.isnan(xv) | np.isnan(rw))
         if ok.sum() < 5:
             continue
-        dr_dx = np.polyfit(xv[ok], rw[ok], 1)[0]   # empirical reward per unit of x
+        # Local reward-vs-x slope over the recent window (the latest exchange rate). Fall back to
+        # the full run if the recent x-range is too narrow to fit a stable slope (e.g. a plateaued
+        # floor); the reward panel is x==reward so dr_dx==1 either way.
+        xo, ro = xv[ok], rw[ok]
+        xt, rt = xo[-SLOPE_TAIL_ITERS:], ro[-SLOPE_TAIL_ITERS:]
+        dr_dx = np.polyfit(xt, rt, 1)[0] if np.ptp(xt) > 1e-6 else np.polyfit(xo, ro, 1)[0]
         slope = -dr_dx / coef                      # nats of entropy per unit of x, at indifference
         x0, h0 = _smooth(xv)[-1], _smooth(en)[-1]
         dy = 0.15 * (ylim[1] - ylim[0])            # segment half-height: 15% of the y-range
@@ -414,10 +583,13 @@ def _phase_panel(ax, xfield, xlabel, unit_name, unit_scale=1.0):
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=2, loc='best')
 
-fig, (ax_floor, ax_win) = plt.subplots(2, 1, figsize=(16, 22), dpi=200)
+fig, (ax_rew, ax_floor) = plt.subplots(2, 1, figsize=(16, 22), dpi=200)
+# Entropy vs avg reward: the indifference line here is the PURE return-vs-entropy exchange
+# rate (d(reward)/d(reward) = 1, so slope = -1/coef_eff) -- the most direct read of how many
+# nats of entropy each run is currently "buying" per unit of training return.
+_phase_panel(ax_rew, 'avg_rewards', 'Avg reward', '0.1 reward', unit_scale=0.1)
 _phase_panel(ax_floor, 'avg_floors', 'Avg floor reached', 'floor')
-_phase_panel(ax_win, 'win_rates', 'Win rate', '+1% win', unit_scale=0.01)
-fig.suptitle('Trajectories (faint), current state (dots), GRPO objective-indifference lines (dashed)',
+fig.suptitle('Trajectories (faint), current state (dots), objective-indifference lines (dashed)',
              fontsize=13)
 plt.tight_layout()
 plt.show()

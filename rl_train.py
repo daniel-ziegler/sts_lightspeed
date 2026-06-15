@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm.auto import tqdm
 
-from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo
+from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo, CHOICE_PATHS_OFFSET
 from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
@@ -121,6 +121,11 @@ class TrainConfig:
     sampling_temperature: float = 1.0  # action-sampling softmax temperature during collection
 
     # Environment settings
+    # Games are dealt ascensions 0..max_ascension uniformly (derived from the game seed, so
+    # the same seed always plays the same level and resumes/evals are reproducible).
+    # fixed_ascension pins every game to one level instead (per-level evals).
+    max_ascension: int = 0
+    fixed_ascension: Optional[int] = None
     num_games_per_step: int = 256
     num_epochs: int = 4
     num_workers: int = 40
@@ -139,6 +144,17 @@ class TrainConfig:
     entropy_coef_final: float = 0.0
     entropy_coef_decay_steps: int = 0
     entropy_coef_decay_start: int = 0
+    # Exponential learning-rate decay (same shape as the entropy schedule): from iteration
+    # lr_decay_start, both policy and value lr decay geometrically to lr_final_frac of their
+    # base values over lr_decay_steps iterations, then hold. decay_steps=0 disables.
+    # Anchored at ABSOLUTE iterations so resumes continue the schedule.
+    lr_final_frac: float = 0.1
+    lr_decay_steps: int = 0
+    lr_decay_start: int = 0
+    # Weight of the self-supervised destination-room auxiliary loss (per-path-option room
+    # classification; labels free from the map obs). Scaffolds the option-grounding circuit
+    # at RL signal strength (see EXPERIMENT_LOG.md repr lab). 0 disables.
+    aux_dest_room_coef: float = 0.1
     value_coef: float = 0.5
     max_grad_norm: float = 5.0
     
@@ -164,6 +180,7 @@ class TrainConfig:
     mcts_boss_widening_c: Optional[float] = None      # None = engine's boss-gated default
     mcts_boss_widening_alpha: Optional[float] = None
     log_battle_outcomes: bool = False                 # attach per-battle snapshots to trajectories
+    randomize_path_choices: bool = False              # intervention eval: uniform-random path picks
     record_boss_states: bool = False                  # attach replayable pre-boss-battle action prefixes
     # Battle-search eval weights (None = engine's jointly-tuned defaults). Like the search knobs,
     # these are a coupled set -- override all of them together or none.
@@ -188,11 +205,23 @@ class TrainConfig:
     shaping_upg_coef: float = 0.0
     shaping_relic_coef: float = 0.0   # per relic held
     shaping_maxhp_coef: float = 0.0   # per max-HP point
+    shaping_key_coef: float = 0.0     # per act-4 key held (heart runs)
+    # Deck-thinning: NEGATIVE potential per Strike/Defend still in the deck, so each removal
+    # earns +coef immediately (PBRS, terminal-uncredited like the other shape terms).
+    shaping_starter_coef: float = 0.0
     shaping_offset: float = 0.0
 
     # Per-battle MCTS wall-clock budget (seconds). Sized for the default 1000 sims; raise it
     # when running with many more simulations so long boss fights aren't cut off mid-search.
     battle_timeout: float = 30.0
+
+    # Pipeline collection with training: collect iter N+1 in a background thread while the
+    # learner trains on iter N (the NNService keeps its own weight clone, so the frozen-snapshot
+    # collector and the mutating learner net never race). Train hides under the longer collect
+    # phase -> ~1.34x throughput. Cost: collection runs one update stale (1-step off-policy);
+    # PPO's stored old_log_prob importance-corrects it and at KL~0.003/iter the effect is
+    # negligible. Default off (byte-identical sequential path).
+    pipeline: bool = False
 
     # Training settings
     num_iterations: int = 1000
@@ -219,6 +248,13 @@ class GameMetrics:
     num_upgraded: int  # count of upgraded cards in deck (for reward shaping)
     num_relics: int    # count of relics held (for reward shaping)
     outcome: sts.GameOutcome
+    act: int = 1       # current act; distinguishes a heart win (act 4) from an act-3-only win
+    num_keys: int = 0  # act-4 keys held (ruby + emerald + sapphire), for reward shaping
+    num_starters: int = 0  # Strikes + Defends in deck (any upgrade), for thinning shaping
+    # MonsterEncounter id of the most recent battle (INVALID=0 before the first one). In episode
+    # dumps this enables per-encounter battle-outcome stats: the HP change across the rows where
+    # the id flips measures what each fight cost.
+    encounter: int = 0
 
 class Experience(NamedTuple):
     """Single step of experience from a game."""
@@ -242,6 +278,7 @@ class Trajectory(NamedTuple):
     final_relics: List[sts.RelicId]  # Final relics
     battle_log: list = []  # per-battle BattleSnapshots (when config.log_battle_outcomes)
     boss_state_records: list = []  # (floor, prefix_bits) per boss battle (when config.record_boss_states)
+    ascension: int = 0
 
 
 def compute_progress_reward(metrics: GameMetrics) -> float:
@@ -261,6 +298,41 @@ def compute_victory_reward(metrics: GameMetrics) -> float:
     return 1.0 if metrics.outcome == sts.GameOutcome.PLAYER_VICTORY else 0.0
 
 
+CLEAR_BONUS = 0.0   # no separate act-3-clear bonus; clearing act 3 only earns its floor reward
+KEY_VALUE = 0.05    # per act-4 key, earned once act 3 is cleared
+HEART_BONUS = 0.6   # for killing the Corrupt Heart -- sized so a heart kill totals >= 1.0
+
+
+def compute_heart_reward(metrics: GameMetrics) -> float:
+    """Heart-run reward, designed monotone in true progress while still rewarding partial keys.
+
+    Components: level (floor/190, caps 0.3) + KEY_VALUE per key (earned only once act 3 is
+    cleared) + HEART_BONUS for the kill. There is no separate act-3-clear bonus -- clearing
+    act 3 only earns its floor reward, so the agent isn't paid just to stop at the act-3 boss;
+    the reward comes from grabbing keys and reaching the heart. Monotonicity still holds across
+    the act-3-stop / act-4-death boundary without a clear bonus: an act-4 death has BOTH a
+    higher floor (>=52 vs the 51 act-3 boss) AND 3 keys vs an act-3 win's <=2, so it strictly
+    outscores any act-3 win on floor+keys alone. Terminal ordering (floors 51 win / 54 act-4
+    death / 55 heart): act3 0k 0.27 < 1k 0.32 < 2k 0.37 < 3-key act-4 death 0.43 < heart kill
+    1.04 -- strictly increasing, and a heart kill totals >= 1.0.
+
+    Interior (UNDECIDED) telescopes out of the undiscounted return but shapes GAE credit:
+    act-discounted partial key credit during acts 1-3 gives early pickups a learning signal."""
+    level = min(metrics.floor_num / 190.0, 0.3)
+    if metrics.outcome == sts.GameOutcome.UNDECIDED:
+        if metrics.act >= 4:
+            return level + CLEAR_BONUS + KEY_VALUE * metrics.num_keys
+        act_weight = 1.0 / 3.0 if metrics.act <= 1 else (2.0 / 3.0 if metrics.act == 2 else 1.0)
+        return level + KEY_VALUE * metrics.num_keys * act_weight
+    # Terminal: act 3 cleared iff this is a victory (only reachable past the act-3 boss) or
+    # the run got into act 4. Keys count only when cleared; heart bonus for the act-4 win.
+    cleared = metrics.outcome == sts.GameOutcome.PLAYER_VICTORY or metrics.act >= 4
+    keys = metrics.num_keys if cleared else 0
+    heart = metrics.outcome == sts.GameOutcome.PLAYER_VICTORY and metrics.act >= 4
+    return (level + (CLEAR_BONUS if cleared else 0.0)
+            + KEY_VALUE * keys + (HEART_BONUS if heart else 0.0))
+
+
 def compute_no_pstrikes_reward(metrics: GameMetrics) -> float:
     """Compute reward that penalizes Perfected Strikes (negative of count)."""
     return -float(metrics.perfected_strike_count)
@@ -275,6 +347,8 @@ def compute_shaped_rewards(
     offset: float,
     relic_coef: float = 0.0,
     maxhp_coef: float = 0.0,
+    key_coef: float = 0.0,
+    starter_coef: float = 0.0,
 ) -> Tuple[List[float], float]:
     """Per-step rewards as deltas of a potential Phi(s) = base(s) + shape(s).
 
@@ -296,7 +370,8 @@ def compute_shaped_rewards(
     def _shape(m: GameMetrics) -> float:
         hp_frac = (m.cur_hp / m.max_hp) if m.max_hp > 0 else 0.0
         return (hp_coef * hp_frac + upg_coef * m.num_upgraded
-                + relic_coef * m.num_relics + maxhp_coef * m.max_hp - offset)
+                + relic_coef * m.num_relics + maxhp_coef * m.max_hp
+                + key_coef * m.num_keys - starter_coef * m.num_starters - offset)
 
     shape_vals = [_shape(m) for m in step_metrics] + [0.0]  # terminal shaping un-credited
     total_vals = [b + s for b, s in zip(base_vals, shape_vals)]
@@ -321,7 +396,9 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
     _log_steps = os.environ.get('PPO_LOG_STEPS') == '1'
     if _log_seeds:
         print(f"  >>> start seed {seed}", flush=True)
-    gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, 0)
+    ascension = (config.fixed_ascension if config.fixed_ascension is not None
+                 else seed % (config.max_ascension + 1))
+    gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, ascension)
     rng = random.Random(sample_seed)
     
     agent = sts.Agent()
@@ -428,7 +505,15 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                         log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
                         probs = np.exp(log_probs)
 
-                        chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
+                        # Intervention eval: replace the policy with uniform-random on pure
+                        # path-choice screens (everything else stays policy-driven), to price
+                        # the routing policy's win-rate contribution.
+                        if (config.randomize_path_choices and choice.paths_offered
+                                and not (choice.cards_offered or choice.relics_offered
+                                         or choice.potions_offered or choice.fixed_actions)):
+                            chosen_idx = CHOICE_PATHS_OFFSET + rng.randrange(len(choice.paths_offered))
+                        else:
+                            chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
                         log_prob = log_probs[chosen_idx]
                         
                         # No perfected strike tracking needed
@@ -450,6 +535,11 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                             num_upgraded=sum(1 for card in gc.deck if card.upgraded),
                             num_relics=len(gc.relics),
                             outcome=gc.outcome,
+                            act=gc.act,
+                            num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
+                            num_starters=sum(1 for card in gc.deck
+                                             if card.id in (sts.CardId.STRIKE_RED, sts.CardId.DEFEND_RED)),
+                            encounter=int(gc.encounter),
                         )
 
                         # Store experience data before action execution
@@ -513,6 +603,11 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         num_upgraded=sum(1 for card in gc.deck if card.upgraded),
         num_relics=len(gc.relics),
         outcome=gc.outcome,
+        act=gc.act,
+        num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
+        num_starters=sum(1 for card in gc.deck
+                         if card.id in (sts.CardId.STRIKE_RED, sts.CardId.DEFEND_RED)),
+        encounter=int(gc.encounter),
     )
     
     # Per-step rewards = deltas of the (base + potential-based shaping) potential.
@@ -520,6 +615,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         [e.metrics for e in experiences], final_metrics, reward_fn,
         config.shaping_hp_coef, config.shaping_upg_coef, config.shaping_offset,
         relic_coef=config.shaping_relic_coef, maxhp_coef=config.shaping_maxhp_coef,
+        key_coef=config.shaping_key_coef, starter_coef=config.shaping_starter_coef,
     )
     
     # Add terminal state value (0.0) for GAE bootstrap
@@ -539,7 +635,16 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_relics=list(gc.relics),
         battle_log=list(agent.battle_log) if config.log_battle_outcomes else [],
         boss_state_records=_boss_records,
+        ascension=ascension,
     )
+
+
+def _timed_collect(config: TrainConfig, service: NNService, reward_fn, jobs):
+    """collect_experience wrapped to return (trajectories, wall_seconds) -- the background
+    half of the pipelined train loop."""
+    t0 = time.time()
+    trajectories = collect_experience(config, service, reward_fn, jobs)
+    return trajectories, time.time() - t0
 
 
 def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs) -> List[Trajectory]:
@@ -565,12 +670,41 @@ def collect_experience(config: TrainConfig, service: NNService, reward_fn, jobs)
     return trajectories
 
 
+_ROOM_CHARS = {int(sts.Room.MONSTER): 'M', int(sts.Room.ELITE): 'E', int(sts.Room.REST): 'R',
+               int(sts.Room.SHOP): '$', int(sts.Room.EVENT): '?', int(sts.Room.TREASURE): 'T',
+               int(sts.Room.BOSS): 'B'}
+
+
+def _print_act_map(act: int, map_dict: dict, visited: set, boss_visited: bool):
+    """ASCII act map, top row first; nodes on the taken path are bracketed, ! = burning elite."""
+    xs = [int(v) for v in map_dict['xs']]
+    ys = [int(v) for v in map_dict['ys']]
+    rts = [int(v) for v in map_dict['roomTypes']]
+    if not xs:
+        return
+    bx, by = int(map_dict.get('burningEliteX', -1)), int(map_dict.get('burningEliteY', -1))
+    grid = {(x, y): _ROOM_CHARS.get(r, '.') for x, y, r in zip(xs, ys, rts)}
+    print(f"  Act {act} map (path taken in brackets, ! = burning elite):")
+    for y in range(max(ys), -1, -1):
+        cells = []
+        for x in range(7):
+            c = grid.get((x, y))
+            if c is None:
+                cells.append('    ')
+                continue
+            mark = '!' if (x, y) == (bx, by) else ' '
+            hit = (x, y) in visited or (c == 'B' and boss_visited)
+            cells.append(f"[{c}]{mark}" if hit else f" {c.lower()}{mark}")
+        print("      " + "".join(cells).rstrip())
+
+
 def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, title: str = ""):
     """Print a human-readable playthrough of one trajectory: a per-step state/choice/action table
-    followed by the final outcome, deck, and relics. The Pred Value / Return columns are included
-    only when `values`/`returns` are given (PPO); critic-free algos pass just the advantages."""
-    print(title or f"=== Trajectory (seed {traj.seed}) ===")
-    print(f"Trajectory length: {len(traj.experiences)} steps")
+    followed by the final outcome, deck, and relics, with an ASCII map of each act's route.
+    The Pred Value / Return columns are included only when `values`/`returns` are given (PPO);
+    critic-free algos pass just the advantages."""
+    print(title or f"=== Trajectory (seed {traj.seed}, ascension {traj.ascension}) ===")
+    print(f"Trajectory length: {len(traj.experiences)} steps (ascension {traj.ascension})")
     has_v = values is not None and returns is not None
     header = f"Step | {'State':12s} | {'Choice':20s} | {'Action':20s} | {'Prob':6s} | {'Reward':6s}"
     if has_v:
@@ -579,8 +713,37 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
     print(header)
     print("-" * 140)
 
+    def _enc_name(enc_id):
+        try:
+            return str(sts.MonsterEncounter(enc_id)).replace('MonsterEncounter.', '')
+        except ValueError:
+            return f"enc#{enc_id}"
+
+    _boss_relic_screen = int(sts.ScreenState.BOSS_RELIC_REWARDS)
+    # Seed from step 0: the pre-game encounter field is engine-initialized junk, not a fight.
+    prev_encounter = traj.experiences[0].metrics.encounter if traj.experiences else 0
+    _card_select_screen = int(sts.ScreenState.CARD_SELECT)
+    last_screen_key = None
+    last_offer_lines = set()
+    # Per-act route tracking for the map printouts: latest map layout seen in the act plus
+    # the set of node positions the player stood on at decision time.
+    cur_act = traj.experiences[0].metrics.act if traj.experiences else 1
+    act_map, act_visited = None, set()
     for t in range(len(traj.experiences)):
         exp = traj.experiences[t]
+        if exp.metrics.act != cur_act:
+            # Act ended; advancing past acts 1-3 means the boss fell.
+            if act_map is not None:
+                _print_act_map(cur_act, act_map, act_visited, boss_visited=True)
+            cur_act, act_map, act_visited = exp.metrics.act, None, set()
+        obs = exp.choice.obs
+        if obs.mapY >= 0:
+            act_visited.add((obs.mapX, obs.mapY))
+        act_map = obs.map.as_dict()
+        # A change in the most-recent-battle id means a fight happened since the last decision.
+        if exp.metrics.encounter != prev_encounter and exp.metrics.encounter != 0:
+            print(f"      ⚔  fought {_enc_name(exp.metrics.encounter)}")
+        prev_encounter = exp.metrics.encounter
         # Choice summary - what was offered
         offered_items = []
         if exp.choice.cards_offered:
@@ -597,6 +760,32 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
         action_desc = exp.action_str[:20] if exp.action_str else "Unknown"
         state_str = f"{exp.metrics.floor_num:>2}: {exp.metrics.cur_hp}/{exp.metrics.max_hp}hp"
 
+        # Full option lists for the choices worth following closely, printed above the
+        # decision row. Reward screens re-prompt after each take with the same remaining
+        # offer; duplicates are suppressed only within the same screen visit (same floor,
+        # same screen type, no battle in between) so identical offers on genuinely separate
+        # screens still print.
+        screen_key = (exp.metrics.floor_num, exp.choice.screen_state, exp.metrics.encounter)
+        if screen_key != last_screen_key:
+            last_offer_lines = set()
+        last_screen_key = screen_key
+        offer_lines = []
+        if exp.choice.cards_offered:
+            if exp.choice.screen_state == _card_select_screen:
+                sst = str(sts.CardSelectScreenType(exp.choice.select_screen_type))
+                label = sst.replace('CardSelectScreenType.', '').lower() + " options"
+            else:
+                label = "cards offered"
+            offer_lines.append(f"      {label}: " + ", ".join(str(c) for c in exp.choice.cards_offered))
+        if exp.choice.relics_offered:
+            label = "boss relics" if exp.choice.screen_state == _boss_relic_screen else "relics offered"
+            offer_lines.append(f"      {label}: " + ", ".join(
+                str(r).replace('RelicId.', '') for r in exp.choice.relics_offered))
+        for line in offer_lines:
+            if line not in last_offer_lines:
+                print(line)
+                last_offer_lines.add(line)
+
         row = (f"{t:4d} | {state_str:12s} | {choice_desc[:20]:20s} | {action_desc[:20]:20s} | "
                f"{np.exp(exp.log_prob):6.3f} | {traj.rewards[t]:6.3f}")
         if has_v:
@@ -604,6 +793,11 @@ def print_trajectory(traj: Trajectory, advantages, values=None, returns=None, ti
         row += f" | {advantages[t]:13.3f}"
         print(row)
 
+    if traj.final_metrics.encounter != prev_encounter and traj.final_metrics.encounter != 0:
+        print(f"      ⚔  fought {_enc_name(traj.final_metrics.encounter)}")
+    if act_map is not None:
+        won = traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY
+        _print_act_map(cur_act, act_map, act_visited, boss_visited=won)
     print("-" * 140)
     fm = traj.final_metrics
     print(f"Final game outcome: {fm.outcome}")
@@ -658,7 +852,8 @@ def compute_advantages(trajectories: List[Trajectory], config: TrainConfig, adv_
             print(f"Rewards array length: {len(traj.rewards)}, first 5 rewards: {traj.rewards[:5]}")
             print(f"Values array length: {len(traj.values)}, first 5 values: {traj.values[:5]}")
             print_trajectory(traj, advantages, values=values, returns=returns,
-                             title=f"=== PPO Advantage Calculation Debug (seed {traj.seed}) ===")
+                             title=f"=== PPO Advantage Calculation Debug (seed {traj.seed}, "
+                                   f"ascension {traj.ascension}) ===")
         
         # Store experiences and raw (un-normalized) GAE advantages/returns.
         all_experiences.extend(traj.experiences)
@@ -722,6 +917,7 @@ def save_episodes(experiences: List[Experience], advantages: List[float], return
             'outcome': m['outcome'],
             'seed': m['seed'],
             'final_floor': m['final_floor'],
+            'encounter': exp.metrics.encounter,  # most recent battle at this decision (0 = none yet)
             'pstrike_count': sum(1 for cid in exp.choice.obs.deck.cards if cid == int(sts.CardId.PERFECTED_STRIKE)),
             'reward': m['reward'],
             'value': m['value'],
@@ -766,6 +962,16 @@ def experiences_to_batches(experiences: List[Experience], advantages: List[float
         batch_data.append(flat_dict)
     
     return batch_data
+
+
+def lr_decay_factor(config: TrainConfig, iteration: int) -> float:
+    """Multiplier on the base learning rates at `iteration` (see TrainConfig.lr_decay_*)."""
+    if config.lr_decay_steps <= 0:
+        return 1.0
+    assert config.lr_final_frac > 0, "lr_final_frac must be > 0 when lr decay is enabled"
+    frac = (iteration - config.lr_decay_start) / config.lr_decay_steps
+    frac = min(max(frac, 0.0), 1.0)
+    return config.lr_final_frac ** frac
 
 
 def effective_entropy_coef(config: TrainConfig, iteration: int) -> float:
@@ -836,6 +1042,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
     total_policy_grad_norm = 0
     total_value_grad_norm = 0
     total_clipfrac = 0
+    total_aux_room = 0.0
     # Stats for explained variance calculation
     target_stats = Stats()
     residual_stats = Stats()
@@ -848,6 +1055,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
             batch_size = len(collated_batch['chosen_idx'])
 
             # Forward pass
+            aux_room_logits = None
             if config.separate_networks:
                 # Get policy logits from policy network
                 new_logits = policy_net(collated_batch)
@@ -859,16 +1067,24 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
                 else:
                     new_values = torch.zeros(batch_size, device=device)
             else:
-                # Single network with value head
-                output = net(collated_batch)
-                if isinstance(output, tuple):
+                # Single network with value head; aux head active when the aux loss is enabled
+                want_aux = config.aux_dest_room_coef > 0
+                output = net(collated_batch, return_aux=True) if want_aux else net(collated_batch)
+                if want_aux:
+                    if len(output) == 3:
+                        new_logits, new_values, aux_room_logits = output
+                    else:
+                        new_logits, aux_room_logits = output
+                        new_values = torch.zeros(batch_size, device=device)
+                elif isinstance(output, tuple):
                     new_logits, new_values = output
                 else:
                     new_logits = output
                     new_values = torch.zeros(batch_size, device=device)
-            
+
             # Per-minibatch loss from the algorithm strategy.
-            total_loss, aux = algo.compute_loss(collated_batch, (new_logits, new_values), config)
+            total_loss, aux = algo.compute_loss(
+                collated_batch, (new_logits, new_values, aux_room_logits), config)
 
             # Explained-variance accumulation (value-based algos provide ev_target/ev_pred).
             if 'ev_target' in aux:
@@ -905,6 +1121,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
             total_policy_grad_norm += policy_grad_norm
             total_value_grad_norm += value_grad_norm
             total_clipfrac += aux['clipfrac'].item()
+            total_aux_room += aux['aux_room_loss'].item() if 'aux_room_loss' in aux else 0.0
             num_batches += 1
     
     # Calculate explained variance using Stats helper classes
@@ -925,6 +1142,7 @@ def train_step(nets, optimizer, experiences: List[Experience], advantages: List[
         'policy_grad_norm': total_policy_grad_norm / num_batches if num_batches > 0 else 0,
         'value_grad_norm': total_value_grad_norm / num_batches if num_batches > 0 else 0,
         'clipfrac': total_clipfrac / num_batches if num_batches > 0 else 0,
+        'aux_room_loss': total_aux_room / num_batches if num_batches > 0 else 0,
         'explained_variance': explained_variance,
     }
 
@@ -954,8 +1172,8 @@ def main():
     parser.add_argument('--save-path', type=str, default='ppo_model.pt',
                         help='Path to save trained model')
     parser.add_argument('--reward-function', type=str, default='smooth',
-                        choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes'],
-                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count) (default: perfected_strike)')
+                        choices=['smooth', 'perfected_strike', 'victory', 'no_pstrikes', 'heart'],
+                        help='Reward function to use: smooth (sparse win/loss+floor), perfected_strike (dense card count), victory (sparse 0/1 win/loss), no_pstrikes (dense negative card count), heart (floor/114 + 0.25 act-3 win / 0.5 heart win) (default: smooth)')
     parser.add_argument('--torch-compile', type=str, default='default',
                         help='Torch compile mode: "default", "max-autotune", "reduce-overhead", or "no" to disable')
     parser.add_argument('--save-episodes', action='store_true',
@@ -1077,6 +1295,8 @@ def main():
         reward_fn = compute_victory_reward
     elif args.reward_function == 'no_pstrikes':
         reward_fn = compute_no_pstrikes_reward
+    elif args.reward_function == 'heart':
+        reward_fn = compute_heart_reward
     else:
         raise ValueError(f"Unknown reward function: {args.reward_function}")
     
@@ -1143,6 +1363,12 @@ def main():
                 print(f"Loaded optimizer state from {optimizer_path}")
             except FileNotFoundError:
                 print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
+            except (ValueError, RuntimeError) as e:
+                # Param set changed since the checkpoint (e.g. a zero-init feature was added to
+                # the net for a warm-start) -> optimizer groups no longer match the saved state.
+                # Fall back to fresh moments; the net weights still load exactly.
+                print(f"Warning: optimizer state from {optimizer_path} incompatible with current "
+                      f"param set ({e}); starting with fresh optimizer state")
         
         service_net = combined_net
         
@@ -1194,11 +1420,23 @@ def main():
                 print(f"Loaded optimizer state from {optimizer_path}")
             except FileNotFoundError:
                 print(f"Warning: Optimizer state file {optimizer_path} not found, starting with fresh optimizer state")
+            except (ValueError, RuntimeError) as e:
+                # Param set changed since the checkpoint (e.g. a zero-init feature was added to
+                # the net for a warm-start) -> optimizer groups no longer match the saved state.
+                # Fall back to fresh moments; the net weights still load exactly.
+                print(f"Warning: optimizer state from {optimizer_path} incompatible with current "
+                      f"param set ({e}); starting with fresh optimizer state")
         
         orig_net = nets = service_net = net  # lol TODO
         print(f"Using single network (value_head={algo.requires_value_head})")
     
-    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=args.torch_compile)
+    # In pipeline mode the inference clone runs CONCURRENTLY with training; torch.compile/dynamo
+    # is not thread-safe across a tracing learner and an executing inference net (it raises
+    # "using FX to symbolically trace a dynamo-optimized function"). Keep the learner compiled
+    # but leave the inference clone uncompiled -- inference is a small part of MCTS-bound
+    # collection, so the cost is minor and the collision is eliminated deterministically.
+    inf_compile = 'no' if config.pipeline else args.torch_compile
+    service = NNService(service_net, batch_size=config.inf_batch_size, batch_size_factor=config.inf_batch_size_factor, torch_compile_mode=inf_compile)
 
     # Compile networks after service creation to ensure same compilation state
     if args.torch_compile != 'no':
@@ -1219,28 +1457,85 @@ def main():
     # Persistent advantage normalizer (EWMA of mean/std across iterations).
     adv_norm = RunningMoments(config.adv_norm_decay)
 
+    # Pipeline mode: a single-thread executor runs the next iteration's collection while this
+    # iteration trains. `pending` holds the in-flight Future; it is always joined before the
+    # next update_weights, so the NNService's weight clone is never mutated mid-collection.
+    collect_pool = ThreadPoolExecutor(max_workers=1) if config.pipeline else None
+    pending = None
+
     try:
         for iteration in range(config.resume_from_step, config.num_iterations):
             print(f"\nIteration {iteration + 1}/{config.num_iterations}")
-            
-            # Collect experience
-            start_time = time.time()
-            service.update_weights(service_net)
-            jobs = algo.collection_plan(config, iteration)
-            trajectories = collect_experience(config, service, reward_fn, jobs)
-            collect_time = time.time() - start_time
-            
+            iter_wall_start = time.time()
+
+            # Collect experience (pipelined: take the prefetched batch, then prefetch the next;
+            # sequential: collect inline).
+            if config.pipeline:
+                if pending is None:
+                    # Prime the pipeline: first iteration collects synchronously.
+                    service.update_weights(service_net)
+                    trajectories, collect_time = _timed_collect(
+                        config, service, reward_fn, algo.collection_plan(config, iteration))
+                else:
+                    trajectories, collect_time = pending.result()
+                # Kick off the NEXT iteration's collection now, against the current (pre-train)
+                # weights, so it overlaps this iteration's training.
+                if iteration + 1 < config.num_iterations:
+                    service.update_weights(service_net)
+                    pending = collect_pool.submit(
+                        _timed_collect, config, service, reward_fn,
+                        algo.collection_plan(config, iteration + 1))
+            else:
+                start_time = time.time()
+                service.update_weights(service_net)
+                jobs = algo.collection_plan(config, iteration)
+                trajectories = collect_experience(config, service, reward_fn, jobs)
+                collect_time = time.time() - start_time
+
             if not trajectories:
                 print("No trajectories collected, skipping iteration")
                 continue
             
-            # Compute statistics
-            win_rate = sum(1 for t in trajectories if t.final_reward >= 1.0) / len(trajectories)
+            # Compute statistics. A "win" is any PLAYER_VICTORY (for heart runs that includes
+            # act-3-only wins; heart_win_rate below isolates full heart kills).
+            def _won(t):
+                return t.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY
+            win_rate = sum(1 for t in trajectories if _won(t)) / len(trajectories)
             avg_floor = sum(t.final_metrics.floor_num for t in trajectories) / len(trajectories)
             avg_reward = sum(t.final_reward for t in trajectories) / len(trajectories)
-            
+
             print(f"Collected {len(trajectories)} trajectories in {collect_time:.1f}s")
             print(f"Win rate: {win_rate:.3f}, Avg floor: {avg_floor:.1f}, Avg reward: {avg_reward:.3f}")
+            # Heart-run breakdown: full heart kills vs act-3-only wins, plus key acquisition.
+            heart_stats = {}
+            if args.reward_function == 'heart':
+                heart_stats['heart_win_rate'] = sum(
+                    1 for t in trajectories if _won(t) and t.final_metrics.act >= 4) / len(trajectories)
+                heart_stats['act3_win_rate'] = sum(
+                    1 for t in trajectories if _won(t) and t.final_metrics.act < 4) / len(trajectories)
+                heart_stats['avg_keys'] = sum(t.final_metrics.num_keys for t in trajectories) / len(trajectories)
+                heart_stats['act4_reach_rate'] = sum(
+                    1 for t in trajectories if t.final_metrics.act >= 4) / len(trajectories)
+                print(f"Heart: {heart_stats['heart_win_rate']:.3f} heart wins, "
+                      f"{heart_stats['act3_win_rate']:.3f} act3-only wins, "
+                      f"{heart_stats['act4_reach_rate']:.3f} reached act4, "
+                      f"avg keys {heart_stats['avg_keys']:.2f}")
+            # Per-ascension-level breakdown when training on a mixture. For heart runs, also
+            # log the per-level HEART-KILL rate (full act-4 clear) alongside the any-win rate.
+            asc_stats = {}
+            if config.max_ascension > 0:
+                is_heart = args.reward_function == 'heart'
+                for a in range(config.max_ascension + 1):
+                    ts = [t for t in trajectories if t.ascension == a]
+                    if ts:
+                        asc_stats[f'win_rate_asc{a}'] = sum(1 for t in ts if _won(t)) / len(ts)
+                        asc_stats[f'num_games_asc{a}'] = len(ts)
+                        if is_heart:
+                            asc_stats[f'heart_win_rate_asc{a}'] = sum(
+                                1 for t in ts if _won(t) and t.final_metrics.act >= 4) / len(ts)
+                print("Per-ascension win rates: " + ", ".join(
+                    f"A{a}={asc_stats[f'win_rate_asc{a}']:.3f}(n={asc_stats[f'num_games_asc{a}']})"
+                    for a in range(config.max_ascension + 1) if f'win_rate_asc{a}' in asc_stats))
             
             # Prepare training data (with debug output for first trajectory)
             experiences, advantages, returns, ep_meta = algo.compute_advantages(trajectories, config, adv_norm, debug_traj=True)
@@ -1258,11 +1553,17 @@ def main():
                 save_episodes(experiences, advantages, returns, ep_meta, ep_path)
                 print(f"Saved {len(experiences)} decisions to {ep_path}")
             
-            # Perform PPO training step (entropy coef possibly decayed for this iteration)
+            # Perform PPO training step (entropy coef / lr possibly decayed for this iteration)
             ent_coef = effective_entropy_coef(config, iteration)
             step_config = replace(config, entropy_coef=ent_coef) if ent_coef != config.entropy_coef else config
             if config.entropy_coef_decay_steps > 0:
                 print(f"Entropy coef this iteration: {ent_coef:.5f}")
+            lrf = lr_decay_factor(config, iteration)
+            if config.lr_decay_steps > 0:
+                base_lrs = [config.policy_lr, config.value_lr]
+                for gi, group in enumerate(optimizer.param_groups):
+                    group['lr'] = base_lrs[min(gi, len(base_lrs) - 1)] * lrf
+                print(f"LR factor this iteration: {lrf:.4f}")
             train_start = time.time()
             losses = train_step(nets, optimizer, experiences, advantages, returns, step_config, algo=algo)
             train_time = time.time() - train_start
@@ -1281,6 +1582,11 @@ def main():
                 'iteration': iteration + 1,
                 'num_trajectories': len(trajectories),
                 'collect_time': collect_time,
+                # Effective per-iteration wall. In pipeline mode collect/train overlap, so this
+                # is < collect_time + train_time (it counts the prefetch wait + train, the true
+                # iteration cadence); in sequential mode it ~= collect_time + train_time.
+                'iter_wall': time.time() - iter_wall_start,
+                'pipelined': bool(config.pipeline),
                 'win_rate': win_rate,
                 'avg_floor': avg_floor,
                 'avg_reward': avg_reward,
@@ -1294,6 +1600,7 @@ def main():
                 'policy_grad_norm': losses.get('policy_grad_norm', 0),
                 'value_grad_norm': losses.get('value_grad_norm', 0),
                 'clipfrac': losses.get('clipfrac', 0),
+                'aux_room_loss': losses.get('aux_room_loss', 0),
                 'explained_variance': losses.get('explained_variance', 0),
                 # EWMA std used to normalize PPO advantages. Logged so the effective
                 # return-vs-entropy exchange rate (entropy_coef * adv_norm_std) is recoverable,
@@ -1302,6 +1609,11 @@ def main():
                 'adv_norm_std': float(adv_norm.std),
                 # Effective (possibly decayed) entropy coefficient used this iteration.
                 'entropy_coef': ent_coef,
+                # Actual learning rates used this iteration (post-decay).
+                'policy_lr': config.policy_lr * lrf,
+                'value_lr': config.value_lr * lrf,
+                **heart_stats,
+                **asc_stats,
             }
             
             # Write stats to JSONL file based on save path
@@ -1325,8 +1637,12 @@ def main():
                     # Save optimizer state
                     torch.save(optimizer.state_dict(), f"{args.save_path}.optimizer.iter_{iteration + 1}")
                     print(f"Saved model checkpoint at iteration {iteration + 1}")
-    
+
     finally:
+        if collect_pool is not None:
+            if pending is not None:
+                pending.cancel()
+            collect_pool.shutdown(wait=False)
         service.stop()
     
     # Save final model. This runs at process teardown, where the just-finished training loop's
