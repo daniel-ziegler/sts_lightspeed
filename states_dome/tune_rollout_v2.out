@@ -1,0 +1,137 @@
+/home/ubuntu/sts/states_dome/tune_rollout.py:132: ExperimentalWarning: Argument ``multivariate`` is an experimental feature. The interface can change in the future.
+  sampler=optuna.samplers.TPESampler(seed=1, multivariate=True, n_startup_trials=30),
+[I 2026-06-14 22:10:43,782] A new study created in RDB with name: rollout_v2
+warm-started 8 trials from rollout_v1
+trial 0: 2.308 win 0.786 | best 2.308 win 0.786 @ lossDamageWeight=0.000 exploration=25.000 explorationChance=25.000 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=0 potionEps=0
+trial 1: 10.473 win 0.818 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 2: 8.086 win 0.814 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 3: 7.790 win 0.806 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 4: 7.138 win 0.812 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 5: 7.053 win 0.810 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 6: 6.949 win 0.807 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 7: 6.660 win 0.802 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 8: 6.521 win 0.802 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 9: -6.162 win 0.762 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 10: -1.135 win 0.780 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 11: 0.403 win 0.787 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 12: -8.310 win 0.751 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 13: -5.283 win 0.769 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 14: 6.169 win 0.806 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 15: -1.984 win 0.779 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 16: -18.525 win 0.714 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 17: -13.667 win 0.725 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 18: -10.049 win 0.747 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 19: -68.330 win 0.512 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 20: 3.255 win 0.796 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 21: -2.167 win 0.777 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 22: 1.644 win 0.787 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 23: -1.966 win 0.779 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 24: -22.852 win 0.717 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 25: -5.109 win 0.768 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 26: -4.706 win 0.768 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 27: -4.917 win 0.770 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 28: -14.103 win 0.726 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 29: -4.021 win 0.768 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 30: -64.600 win 0.522 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 31: 2.013 win 0.787 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 32: 6.884 win 0.811 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 33: 6.732 win 0.811 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 34: 2.553 win 0.790 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 35: 1.976 win 0.792 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 36: 4.830 win 0.799 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 37: 0.947 win 0.783 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 38: 3.329 win 0.793 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 39: 6.895 win 0.807 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 40: 3.910 win 0.793 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 41: 8.928 win 0.818 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 42: -0.188 win 0.782 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 43: 2.437 win 0.794 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 44: 4.819 win 0.801 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 45: 3.157 win 0.795 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 46: 5.168 win 0.805 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 47: -12.230 win 0.728 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 48: 6.610 win 0.810 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 49: -6.563 win 0.772 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 50: 6.075 win 0.804 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 51: 6.124 win 0.809 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 52: 3.842 win 0.800 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 53: -19.706 win 0.692 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 54: 4.284 win 0.800 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 55: -1.172 win 0.789 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 56: 7.262 win 0.816 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 57: 3.345 win 0.799 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 58: 6.917 win 0.804 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 59: -1.652 win 0.779 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 60: -8.936 win 0.737 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 61: -4.807 win 0.777 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 62: 7.158 win 0.813 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 63: 4.509 win 0.804 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 64: -0.214 win 0.784 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 65: 5.882 win 0.807 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 66: 4.233 win 0.799 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 67: 4.805 win 0.797 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 68: 4.992 win 0.803 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 69: 3.568 win 0.802 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 70: 0.663 win 0.785 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 71: -3.928 win 0.773 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 72: -6.925 win 0.758 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 73: 3.575 win 0.801 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 74: 3.601 win 0.798 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 75: -1.473 win 0.774 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 76: -40.656 win 0.653 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 77: -9.665 win 0.754 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 78: 4.986 win 0.798 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 79: -0.012 win 0.786 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 80: 0.867 win 0.790 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 81: 5.190 win 0.800 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 82: -8.722 win 0.745 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 83: 2.370 win 0.789 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 84: 1.247 win 0.795 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 85: 0.200 win 0.780 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 86: 3.514 win 0.798 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 87: 5.261 win 0.800 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 88: 0.454 win 0.786 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 89: -6.003 win 0.763 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 90: -0.661 win 0.782 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 91: 7.968 win 0.809 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 92: -0.580 win 0.782 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 93: 3.443 win 0.794 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 94: -9.762 win 0.756 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 95: -0.369 win 0.782 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 96: -2.270 win 0.773 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 97: 1.899 win 0.782 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 98: -12.521 win 0.737 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 99: 3.001 win 0.789 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 100: 9.609 win 0.820 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 101: -4.641 win 0.772 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 102: 6.879 win 0.812 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 103: 5.531 win 0.804 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 104: 5.700 win 0.805 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 105: -4.572 win 0.761 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 106: -16.216 win 0.725 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 107: -0.475 win 0.780 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 108: 3.566 win 0.791 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 109: 7.217 win 0.810 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 110: 2.284 win 0.796 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 111: 1.968 win 0.795 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 112: 4.921 win 0.801 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 113: 5.369 win 0.807 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 114: 9.613 win 0.818 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 115: 6.018 win 0.809 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 116: -3.890 win 0.771 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 117: -6.448 win 0.763 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 118: 3.180 win 0.796 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+trial 119: 8.379 win 0.816 | best 10.473 win 0.818 @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+
+=== search done; validating top candidates on holdout ===
+  dev mean=  10.473 win=0.818 | holdout mean=-1.203 win=0.773  @ lossDamageWeight=0.083 exploration=20.254 explorationChance=15.468 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=82 potionEps=41
+  dev mean=   9.613 win=0.818 | holdout mean=6.427 win=0.807  @ lossDamageWeight=0.088 exploration=42.448 explorationChance=46.422 monsterDamage=61.887 lossAbsoluteHp=1 cardEps=348 potionEps=154
+  dev mean=   9.609 win=0.820 | holdout mean=-1.237 win=0.777  @ lossDamageWeight=0.064 exploration=25.457 explorationChance=31.760 monsterDamage=17.600 lossAbsoluteHp=1 cardEps=244 potionEps=265
+  dev mean=   8.928 win=0.818 | holdout mean=0.143 win=0.783  @ lossDamageWeight=0.015 exploration=34.727 explorationChance=37.789 monsterDamage=46.950 lossAbsoluteHp=1 cardEps=181 potionEps=251
+  dev mean=   8.379 win=0.816 | holdout mean=1.837 win=0.790  @ lossDamageWeight=0.064 exploration=53.584 explorationChance=46.981 monsterDamage=15.153 lossAbsoluteHp=1 cardEps=314 potionEps=322
+  dev mean=   8.086 win=0.814 | holdout mean=0.110 win=0.783  @ lossDamageWeight=0.073 exploration=55.751 explorationChance=44.398 monsterDamage=37.000 lossAbsoluteHp=1 cardEps=386 potionEps=91
+  dev mean=   7.968 win=0.809 | holdout mean=2.263 win=0.783  @ lossDamageWeight=0.033 exploration=26.464 explorationChance=33.481 monsterDamage=27.150 lossAbsoluteHp=0 cardEps=286 potionEps=25
+  dev mean=   7.790 win=0.806 | holdout mean=1.330 win=0.780  @ lossDamageWeight=0.054 exploration=17.298 explorationChance=17.008 monsterDamage=37.000 lossAbsoluteHp=0 cardEps=211 potionEps=5
+  BASELINE holdout mean=2.237 win=0.783
+
+BEST (by holdout): {'lossDamageWeight': 0.08759520828462378, 'exploration': 42.448144131684266, 'explorationChance': 46.421673021331024, 'monsterDamage': 61.886991696253276} {'lossAbsoluteHp': 1} {'cardEps': 348, 'potionEps': 154}
