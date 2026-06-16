@@ -1248,29 +1248,26 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
             # CARD (and other opaque markers): cards not revealed yet; handled at CARD_REWARD.
                 
     elif spire_game.screen_type == screen.ScreenType.SHOP_SCREEN:
-        # Shop screen - populate shop information
+        # Shop screen: reconstruct the merchant's stock into the engine Shop so getAllActionsInState
+        # offers exactly the affordable buys (it checks price != -1 and gold >= price). The Shop
+        # getters return copies, so we go through the set_* mutators with the live prices.
         shop_screen = spire_game.screen
         shop = info.shop
-        
-        # Clear existing shop data
-        shop.cards.clear()
-        shop.relics.clear()
-        shop.potions.clear()
-        
-        # Map shop cards
-        for shop_card in shop_screen.cards:
+        shop.clear()
+        for i, shop_card in enumerate(shop_screen.cards[:7]):
             card_id = map_card_id(shop_card.card_id)
-            if card_id != sts.CardId.INVALID:
-                shop.cards.append(card_id)
-                
-        # Map shop relics
-        for shop_relic in shop_screen.relics:
+            if card_id == sts.CardId.INVALID:
+                raise ValueError(f"Unknown shop card: {shop_card.card_id}")
+            shop.set_card(i, sts.Card(card_id, shop_card.upgrades), shop_card.price)
+        for i, shop_relic in enumerate(shop_screen.relics[:3]):
             relic_id = map_relic_id(shop_relic.name)
-            if relic_id != sts.RelicId.INVALID:
-                shop.relics.append(relic_id)
-                
-        # Set purge cost
-        info.goldLoss = shop_screen.purge_cost
+            if relic_id == sts.RelicId.INVALID:
+                raise ValueError(f"Unknown shop relic: {shop_relic.name}")
+            shop.set_relic(i, relic_id, shop_relic.price)
+        for i, shop_potion in enumerate(shop_screen.potions[:3]):
+            shop.set_potion(i, map_potion_id(shop_potion.potion_id), shop_potion.price)
+        if shop_screen.purge_available:
+            shop.set_remove_cost(shop_screen.purge_cost)
             
     elif spire_game.screen_type == screen.ScreenType.EVENT:
         # Event screen - set event data
@@ -1906,6 +1903,60 @@ class STSLightspeedAgent:
         print(f"[net] boss relic -> {action.rewards_action_type}; heuristic fallback", file=sys.stderr)
         return None
 
+    def net_rest_action(self):
+        """heart1's campfire choice (rest / smith / and any relic options like dig/lift/recall).
+        The engine offers the same options the live site does (it reads the player's relics), so we
+        map the picked action back by its option name. Returns a spirecomm Action, or None to fall
+        back. Smith's which-card-to-upgrade is a follow-up card-select screen."""
+        gc = spirecomm_to_gamecontext(self.game)
+        action = self.net_pick_action(gc)
+        if action is None:
+            return None
+        desc = action.getDesc(gc).strip().lower()
+        rest_by_key = {
+            "rest": RestOption.REST, "smith": RestOption.SMITH, "recall": RestOption.RECALL,
+            "dig": RestOption.DIG, "lift": RestOption.LIFT, "toke": RestOption.TOKE,
+        }
+        for key, opt in rest_by_key.items():
+            if desc.startswith(key) and opt in self.game.screen.rest_options:
+                print(f"[net] rest -> {opt}", file=sys.stderr)
+                return RestAction(opt)
+        print(f"[net] rest pick {desc!r} not an available option; heuristic fallback", file=sys.stderr)
+        return None
+
+    def net_shop_action(self):
+        """heart1's shop decision: buy a card/relic/potion, start a card removal, or leave. The
+        engine Shop (injected with live prices) makes getAllActionsInState offer exactly the
+        affordable buys, so the net only ever picks something we can afford. Returns a spirecomm
+        Action, or None to fall back. One purchase per call; the shop screen re-opens for the next."""
+        gc = spirecomm_to_gamecontext(self.game)
+        action = self.net_pick_action(gc)
+        if action is None:
+            return None
+        rtype = action.rewards_action_type
+        shop = self.game.screen
+        if rtype == sts.RewardsActionType.CARD:
+            chosen = shop.cards[action.idx1]
+            print(f"[net] shop -> buy card {chosen.card_id} ({chosen.price}g)", file=sys.stderr)
+            return BuyCardAction(chosen)
+        if rtype == sts.RewardsActionType.RELIC:
+            chosen = shop.relics[action.idx1]
+            print(f"[net] shop -> buy relic {chosen.name} ({chosen.price}g)", file=sys.stderr)
+            return BuyRelicAction(chosen)
+        if rtype == sts.RewardsActionType.POTION:
+            chosen = shop.potions[action.idx1]
+            print(f"[net] shop -> buy potion {chosen.potion_id} ({chosen.price}g)", file=sys.stderr)
+            return BuyPotionAction(chosen)
+        if rtype == sts.RewardsActionType.CARD_REMOVE:
+            # Initiate the purge; the card to remove is chosen on the following card-select screen.
+            print("[net] shop -> card removal", file=sys.stderr)
+            return ChooseAction(name="purge")
+        if rtype == sts.RewardsActionType.SKIP:
+            print("[net] shop -> leave", file=sys.stderr)
+            return CancelAction()
+        print(f"[net] shop -> {rtype}; heuristic fallback", file=sys.stderr)
+        return None
+
     def net_map_action(self):
         """heart1's pick of the next map node. The GameContext regenerates this seed's map and is
         placed on the player's current node, so getAllActionsInState offers the real next-row
@@ -1936,6 +1987,10 @@ class STSLightspeedAgent:
             return self.net_boss_relic_action()
         if self.game.screen_type == ScreenType.MAP:
             return self.net_map_action()
+        if self.game.screen_type == ScreenType.SHOP_SCREEN:
+            return self.net_shop_action()
+        if self.game.screen_type == ScreenType.REST:
+            return self.net_rest_action()
         return None
 
     def handle_screen(self):

@@ -670,7 +670,33 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def_property_readonly("relics", [](const Shop& s) {
             return std::vector<RelicId>(s.relics, s.relics + 3);
-        });
+        })
+        // Mutators: the getters above return copies, so reconstructing a live shop into the
+        // ScreenStateInfo needs explicit setters. Prices are laid out cards[0..6], relics[7..9],
+        // potions[10..12]; -1 marks an empty/sold slot (matches the engine's own convention).
+        .def("clear", [](Shop& s) {
+            for (int i = 0; i < 13; ++i) s.prices[i] = -1;
+            for (int i = 0; i < 7; ++i) s.cards[i] = Card(CardId::INVALID);
+            for (int i = 0; i < 3; ++i) s.relics[i] = RelicId::INVALID;
+            for (int i = 0; i < 3; ++i) s.potions[i] = Potion::EMPTY_POTION_SLOT;
+            s.removeCost = -1;
+        })
+        .def("set_card", [](Shop& s, int idx, const Card& c, int price) {
+            if (idx < 0 || idx >= 7) throw std::out_of_range("shop card idx out of range [0,7)");
+            s.cards[idx] = c;
+            s.prices[idx] = price;
+        }, "idx"_a, "card"_a, "price"_a)
+        .def("set_relic", [](Shop& s, int idx, RelicId relic, int price) {
+            if (idx < 0 || idx >= 3) throw std::out_of_range("shop relic idx out of range [0,3)");
+            s.relics[idx] = relic;
+            s.prices[7 + idx] = price;
+        }, "idx"_a, "relic"_a, "price"_a)
+        .def("set_potion", [](Shop& s, int idx, Potion potion, int price) {
+            if (idx < 0 || idx >= 3) throw std::out_of_range("shop potion idx out of range [0,3)");
+            s.potions[idx] = potion;
+            s.prices[10 + idx] = price;
+        }, "idx"_a, "potion"_a, "price"_a)
+        .def("set_remove_cost", [](Shop& s, int cost) { s.removeCost = cost; }, "cost"_a);
 
     pybind11::class_<RelicInstance> relic(m, "Relic");
     relic.def(pybind11::init<>())
