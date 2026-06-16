@@ -449,6 +449,10 @@ PYBIND11_MODULE(slaythespire, m) {
              "add a card to the deck"
         )
         .def("obtain_relic", &GameContext::obtainRelic, "add a relic to the player")
+        .def("setup_event", &GameContext::setupEvent,
+             "initialize the current event (gc.cur_event) into EVENT_SCREEN state, populating the "
+             "event-specific info fields getValidEventSelectBits/the NN reads; consumes RNG for "
+             "events with randomized setup")
         .def("remove_card",
             [](GameContext &gc, int idx) {
                 if (idx < 0 || idx >= gc.deck.size()) {

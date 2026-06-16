@@ -672,6 +672,89 @@ _MONSTER_IDS_SKIP_IN_COMBAT = frozenset({"HexaghostOrb"})
 _MONSTER_IDS_NON_COMBAT = frozenset({"Apology Slime", "Serpent", "Healer"})
 
 
+# (engine Event enum name, eventIdStrings value, eventGameNames value) for every ? -room event the
+# sim models. The live game's screen.event_id matches the id-string and screen.event_name matches
+# the game-name; we accept either so the lookup is robust to which one CommunicationMod sends.
+# Generated from include/constants/Events.h (kept in lockstep with the engine enum).
+_EVENT_ENUM_NAME_ID_GAME = [
+    ('NEOW', 'NEOW', 'NEOW'),
+    ('OMINOUS_FORGE', 'Accursed Blacksmith', 'Ominous Forge'),
+    ('PLEADING_VAGRANT', 'Addict', 'Pleading Vagrant'),
+    ('ANCIENT_WRITING', 'Back to Basics', 'Ancient Writing'),
+    ('OLD_BEGGAR', 'Beggar', 'Old Beggar'),
+    ('BIG_FISH', 'Big Fish', 'Big Fish'),
+    ('BONFIRE_SPIRITS', 'Bonfire Elementals', 'Bonfire Spirits'),
+    ('COLOSSEUM', 'Colosseum', 'The Colosseum'),
+    ('CURSED_TOME', 'Cursed Tome', 'Cursed Tome'),
+    ('DEAD_ADVENTURER', 'Dead Adventurer', 'Dead Adventurer'),
+    ('DESIGNER_IN_SPIRE', 'Designer', 'Designer In-Spire'),
+    ('AUGMENTER', 'Drug Dealer', 'Augmenter'),
+    ('DUPLICATOR', 'Duplicator', 'Duplicator'),
+    ('FACE_TRADER', 'Face Trader', 'Face Trader'),
+    ('FALLING', 'Falling', 'Falling'),
+    ('FORGOTTEN_ALTAR', 'Forgotten Altar', 'Forgotten Altar'),
+    ('THE_DIVINE_FOUNTAIN', 'Fountain of Cleansing', 'The Divine Fountain'),
+    ('GHOSTS', 'Ghosts', 'Council of Ghosts'),
+    ('GOLDEN_IDOL', 'Golden Idol', 'Golden Idol'),
+    ('GOLDEN_SHRINE', 'Golden Shrine', 'Golden Shrine'),
+    ('WING_STATUE', 'Golden Wing', 'Wing Statue'),
+    ('KNOWING_SKULL', 'Knowing Skull', 'Knowing Skull'),
+    ('LAB', 'Lab', 'Lab'),
+    ('THE_SSSSSERPENT', 'Liars Game', 'The Ssssserpent'),
+    ('LIVING_WALL', 'Living Wall', 'Living Wall'),
+    ('MASKED_BANDITS', 'Masked Bandits', 'Masked Bandits'),
+    ('MATCH_AND_KEEP', 'Match and Keep', 'Match and Keep'),
+    ('MINDBLOOM', 'Mindbloom', 'Mindbloom'),
+    ('HYPNOTIZING_COLORED_MUSHROOMS', 'Mushrooms', 'Hypnotizing Colored Mushrooms'),
+    ('MYSTERIOUS_SPHERE', 'Mysterious Sphere', 'Mysterious Sphere'),
+    ('THE_NEST', 'Nest', 'The Nest'),
+    ('NLOTH', 'Nloth', "N'loth"),
+    ('NOTE_FOR_YOURSELF', 'Note For Yourself', 'Note For Yourself'),
+    ('PURIFIER', 'Purifier', 'Purifier'),
+    ('SCRAP_OOZE', 'Scrap Ooze', 'Scrap Ooze'),
+    ('SECRET_PORTAL', 'Secret Portal', 'Secret Portal'),
+    ('SENSORY_STONE', 'Sensory Stone', 'Sensory Stone'),
+    ('SHINING_LIGHT', 'Shining Light', 'Shining Light'),
+    ('THE_CLERIC', 'The Cleric', 'The Cleric'),
+    ('THE_JOUST', 'The Joust', 'The Joust'),
+    ('THE_LIBRARY', 'The Library', 'The Library'),
+    ('THE_MAUSOLEUM', 'The Mausoleum', 'The Mausoleum'),
+    ('THE_MOAI_HEAD', 'The Moai Head', 'The Moai Head'),
+    ('THE_WOMAN_IN_BLUE', 'The Woman in Blue', 'The Woman in Blue'),
+    ('TOMB_OF_LORD_RED_MASK', 'Tomb of Lord Red Mask', 'Tomb of Lord Red Mask'),
+    ('TRANSMORGRIFIER', 'Transmorgrifier', 'Transmorgrifier'),
+    ('UPGRADE_SHRINE', 'Upgrade Shrine', 'Upgrade Shrine'),
+    ('VAMPIRES', 'Vampires', 'Vampires(?)'),
+    ('WE_MEET_AGAIN', 'WeMeetAgain', 'We Meet Again!'),
+    ('WHEEL_OF_CHANGE', 'Wheel of Change', 'Wheel of Change'),
+    ('WINDING_HALLS', 'Winding Halls', 'Winding Halls'),
+    ('WORLD_OF_GOOP', 'World of Goop', 'World of Goop'),
+]
+
+def _build_event_name_to_enum():
+    m = {}
+    for enum_name, id_str, game_name in _EVENT_ENUM_NAME_ID_GAME:
+        ev = getattr(sts.Event, enum_name)
+        m[id_str] = ev
+        m[game_name] = ev
+    # CommunicationMod labels the start-of-run blessing screen "Neow Event"; the engine id is NEOW.
+    m["Neow Event"] = sts.Event.NEOW
+    return m
+
+_EVENT_NAME_TO_ENUM = _build_event_name_to_enum()
+
+
+def map_event_to_enum(spire_event_screen) -> "sts.Event":
+    """Resolve a spirecomm event screen to the engine Event enum, trying both the id-string
+    (screen.event_id) and game-name (screen.event_name). Returns Event.INVALID if unknown so the
+    caller can fall back to the heuristic rather than crash."""
+    for key in (getattr(spire_event_screen, "event_id", None),
+                getattr(spire_event_screen, "event_name", None)):
+        if key and key in _EVENT_NAME_TO_ENUM:
+            return _EVENT_NAME_TO_ENUM[key]
+    return sts.Event.INVALID
+
+
 def _normalize_monster_id(monster_id: str) -> str:
     """Casefold + strip ALL whitespace for monster-id matching. spirecomm sometimes sends a
     spaced display form ('Shelled Parasite') where the engine's id is the class name
@@ -1292,10 +1375,16 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
             shop.set_remove_cost(shop_screen.purge_cost)
             
     elif spire_game.screen_type == screen.ScreenType.EVENT:
-        # Event screen - set event data
-        event_id = spire_game.screen.event_id  
-        print(f"Event: {spire_game.screen}", file=sys.stderr)
-        # TODO map this once we know what the data looks like
+        # Put the GameContext into the live event's choice state so getAllActionsInState offers the
+        # event's options and the NN (construct_choice) can encode them. setup_event regenerates the
+        # event's info fields from the gc's RNG; for the start-of-run NEOW the constructor already
+        # rolled info.neowRewards. cur_event drives setup_event's per-event branch. Unknown events
+        # leave the gc as-is (the net handler falls back to the heuristic).
+        ev = map_event_to_enum(spire_game.screen)
+        if ev != sts.Event.INVALID:
+            gc.cur_event = ev
+            gc.screen_state = sts.ScreenState.EVENT_SCREEN
+            gc.setup_event()
 
     elif spire_game.screen_type == screen.ScreenType.GRID:
         # Grid select screen (transform/upgrade/remove/obtain). The engine builds one select action
@@ -2035,6 +2124,56 @@ class STSLightspeedAgent:
         print(f"[net] map pick x={chosen_x} not in next_nodes; heuristic fallback", file=sys.stderr)
         return None
 
+    def net_event_action(self):
+        """heart1's pick among an event's options. Single-option screens (Talk/Continue/Leave/etc.)
+        are forced, so we take option 0 without consulting the net. For real choices we reconstruct
+        the event in the GameContext (set_screen_state_info ran setup_event), let the net pick, and
+        translate the chosen engine option back to the live choice index.
+
+        The engine returns event options in ascending bit/idx1 order, exactly matching the live
+        game's enabled options in order, so the chosen action's rank among the valid engine actions
+        IS the live choice index. We only net-drive when the engine and the live game agree on the
+        number of available options -- otherwise the gc reconstruction diverged from live (e.g. a
+        sub-phase or RNG-dependent option set we can't mirror) and we fall back to the heuristic
+        rather than risk picking the wrong option."""
+        options = self.game.screen.options
+        enabled = [o for o in options if not o.disabled]
+        if len(enabled) <= 1:
+            # Forced acknowledgement / single path: no decision to make.
+            return ChooseAction(0)
+
+        ev = map_event_to_enum(self.game.screen)
+        if ev == sts.Event.INVALID:
+            print(f"[net] event {self.game.screen.event_id!r} unmapped; heuristic fallback", file=sys.stderr)
+            return None
+
+        gc = spirecomm_to_gamecontext(self.game)
+        if gc.screen_state != sts.ScreenState.EVENT_SCREEN:
+            # setup_event routed into a card-select / combat-reward sub-screen the live screen
+            # doesn't match; let the heuristic handle it.
+            return None
+        actions = sts.GameAction.getAllActionsInState(gc)
+        if len(actions) != len(enabled):
+            print(f"[net] event {self.game.screen.event_id!r}: engine {len(actions)} vs live "
+                  f"{len(enabled)} options; heuristic fallback", file=sys.stderr)
+            return None
+
+        action = self.net_pick_action(gc)
+        if action is None:
+            return None
+        # Rank of the chosen option among the valid engine options (ascending idx1) == live index.
+        sorted_idx1 = sorted(a.idx1 for a in actions)
+        try:
+            rank = sorted_idx1.index(action.idx1)
+        except ValueError:
+            print(f"[net] event pick idx1={action.idx1} not among options {sorted_idx1}; fallback",
+                  file=sys.stderr)
+            return None
+        chosen = enabled[rank]
+        print(f"[net] event {self.game.screen.event_id!r} -> [{chosen.choice_index}] {chosen.label!r}",
+              file=sys.stderr)
+        return ChooseAction(chosen.choice_index)
+
     def handle_screen_with_net(self):
         """Route the out-of-combat screens that are wired to heart1. Returns a spirecomm Action,
         or None for screens not yet net-driven (caller falls back to heuristics)."""
@@ -2050,6 +2189,8 @@ class STSLightspeedAgent:
             return self.net_rest_action()
         if self.game.screen_type == ScreenType.GRID:
             return self.net_card_select_action()
+        if self.game.screen_type == ScreenType.EVENT:
+            return self.net_event_action()
         return None
 
     def handle_screen(self):
