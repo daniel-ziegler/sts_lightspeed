@@ -68,6 +68,11 @@ namespace sts {
 
         void moveToDrawPileTop(const CardInstance &c);
         void moveToDrawPileBottom(const CardInstance &c);
+        // Add a card to the draw pile's UNKNOWN region (no known position, no rng). For
+        // reconstructing a draw pile whose order the player can't actually see: the searcher then
+        // draws it stochastically (chance nodes) instead of treating the reconstructed order as
+        // known future draws. Use this, not moveToDrawPileTop, when rebuilding a converted state.
+        void moveToDrawPileUnknown(const CardInstance &c);
         void shuffleIntoDrawPile(Random &rng, const CardInstance &c);
 
         void moveToDiscardPile(const CardInstance &c);

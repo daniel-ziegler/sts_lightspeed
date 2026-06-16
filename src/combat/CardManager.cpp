@@ -216,6 +216,15 @@ void CardManager::moveToDrawPileTop(const CardInstance &c) {
     drawPile.addToTop(c);
 }
 
+void CardManager::moveToDrawPileUnknown(const CardInstance &c) {
+    if (c.getId() == CardId::INVALID) {
+        std::cerr << "WARNING: dropped INVALID card on moveToDrawPileUnknown" << std::endl;
+        return;
+    }
+    notifyAddToDrawPile(c);
+    drawPile.add(c);  // joins the unknown region; the searcher draws it stochastically
+}
+
 void CardManager::shuffleIntoDrawPile(Random &rng, const CardInstance &c) {
     notifyAddToDrawPile(c);
     drawPile.shuffleIn(rng, c);

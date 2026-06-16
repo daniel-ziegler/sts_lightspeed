@@ -60,6 +60,9 @@ class Coordinator:
         self.in_game = False
         self.last_game_state = None
         self.last_error = None
+        # Raw CommunicationMod message dict (game_state + available_commands) for the most
+        # recent update, kept so callers can capture the unparsed source of truth for replay.
+        self.last_raw_communication_state = None
 
     def signal_ready(self):
         """Indicate to Communication Mod that setup is complete
@@ -163,6 +166,7 @@ class Coordinator:
         if message is not None:
             try:
                 communication_state = json.loads(message)
+                self.last_raw_communication_state = communication_state
                 self.last_error = communication_state.get("error", None)
                 self.game_is_ready = communication_state.get("ready_for_command")
                 if self.last_error is None:

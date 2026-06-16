@@ -174,6 +174,9 @@ PYBIND11_MODULE(slaythespire, m) {
             }
         }, "gc"_a, "encounter"_a = pybind11::none(),
            "playout a battle; optionally force a specific encounter instead of the rolled one")
+        .def("configure_searcher", &search::SearchAgent::configureSearcher, "searcher"_a, "bc"_a,
+             "apply this agent's tuned battle-search knobs to a BattleSearcher and return the "
+             "matching per-decision simulation count (for single-step search, e.g. the comm bridge)")
         .def("playout", &search::SearchAgent::playout);
 
     // ActionType enum binding
@@ -583,12 +586,33 @@ PYBIND11_MODULE(slaythespire, m) {
     });
     rewards.def_readwrite("emerald_key", &Rewards::emeraldKey);
     rewards.def_readwrite("sapphire_key", &Rewards::sapphireKey);
+    // Mutators for injecting an observed reward screen (e.g. from CommunicationMod) so that
+    // getAllActionsInState() enumerates the real offered rewards. The read-only `cards`/
+    // `relics`/`potions` properties above return copies, so these methods are the only way to
+    // populate the container from Python.
+    rewards.def("clear", &Rewards::clear, "remove all rewards");
+    rewards.def("add_gold", &Rewards::addGold, "add a gold reward of the given amount");
+    rewards.def("add_relic", &Rewards::addRelic, "add a relic reward");
+    rewards.def("add_potion", &Rewards::addPotion, "add a potion reward");
+    rewards.def("add_card_reward", [](Rewards &r, const std::vector<Card> &cards) {
+        CardReward reward;
+        for (const auto &c : cards) {
+            reward.push_back(c);
+        }
+        r.addCardReward(reward);
+    }, "add a card-reward group (list of Cards the player chooses one of)");
 
     pybind11::class_<ScreenStateInfo> screenStateInfo(m, "ScreenStateInfo");
         screenStateInfo
         .def_property_readonly("boss_relics", [](const ScreenStateInfo &s) {
             return std::vector<RelicId>(s.bossRelics, s.bossRelics+3);
         })
+        // The boss_relics getter above returns a copy, so add a setter for injecting the three
+        // offered boss relics (idx 0-2) when reconstructing a BOSS_RELIC_REWARDS screen.
+        .def("set_boss_relic", [](ScreenStateInfo &s, int idx, RelicId relic) {
+            if (idx < 0 || idx >= 3) throw std::out_of_range("boss relic idx must be 0-2");
+            s.bossRelics[idx] = relic;
+        }, "idx"_a, "relic"_a)
         .def_property_readonly("shop", [](const ScreenStateInfo& info) -> const Shop& {
             return info.shop;
         })
@@ -746,7 +770,10 @@ PYBIND11_MODULE(slaythespire, m) {
             std::ostringstream oss;
             oss << bc;
             return oss.str();
-        });
+        })
+        .def("register_relics_from", &BattleContext::registerRelicsFrom, "gc"_a,
+            "copy the player's relic-ownership bits from a GameContext without firing atBattleStart "
+            "effects (for reconstructing a mid-combat state)");
 
     def_value(battleContext, "input_state", &BattleContext::inputState);
 
@@ -929,6 +956,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("moveToDiscardPile", &CardManager::moveToDiscardPile)
         .def("moveToExhaustPile", &CardManager::moveToExhaustPile)
         .def("moveToDrawPileTop", &CardManager::moveToDrawPileTop)
+        .def("moveToDrawPileUnknown", &CardManager::moveToDrawPileUnknown)
         .def("removeFromHandAtIdx", &CardManager::removeFromHandAtIdx)
         .def("draw", &CardManager::draw)
         .def("clear", &CardManager::clear);

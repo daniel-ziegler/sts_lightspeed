@@ -78,6 +78,20 @@ static void printHelper(const BattleContext &bc, const search::Action &a) {
     std::cout << bc << std::endl;
 }
 
+std::int64_t search::SearchAgent::configureSearcher(BattleSearcher &searcher, const BattleContext &bc) const {
+    // Mirror of playoutBattle's per-searcher setup, factored out for single-step callers.
+    const bool boss = isBossEncounter(bc.encounter);
+    searcher.explorationParameter = explorationParameter;
+    searcher.explorationParameterChance = explorationParameterChance;
+    searcher.chanceWideningC = boss ? bossChanceWideningC : chanceWideningC;
+    searcher.chanceWideningAlpha = boss ? bossChanceWideningAlpha : chanceWideningAlpha;
+    searcher.endTurnWideningC = endTurnWideningC;
+    searcher.endTurnWideningAlpha = endTurnWideningAlpha;
+    searcher.evalWeights = evalWeights;
+    const double bossMultiplier = boss ? bossSimulationMultiplier : 1.0;
+    return static_cast<std::int64_t>(bossMultiplier * simulationCountBase);
+}
+
 void search::SearchAgent::playoutBattle(BattleContext &bc) {
     // One searcher for the whole battle. Each decision tries to reroot at the chosen child's
     // subtree so its cached visit counts carry over as a head start; falls back to a full setRoot

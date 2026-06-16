@@ -86,6 +86,12 @@ void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit
 }
 
 // this doesnt apply powers in order, so if that matters in the future all relics will have to be sorted
+void BattleContext::registerRelicsFrom(const GameContext &gc) {
+    // Ownership bits only -- no atBattleStart triggers (see header).
+    player.relicBits0 = gc.relics.relicBits0;
+    player.relicBits1 = gc.relics.relicBits1;
+}
+
 void BattleContext::initRelics(const GameContext &gc) {
     player.relicBits0 = gc.relics.relicBits0;
     player.relicBits1 = gc.relics.relicBits1;

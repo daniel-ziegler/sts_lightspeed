@@ -75,6 +75,13 @@ namespace sts::search {
         // public interface
         void playout(GameContext &gc);
 
+        // Apply this agent's tuned search knobs (exploration / chance + end-turn widening / eval
+        // weights, with boss variants) to `searcher` and return the per-decision simulation
+        // budget (bossSimulationMultiplier * simulationCountBase for bosses). Lets a single-step
+        // caller (e.g. the CommunicationMod bridge) search with the exact config heart1 was
+        // trained/evaluated under. Keep in sync with playoutBattle's setup.
+        std::int64_t configureSearcher(BattleSearcher &searcher, const BattleContext &bc) const;
+
         // private methods
         void playoutBattle(BattleContext &bc);
 

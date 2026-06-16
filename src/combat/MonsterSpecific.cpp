@@ -3356,6 +3356,15 @@ void Monster::largeSlimeSplit(BattleContext &bc, const MonsterId mediumSlimeType
 #endif
     const auto idx1 = placeIdx;
     const auto idx2 = placeIdx + 1;
+#ifdef sts_asserts
+    // A large slime splits into its own slot and the next one; the engine's encounter/split
+    // layout guarantees slot idx2 is a free reservation. If it holds a live monster, the group
+    // was built with a layout the split logic can't honor (e.g. a converted live-game group with
+    // monsters packed into the slot a pending split needs) -- splitting here would clobber it and
+    // desync monstersAlive/monsterCount.
+    assert(idx2 < static_cast<int>(bc.monsters.arr.size()));
+    assert(bc.monsters.arr[idx2].isDeadOrEscaped());
+#endif
 
     bc.monsters.arr[idx1] = Monster();
     bc.monsters.arr[idx1].initSpawnedMonster(bc, mediumSlimeType, idx1, hp);

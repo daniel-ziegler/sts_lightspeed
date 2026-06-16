@@ -113,6 +113,13 @@ namespace sts {
 
         void initRelics(const GameContext &gc);
 
+        // Register the player's relics (the relicBits ownership mask only) from the GameContext,
+        // WITHOUT firing any atBattleStart effects. For reconstructing a mid-combat state (the
+        // CommunicationMod bridge): combat-start relic effects already happened in the real game
+        // and arrive as transmitted player powers, but the ownership bits are needed so
+        // during-combat relic triggers (Kunai, Shuriken, Pen Nib, Ornamental Fan, ...) fire.
+        void registerRelicsFrom(const GameContext &gc);
+
         void exitBattle(GameContext &g) const;
         void updateRelicsOnExit(GameContext &g) const;
         void updateCardsOnExit(Deck &d) const; // for cards like ritual dagger, and eventually lesson learned results
