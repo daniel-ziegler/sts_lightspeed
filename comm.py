@@ -276,11 +276,28 @@ _DEBUFF_PLAYER_STATUSES = frozenset({
     sts.PlayerStatus.FASTING, sts.PlayerStatus.HEX, sts.PlayerStatus.LOSE_DEXTERITY,
     sts.PlayerStatus.LOSE_STRENGTH, sts.PlayerStatus.NO_BLOCK, sts.PlayerStatus.NO_DRAW,
 })
+# Monster statuses the engine applies through Monster::addDebuff (the rest go through buff()). This
+# must match addDebuff's switch exactly -- it assert(false)s on any status it doesn't handle. Note
+# SHACKLED is NOT here: despite being a debuff semantically, the engine applies it via buff<SHACKLED>
+# (Monster.cpp) and addDebuff has no SHACKLED case, so routing it to addDebuff aborts the process.
 _DEBUFF_MONSTER_STATUSES = frozenset({
     sts.MonsterStatus.CHOKED, sts.MonsterStatus.CORPSE_EXPLOSION, sts.MonsterStatus.LOCK_ON,
-    sts.MonsterStatus.POISON, sts.MonsterStatus.SHACKLED, sts.MonsterStatus.VULNERABLE,
-    sts.MonsterStatus.WEAK,
+    sts.MonsterStatus.POISON, sts.MonsterStatus.VULNERABLE, sts.MonsterStatus.WEAK,
 })
+
+# The exact set of statuses Monster::addDebuff handles (its switch cases in include/combat/Monster.h).
+# addDebuff does `assert(false)` on anything else, which SIGABRTs the whole process -- an
+# uncatchable abort that hangs live play -- so any status we route to addDebuff MUST be in here.
+# (buff() silently no-ops unknown statuses instead, so the buff path can't abort.) This guard fails
+# loud at import if _DEBUFF_MONSTER_STATUSES ever drifts outside addDebuff's capability.
+_ADDDEBUFF_HANDLED_STATUSES = frozenset({
+    sts.MonsterStatus.BLOCK_RETURN, sts.MonsterStatus.CHOKED, sts.MonsterStatus.CORPSE_EXPLOSION,
+    sts.MonsterStatus.LOCK_ON, sts.MonsterStatus.MARK, sts.MonsterStatus.POISON,
+    sts.MonsterStatus.STRENGTH, sts.MonsterStatus.VULNERABLE, sts.MonsterStatus.WEAK,
+})
+assert _DEBUFF_MONSTER_STATUSES <= _ADDDEBUFF_HANDLED_STATUSES, (
+    "monster statuses routed to addDebuff but not handled by it (would assert/SIGABRT live): "
+    f"{_DEBUFF_MONSTER_STATUSES - _ADDDEBUFF_HANDLED_STATUSES}")
 
 # Every power_id the game can send: mapped (player/monster) or knowingly-unmodeled. An id outside
 # this set is new/renamed -> the apply_* helpers raise rather than play a silently-wrong state.
