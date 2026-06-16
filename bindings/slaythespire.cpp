@@ -630,6 +630,20 @@ PYBIND11_MODULE(slaythespire, m) {
             }
             return cards;
         })
+        // Mutators for the card-select screen: the getters above return copies, so reconstructing a
+        // live grid/hand-select needs explicit setters. Order is preserved, so to_select_cards[i]
+        // lines up with the live screen's card i for translating the net's pick back to a command.
+        .def("clear_to_select_cards", [](ScreenStateInfo& info) { info.toSelectCards.clear(); })
+        .def("add_to_select_card", [](ScreenStateInfo& info, const Card& c, int deckIdx) {
+            info.toSelectCards.push_back(SelectScreenCard(c, deckIdx));
+        }, "card"_a, "deck_idx"_a = -1)
+        .def("clear_have_selected_cards", [](ScreenStateInfo& info) { info.haveSelectedCards.clear(); })
+        .def("add_have_selected_card", [](ScreenStateInfo& info, const Card& c, int deckIdx) {
+            info.haveSelectedCards.push_back(SelectScreenCard(c, deckIdx));
+        }, "card"_a, "deck_idx"_a = -1)
+        .def_property("to_select_count",
+            [](const ScreenStateInfo& info) { return info.toSelectCount; },
+            [](ScreenStateInfo& info, int n) { info.toSelectCount = n; })
         .def_readwrite("rewards_container", &ScreenStateInfo::rewardsContainer)
         .def_readwrite("event_data", &ScreenStateInfo::eventData)
         .def_readwrite("neowRewards", &ScreenStateInfo::neowRewards)

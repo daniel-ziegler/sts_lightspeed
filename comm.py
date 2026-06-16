@@ -1276,10 +1276,10 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
         # TODO map this once we know what the data looks like
 
     elif spire_game.screen_type == screen.ScreenType.GRID:
-        # Grid select screen (transform, upgrade, remove, etc.)
+        # Grid select screen (transform/upgrade/remove/obtain). The engine builds one select action
+        # per to_select_card; the getters return copies, so we go through the add_* mutators. Order
+        # is preserved so to_select_cards[i] == grid_screen.cards[i] for translating the pick back.
         grid_screen = spire_game.screen
-        
-        # Set select screen type based on screen purpose
         if grid_screen.for_transform:
             info.select_screen_type = sts.CardSelectScreenType.TRANSFORM
         elif grid_screen.for_upgrade:
@@ -1288,32 +1288,33 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
             info.select_screen_type = sts.CardSelectScreenType.REMOVE
         else:
             info.select_screen_type = sts.CardSelectScreenType.OBTAIN
-            
-        # Set cards to select from
-        info.to_select_cards.clear()
-        for card in grid_screen.cards:
-            card_id = map_card_id(card.card_id)
-            if card_id != sts.CardId.INVALID:
-                info.to_select_cards.append(card_id)
-                    
-        # Set already selected cards  
-        info.have_selected_cards.clear()
-        for card in grid_screen.selected_cards:
-            card_id = map_card_id(card.card_id)
-            if card_id != sts.CardId.INVALID:
-                info.have_selected_cards.append(card_id)
-                    
+        info.to_select_count = grid_screen.num_cards
+
+        info.clear_to_select_cards()
+        for i, grid_card in enumerate(grid_screen.cards):
+            card_id = map_card_id(grid_card.card_id)
+            if card_id == sts.CardId.INVALID:
+                raise ValueError(f"Unknown card in grid select: {grid_card.card_id}")
+            info.add_to_select_card(sts.Card(card_id, grid_card.upgrades), i)
+
+        info.clear_have_selected_cards()
+        for sel_card in grid_screen.selected_cards:
+            card_id = map_card_id(sel_card.card_id)
+            if card_id == sts.CardId.INVALID:
+                raise ValueError(f"Unknown selected card: {sel_card.card_id}")
+            info.add_have_selected_card(sts.Card(card_id, sel_card.upgrades))
+
     elif spire_game.screen_type == screen.ScreenType.HAND_SELECT:
-        # Hand select screen
+        # Hand select screen (in-combat: Warcry/Headbutt/etc.). Same to_select_cards reconstruction.
         hand_screen = spire_game.screen
-        
         info.select_screen_type = sts.CardSelectScreenType.DUPLICATE
-        
-        info.to_select_cards.clear() 
-        for card in hand_screen.cards:
-            card_id = map_card_id(card.card_id)
-            if card_id != sts.CardId.INVALID:
-                info.to_select_cards.append(card_id)
+        info.to_select_count = hand_screen.num_cards
+        info.clear_to_select_cards()
+        for i, hand_card in enumerate(hand_screen.cards):
+            card_id = map_card_id(hand_card.card_id)
+            if card_id == sts.CardId.INVALID:
+                raise ValueError(f"Unknown card in hand select: {hand_card.card_id}")
+            info.add_to_select_card(sts.Card(card_id, hand_card.upgrades), i)
                     
     elif spire_game.screen_type == screen.ScreenType.CARD_REWARD:
         # Card reward screen: the offered cards are revealed here, so inject them as a single
@@ -1903,6 +1904,26 @@ class STSLightspeedAgent:
         print(f"[net] boss relic -> {action.rewards_action_type}; heuristic fallback", file=sys.stderr)
         return None
 
+    def net_card_select_action(self):
+        """heart1's pick on an out-of-combat single-card grid select (transform/upgrade/remove/
+        obtain -- e.g. shop card removal, rest-site smith, event transforms). Falls back (None) for
+        in-combat selects (Headbutt/Exhume etc., left to the heuristic) and multi-card selects."""
+        scr = self.game.screen
+        if self.game.in_combat:
+            return None
+        if getattr(scr, "num_cards", 1) != 1 or getattr(scr, "any_number", False):
+            return None
+        gc = spirecomm_to_gamecontext(self.game)
+        action = self.net_pick_action(gc)
+        if action is None:
+            return None
+        idx = action.idx1
+        if not (0 <= idx < len(scr.cards)):
+            return None
+        chosen = scr.cards[idx]
+        print(f"[net] grid select -> {chosen.card_id} (idx {idx})", file=sys.stderr)
+        return CardSelectAction([chosen])
+
     def net_rest_action(self):
         """heart1's campfire choice (rest / smith / and any relic options like dig/lift/recall).
         The engine offers the same options the live site does (it reads the player's relics), so we
@@ -1991,6 +2012,8 @@ class STSLightspeedAgent:
             return self.net_shop_action()
         if self.game.screen_type == ScreenType.REST:
             return self.net_rest_action()
+        if self.game.screen_type == ScreenType.GRID:
+            return self.net_card_select_action()
         return None
 
     def handle_screen(self):
