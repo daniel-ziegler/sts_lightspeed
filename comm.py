@@ -9,6 +9,7 @@ import os
 import time
 import random
 import sys
+import traceback
 import json
 import argparse
 import itertools
@@ -1403,7 +1404,21 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     gc.gold = spire_game.gold
     gc.act = spire_game.act
     gc.floor_num = spire_game.floor
-    
+
+    # The GameContext constructor builds the act-1 map. Regenerate it for the live act so map
+    # navigation (getAllActionsInState path choices) and the NN's map features match the real game;
+    # an act-1 map left in place yields zero/wrong next-node actions on every act-2+ map screen and
+    # corrupts the map features the net sees for all act-2+ decisions. transitionToAct() also does
+    # this but heals the player and advances RNG -- side effects we must not apply to a state we are
+    # only reconstructing. assignBurningElite mirrors transitionToAct's !hasKey(EMERALD_KEY): a
+    # reconstructed gc holds no keys, and the flag affects only which elite is burning, not topology.
+    if spire_game.act == 2 or spire_game.act == 3:
+        gc.map = sts.SpireMap(int(spire_game.seed), int(spire_game.ascension_level or 0),
+                              int(spire_game.act), True)
+    elif spire_game.act >= 4:
+        gc.map = sts.SpireMap.act4()
+
+
     # Convert and set deck
     if spire_game.deck:
         # Clear the starting deck first
@@ -2287,6 +2302,7 @@ def run_agent_cli():
             break
         except Exception as e:
             print(f"Game error: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             break
 
 

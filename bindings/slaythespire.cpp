@@ -720,6 +720,7 @@ PYBIND11_MODULE(slaythespire, m) {
 
     pybind11::class_<Map, std::shared_ptr<Map>> map(m, "SpireMap");
     map.def(pybind11::init<std::uint64_t, int,int,bool>());
+    map.def_static("act4", &Map::act4Map);
     map.def("get_room_type", &sts::py::getRoomType);
     map.def("has_edge", &sts::py::hasEdge);
     map.def("edges", [](const Map &m, int x, int y) {
