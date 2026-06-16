@@ -1233,11 +1233,17 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("SpireSpear", 3): sts.MonsterMoveId.SPIRE_SPEAR_SKEWER,
     }
     
-    # Look up the move
+    # Look up the move. The mapping keys use the engine class names, which are space-free; some live
+    # ids are the spaced display form ("Shelled Parasite", "Orb Walker") whose engine name just drops
+    # the spaces. Try the raw id first (it preserves names the map intentionally keeps in live form,
+    # e.g. "TheCollector"/"Maw"/"BanditBear"), then the space-stripped form.
     move_id_enum = move_mapping.get(key)
     if move_id_enum is not None:
         return move_id_enum
-    
+    move_id_enum = move_mapping.get((monster_string.replace(" ", ""), move_id))
+    if move_id_enum is not None:
+        return move_id_enum
+
     print(f"Warning: Unknown monster move mapping for '{monster_string}' move_id={move_id}, using INVALID", file=sys.stderr)
     return sts.MonsterMoveId.INVALID
 
@@ -1882,6 +1888,19 @@ class STSLightspeedAgent:
         gc = spirecomm_to_gamecontext(self.game)
         bc, slot_to_spire = convert_combat_state(self.game, gc)
         print(bc, file=sys.stderr)
+
+        # A live monster whose current move didn't map (moveHistory[0] == INVALID) makes the engine
+        # assert(false) inside Monster::takeTurn during search -- an uncatchable SIGABRT that hangs
+        # live play. Catch it here instead: end the turn (one bad fight beats a hung run) and dump
+        # the state loudly so the missing (monster, move_id) mapping can be added.
+        invalid_move = int(sts.MonsterMoveId.INVALID)
+        for i in range(bc.monsters.monsterCount):
+            m = bc.monsters[i]
+            if m.isAlive() and m.moveHistory[0] == invalid_move:
+                print(f"!!! UNMAPPED MONSTER MOVE -- alive monster slot {i} ({m.id}, {m.getName()}) "
+                      f"has INVALID move; ending turn to avoid a search SIGABRT. Add its (id, move_id) "
+                      f"to map_move_id.", file=sys.stderr)
+                return EndTurnAction()
         
         # Configure the searcher with heart1's exact training/eval battle-search knobs
         # (exploration / chance + end-turn widening / eval weights, boss variants) and matching
