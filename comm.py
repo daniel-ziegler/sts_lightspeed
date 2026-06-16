@@ -103,6 +103,20 @@ def map_character_class(spire_class: PlayerClass) -> sts.CharacterClass:
     return CHARACTER_CLASS_MAPPING.get(spire_class, sts.CharacterClass.INVALID)
 
 
+# Relics whose every-Nth-card/attack/turn progress the engine tracks on bc.player, keyed by
+# normalized relic id -> the writable Player counter field. Restored from the live relic.counter
+# so a converted mid-fight state keeps its progress (e.g. Pen Nib's next-attack double damage).
+# Letter Opener isn't here -- the engine doesn't track its counter.
+_RELIC_COUNTER_ATTR = {
+    _normalize_relic_name("Pen Nib"): "penNibCounter",
+    _normalize_relic_name("Nunchaku"): "nunchakuCounter",
+    _normalize_relic_name("Ink Bottle"): "inkBottleCounter",
+    _normalize_relic_name("Happy Flower"): "happyFlowerCounter",
+    _normalize_relic_name("Incense Burner"): "incenseBurnerCounter",
+    _normalize_relic_name("Sundial"): "sundialCounter",
+}
+
+
 # Powers are keyed on the live game's stable power_id (the json "id", e.g. "DexLoss"), NOT the
 # localized display name ("Dexterity Down") which drifts and forced per-power patching. The tables
 # below map every StS power_id the BattleContext models to its engine status; powers the engine
@@ -499,7 +513,14 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
         # Convert player powers/buffs/debuffs (keyed on the stable power_id, not the display name)
         for power in player.powers:
             apply_player_power(bc, power.power_id, power.amount)
-    
+
+    # Restore per-combat relic counters (progress toward the next every-Nth trigger) from the live
+    # relics; register_relics_from only copies ownership bits, leaving these at zero.
+    for spire_relic in spire_game.relics:
+        attr = _RELIC_COUNTER_ATTR.get(_normalize_relic_name(spire_relic.relic_id))
+        if attr is not None:
+            setattr(bc.player, attr, spire_relic.counter)
+
     # Card piles conversion - create CardInstance objects from spirecomm cards
     for spire_card in spire_game.hand:
         card_instance = convert_spire_card_to_instance(spire_card)

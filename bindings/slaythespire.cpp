@@ -835,6 +835,15 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("attacksPlayedThisTurn", &Player::attacksPlayedThisTurn)
         .def_readwrite("skillsPlayedThisTurn", &Player::skillsPlayedThisTurn)
         .def_readwrite("cardsDiscardedThisTurn", &Player::cardsDiscardedThisTurn)
+        // Per-combat relic counters (every-Nth-card/attack/turn relics). Writable so a converted
+        // mid-fight state restores the live progress toward the next trigger (e.g. Pen Nib's
+        // double-damage attack, Nunchaku's bonus energy) instead of restarting from zero.
+        .def_readwrite("happyFlowerCounter", &Player::happyFlowerCounter)
+        .def_readwrite("incenseBurnerCounter", &Player::incenseBurnerCounter)
+        .def_readwrite("inkBottleCounter", &Player::inkBottleCounter)
+        .def_readwrite("nunchakuCounter", &Player::nunchakuCounter)
+        .def_readwrite("penNibCounter", &Player::penNibCounter)
+        .def_readwrite("sundialCounter", &Player::sundialCounter)
         .def("hasStatus", [](const Player &p, PlayerStatus s) -> bool {
             return p.hasStatusRuntime(s);
         })
