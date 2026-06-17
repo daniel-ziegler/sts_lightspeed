@@ -495,16 +495,10 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
     if not spire_game.in_combat:
         raise ValueError("Cannot convert combat state when not in combat")
 
-    # Potions must be placed on the GameContext BEFORE empty_battle_context(), which copies
-    # gc.potions/potionCount straight into the battle (BattleContext::init_empty). spirecomm
-    # reports every slot (empty ones have id "Potion Slot"); len(potions) is the real capacity
-    # (Potion Belt expands it past 3). Obtain held potions in get_real_potions() order so the
-    # bc.potions slot indices line up with the ordering map_search_action_to_spirecomm reads
-    # back when translating the searcher's potion action to a spirecomm command.
-    if spire_game.potions:
-        gc.potion_capacity = len(spire_game.potions)
-    for spire_potion in spire_game.get_real_potions():
-        gc.obtain_potion(map_potion_id(spire_potion.potion_id))
+    # The potion belt is already on the gc (spirecomm_to_gamecontext sets capacity + held potions in
+    # get_real_potions() order, before this is called), and empty_battle_context() copies
+    # gc.potions/potionCount straight into the battle. Re-obtaining them here would double the belt
+    # and desync the bc.potions slot indices map_search_action_to_spirecomm reads back.
 
     # Create battle context from GameContext
     bc = gc.empty_battle_context()
