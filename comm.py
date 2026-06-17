@@ -1621,7 +1621,16 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
         # Add each relic to the GameContext
         for sts_relic in sts_relics:
             gc.obtain_relic(sts_relic.id)
-    
+
+    # Set the potion belt (capacity + held). Without this the gc has an empty belt, so the sim
+    # offers a buy-potion action in the shop even when the live belt is full -- the net then picks
+    # it and the live game rejects it ("potion slots are full"). It also lets the net see the real
+    # potion state for every out-of-combat decision. Mirrors convert_combat_state.
+    if spire_game.potions:
+        gc.potion_capacity = len(spire_game.potions)
+    for spire_potion in spire_game.get_real_potions():
+        gc.obtain_potion(map_potion_id(spire_potion.potion_id))
+
     # Set screen state
     gc.screen_state = map_screen_state(spire_game)
     
@@ -2205,6 +2214,11 @@ class STSLightspeedAgent:
             print(f"[net] shop -> buy relic {chosen.name} ({chosen.price}g)", file=sys.stderr)
             return BuyRelicAction(chosen)
         if rtype == sts.RewardsActionType.POTION:
+            # The gc now carries the real potion belt so the sim shouldn't offer this when full;
+            # guard anyway, since BuyPotionAction raises (kills the run) on a full belt.
+            if self.game.are_potions_full():
+                print("[net] shop -> buy potion skipped (belt full); heuristic fallback", file=sys.stderr)
+                return None
             chosen = shop.potions[action.idx1]
             print(f"[net] shop -> buy potion {chosen.potion_id} ({chosen.price}g)", file=sys.stderr)
             return BuyPotionAction(chosen)
