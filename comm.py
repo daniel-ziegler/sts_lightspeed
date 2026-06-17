@@ -1590,7 +1590,11 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     # only reconstructing. assignBurningElite mirrors transitionToAct's !hasKey(EMERALD_KEY): a
     # reconstructed gc holds no keys, and the flag affects only which elite is burning, not topology.
     if spire_game.act == 2 or spire_game.act == 3:
-        gc.map = sts.SpireMap(int(spire_game.seed), int(spire_game.ascension_level or 0),
+        # SpireMap's seed arg is uint64_t; the Java/spirecomm seed is signed and is often negative,
+        # which pybind11 refuses to convert. Pass its unsigned 64-bit bit pattern -- the same value
+        # GameContext stores internally -- so the regenerated map matches the engine's own map.
+        seed_u64 = int(spire_game.seed) & 0xFFFFFFFFFFFFFFFF
+        gc.map = sts.SpireMap(seed_u64, int(spire_game.ascension_level or 0),
                               int(spire_game.act), True)
     elif spire_game.act >= 4:
         gc.map = sts.SpireMap.act4()
