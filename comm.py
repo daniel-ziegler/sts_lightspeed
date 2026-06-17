@@ -677,16 +677,19 @@ _MONSTER_ID_SYNONYMS = {
     "BanditChild": "Pointy",
     # The engine models Hexaghost as a single monster; its 6 orbs (skipped below) are folded in.
     "HexaghostBody": "Hexaghost",
+    # The act-2 "Healer" combatant is the engine's Mystic (its moves are already keyed "Healer").
+    "Healer": "Mystic",
 }
 
 # Entries that appear in a combat's monster list but are not separate engine combatants: the
 # Hexaghost's orbs are part of the single engine Hexaghost. Skipped during conversion (like is_gone).
 _MONSTER_IDS_SKIP_IN_COMBAT = frozenset({"HexaghostOrb"})
 
-# Monster ids that are non-combat event props (Apology Slime, the Serpent's merchant, the Healer)
-# -- they never appear in a real battle's monster list, so reaching one in combat is a real bug we
-# want to fail loud on rather than silently mishandle.
-_MONSTER_IDS_NON_COMBAT = frozenset({"Apology Slime", "Serpent", "Healer"})
+# Monster ids that are non-combat event props (Apology Slime, the Serpent's merchant) -- they never
+# appear in a real battle's monster list, so reaching one in combat is a real bug we want to fail
+# loud on rather than silently mishandle. (The act-2 "Healer" is NOT here: it is a real combatant,
+# the engine's Mystic -- see _MONSTER_ID_SYNONYMS.)
+_MONSTER_IDS_NON_COMBAT = frozenset({"Apology Slime", "Serpent"})
 
 
 # (engine Event enum name, eventIdStrings value, eventGameNames value) for every ? -room event the
