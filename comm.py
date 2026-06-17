@@ -1656,23 +1656,27 @@ def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext"
     action_type = action.get_action_type()
 
     if action_type == sts.ActionType.CARD:
-        # Playing a card - need card index and optional target
+        # Only a targeted card carries a real monster target. For a non-targeted card the search's
+        # target_idx is a meaningless default (often 0) and must not be mapped: with reserved/empty
+        # monster slots (the summoner layouts) slot 0 holds no live monster, so mapping it would
+        # raise. target_index=None tells the live game to play the card untargeted.
         card_index = action.get_source_idx()
-        target_idx = _sim_target_to_spire_index(action.get_target_idx(), slot_to_spire)
+        if 0 <= card_index < len(game.hand) and game.hand[card_index].has_target:
+            target_idx = _sim_target_to_spire_index(action.get_target_idx(), slot_to_spire)
+        else:
+            target_idx = None
         return PlayCardAction(card_index=card_index, target_index=target_idx)
 
     elif action_type == sts.ActionType.POTION:
-        # Using a potion - need potion index and optional target
+        # Using a potion - only a target-requiring potion carries a monster target (see CARD above).
         potion_idx = action.get_source_idx()
-        target_idx = _sim_target_to_spire_index(action.get_target_idx(), slot_to_spire)
-
-        # Get the potion from the game state
         potions = game.get_real_potions()
-        if 0 <= potion_idx < len(potions):
-            potion = potions[potion_idx]
-            return PotionAction(True, potion=potion, target_index=target_idx)
-        else:
+        if not (0 <= potion_idx < len(potions)):
             raise ValueError(f"Invalid potion index: {potion_idx}")
+        potion = potions[potion_idx]
+        target_idx = (_sim_target_to_spire_index(action.get_target_idx(), slot_to_spire)
+                      if potion.requires_target else None)
+        return PotionAction(True, potion=potion, target_index=target_idx)
             
     elif action_type == sts.ActionType.END_TURN:
         return EndTurnAction()
