@@ -2022,6 +2022,32 @@ class STSLightspeedAgent:
                 pass
             return EndTurnAction()
 
+        # Stall-breaker. The battle search can go near-indifferent between attacking and ending the
+        # turn against trivial enemies it can't see itself finishing -- victory sits behind several
+        # chance nodes its rollouts rarely reach -- and end-turn edges out on value, so the bot ends
+        # every turn without acting and the fight loops forever (observed vs two small slimes). If
+        # the search picked END_TURN while holding energy and a targeted attack of nearly-equal value
+        # is available, that turn is wasted: play the best such attack so the fight progresses. A
+        # clearly-better END_TURN (a real defensive hold) keeps its value margin and is respected.
+        if first_action.get_action_type() == sts.ActionType.END_TURN and bc.player.energy > 0:
+            all_edges = searcher.get_root_edges()
+            def _val(e):
+                return e.node.evaluation_sum / e.node.simulation_count if e.node.simulation_count else -1e9
+            et_val = max((_val(e) for e in all_edges
+                          if e.action.get_action_type() == sts.ActionType.END_TURN), default=0.0)
+            attacks = [e for e in all_edges
+                       if e.action.get_action_type() == sts.ActionType.CARD
+                       and 0 <= e.action.get_source_idx() < len(self.game.hand)
+                       and self.game.hand[e.action.get_source_idx()].has_target
+                       and e.action.is_valid_action(bc)]
+            if attacks:
+                best_atk = max(attacks, key=lambda e: e.node.simulation_count)
+                if _val(best_atk) >= et_val - 5.0:
+                    print(f"[stall-breaker] end-turn chosen with {bc.player.energy} energy + a near-equal "
+                          f"attack ({_val(best_atk):.1f} vs end-turn {et_val:.1f}); playing "
+                          f"{best_atk.action.print_desc(bc)} instead", file=sys.stderr)
+                    first_action = best_atk.action
+
         # Map the search action to a spirecomm action
         spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game, slot_to_spire)
 
