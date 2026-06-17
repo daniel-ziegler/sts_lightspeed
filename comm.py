@@ -819,6 +819,12 @@ def _build_event_name_to_enum():
 
 _EVENT_NAME_TO_ENUM = _build_event_name_to_enum()
 
+# Events whose option choice depends on which specific player relic/card/potion is offered. The
+# engine's setup_event picks those items via the gc's eventRng, which doesn't match the live game's
+# pick, so a reconstructed gc reasons about (or, in extract_event_info, indexes past) the wrong
+# item. We can't reconstruct these faithfully -> never net-drive them; fall back to the heuristic.
+_EVENTS_NOT_FAITHFULLY_RECONSTRUCTED = frozenset({sts.Event.NLOTH, sts.Event.WE_MEET_AGAIN})
+
 
 def map_event_to_enum(spire_event_screen) -> "sts.Event":
     """Resolve a spirecomm event screen to the engine Event enum, trying both the id-string
@@ -2268,6 +2274,14 @@ class STSLightspeedAgent:
         ev = map_event_to_enum(self.game.screen)
         if ev == sts.Event.INVALID:
             print(f"[net] event {self.game.screen.event_id!r} unmapped; heuristic fallback", file=sys.stderr)
+            return None
+        if ev in _EVENTS_NOT_FAITHFULLY_RECONSTRUCTED:
+            # The choice hinges on which specific player relic/item is offered, but setup_event picks
+            # those via the gc's eventRng, which doesn't match the live game's pick -- so the net
+            # would (and extract_event_info does, crashing on an out-of-range index) reason about the
+            # wrong item. Cannot reconstruct faithfully; let the heuristic handle it.
+            print(f"[net] event {self.game.screen.event_id!r} not faithfully reconstructable; "
+                  f"heuristic fallback", file=sys.stderr)
             return None
 
         gc = spirecomm_to_gamecontext(self.game)
