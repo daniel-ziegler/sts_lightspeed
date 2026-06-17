@@ -1189,10 +1189,10 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         # Bandit Pointy
         ("BanditPointy", 1): sts.MonsterMoveId.POINTY_ATTACK,
         
-        # Gremlin Leader
-        ("GremlinLeader", 2): sts.MonsterMoveId.GREMLIN_LEADER_STAB,       # Gap at 1
-        ("GremlinLeader", 3): sts.MonsterMoveId.GREMLIN_LEADER_RALLY,
-        ("GremlinLeader", 4): sts.MonsterMoveId.GREMLIN_LEADER_ENCOURAGE,
+        # Gremlin Leader (byte ids from GremlinLeader.java: RALLY=2, ENCOURAGE=3, STAB=4)
+        ("GremlinLeader", 2): sts.MonsterMoveId.GREMLIN_LEADER_RALLY,
+        ("GremlinLeader", 3): sts.MonsterMoveId.GREMLIN_LEADER_ENCOURAGE,
+        ("GremlinLeader", 4): sts.MonsterMoveId.GREMLIN_LEADER_STAB,
         
         # Beyond Monsters
         # Awakened One (boss)
