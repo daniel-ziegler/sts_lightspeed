@@ -975,9 +975,10 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("FuzzyLouseDefensive", 2): sts.MonsterMoveId.GREEN_LOUSE_SPIT_WEB,
         
         # Gremlin Nob
-        ("GremlinNob", 1): sts.MonsterMoveId.GREMLIN_NOB_BELLOW,
-        ("GremlinNob", 2): sts.MonsterMoveId.GREMLIN_NOB_RUSH,
-        ("GremlinNob", 3): sts.MonsterMoveId.GREMLIN_NOB_SKULL_BASH,
+        # byte ids from GremlinNob.java: BULL_RUSH=1, SKULL_BASH=2, BELLOW=3
+        ("GremlinNob", 1): sts.MonsterMoveId.GREMLIN_NOB_RUSH,
+        ("GremlinNob", 2): sts.MonsterMoveId.GREMLIN_NOB_SKULL_BASH,
+        ("GremlinNob", 3): sts.MonsterMoveId.GREMLIN_NOB_BELLOW,
         
         # Fat Gremlin
         ("FatGremlin", 1): sts.MonsterMoveId.FAT_GREMLIN_SMASH,
@@ -1002,9 +1003,10 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("SlaverBlue", 4): sts.MonsterMoveId.BLUE_SLAVER_RAKE,  # Gap at 2, 3
         
         # Slaver (Red)
+        # byte ids from SlaverRed.java: STAB=1, ENTANGLE=2, SCRAPE=3
         ("SlaverRed", 1): sts.MonsterMoveId.RED_SLAVER_STAB,
-        ("SlaverRed", 2): sts.MonsterMoveId.RED_SLAVER_SCRAPE,
-        ("SlaverRed", 3): sts.MonsterMoveId.RED_SLAVER_ENTANGLE,
+        ("SlaverRed", 2): sts.MonsterMoveId.RED_SLAVER_ENTANGLE,
+        ("SlaverRed", 3): sts.MonsterMoveId.RED_SLAVER_SCRAPE,
         
         # Lagavulin
         ("Lagavulin", 1): sts.MonsterMoveId.LAGAVULIN_SIPHON_SOUL,  # DEBUFF
@@ -1018,10 +1020,11 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("Sentry", 4): sts.MonsterMoveId.SENTRY_BEAM,  # BEAM - attack move
         
         # Looter  
+        # byte ids from Looter.java: MUG=1, SMOKE_BOMB=2, ESCAPE=3, LUNGE=4
         ("Looter", 1): sts.MonsterMoveId.LOOTER_MUG,
-        ("Looter", 2): sts.MonsterMoveId.LOOTER_LUNGE,
-        ("Looter", 3): sts.MonsterMoveId.LOOTER_SMOKE_BOMB,
-        ("Looter", 4): sts.MonsterMoveId.LOOTER_ESCAPE,
+        ("Looter", 2): sts.MonsterMoveId.LOOTER_SMOKE_BOMB,
+        ("Looter", 3): sts.MonsterMoveId.LOOTER_ESCAPE,
+        ("Looter", 4): sts.MonsterMoveId.LOOTER_LUNGE,
         
         # Fungi Beast
         ("FungiBeast", 1): sts.MonsterMoveId.FUNGI_BEAST_BITE,
@@ -1176,15 +1179,17 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("SnakePlant", 2): sts.MonsterMoveId.SNAKE_PLANT_ENFEEBLING_SPORES,
         
         # Mugger
+        # byte ids from Mugger.java: MUG=1, SMOKE_BOMB=2, ESCAPE=3, BIGSWIPE(lunge)=4
         ("Mugger", 1): sts.MonsterMoveId.MUGGER_MUG,
-        ("Mugger", 2): sts.MonsterMoveId.MUGGER_LUNGE,
-        ("Mugger", 3): sts.MonsterMoveId.MUGGER_SMOKE_BOMB,
-        ("Mugger", 4): sts.MonsterMoveId.MUGGER_ESCAPE,
+        ("Mugger", 2): sts.MonsterMoveId.MUGGER_SMOKE_BOMB,
+        ("Mugger", 3): sts.MonsterMoveId.MUGGER_ESCAPE,
+        ("Mugger", 4): sts.MonsterMoveId.MUGGER_LUNGE,
         
         # Bandit Bear
-        ("BanditBear", 1): sts.MonsterMoveId.BEAR_BEAR_HUG,
-        ("BanditBear", 2): sts.MonsterMoveId.BEAR_LUNGE,
-        ("BanditBear", 3): sts.MonsterMoveId.BEAR_MAUL,
+        # byte ids from BanditBear.java: MAUL=1, BEAR_HUG=2, LUNGE=3
+        ("BanditBear", 1): sts.MonsterMoveId.BEAR_MAUL,
+        ("BanditBear", 2): sts.MonsterMoveId.BEAR_BEAR_HUG,
+        ("BanditBear", 3): sts.MonsterMoveId.BEAR_LUNGE,
         
         # Bandit Pointy
         ("BanditPointy", 1): sts.MonsterMoveId.POINTY_ATTACK,
@@ -1276,9 +1281,10 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("Maw", 5): sts.MonsterMoveId.THE_MAW_NOM,      # NOMNOMNOM = 5
         
         # Spire Growth
+        # byte ids from SpireGrowth.java: QUICK_TACKLE=1, CONSTRICT=2, SMASH=3
         ("SpireGrowth", 1): sts.MonsterMoveId.SPIRE_GROWTH_QUICK_TACKLE,
-        ("SpireGrowth", 2): sts.MonsterMoveId.SPIRE_GROWTH_SMASH,
-        ("SpireGrowth", 3): sts.MonsterMoveId.SPIRE_GROWTH_CONSTRICT,
+        ("SpireGrowth", 2): sts.MonsterMoveId.SPIRE_GROWTH_CONSTRICT,
+        ("SpireGrowth", 3): sts.MonsterMoveId.SPIRE_GROWTH_SMASH,
         
         # Ending Monsters
         # Corrupt Heart (final boss)
