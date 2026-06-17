@@ -586,18 +586,68 @@ _SPLITTABLE_MONSTER_IDS = frozenset({
 })
 
 
+def _set_sts_monster_fields(sts_monster, monster, slot: int) -> None:
+    """Copy a live monster's hp/block/move-history/powers onto a freshly created sim Monster."""
+    sts_monster.curHp = monster.current_hp
+    sts_monster.maxHp = monster.max_hp
+    sts_monster.block = monster.block
+    sts_monster.halfDead = monster.half_dead
+    sts_monster.idx = slot
+
+    # Move history drives the searcher's prediction of the monster's next move.
+    move_history = [0, 0]
+    if monster.move_id is not None:
+        move_history[0] = int(map_move_id(monster.monster_id, monster.move_id))
+    if monster.last_move_id is not None:
+        move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
+    sts_monster.moveHistory = move_history
+
+    for power in monster.powers:
+        apply_monster_power(sts_monster, power.power_id, power.amount)
+
+
+def _build_gremlin_leader_group(bc: sts.BattleContext, live, leader_entry) -> dict:
+    """Lay out a Gremlin Leader fight in the engine's rigid native layout: gremlins occupy slots
+    0/1/2 and the leader slot 3, with empty gremlin slots left as dying buffers. _SummonGremlins
+    (the leader's Rally) hardcodes those gremlin indices and asserts it finds exactly two open ones,
+    so a generic dense pack (leader off slot 3, no reserved gremlin slots) makes the search abort
+    when the leader rallies. Mirror MonsterGroup.cpp's GREMLIN_LEADER init: the two starting gremlins
+    sit at slots 1 and 2 with slot 0 the open buffer; we fill 1, then 2, then 0 (the summon's search
+    order) so any dead-gremlin buffers land where Rally expects them."""
+    gremlins = [e for e in live if e[2] != sts.MonsterId.GREMLIN_LEADER]
+    if len(gremlins) > 3:
+        raise ValueError(f"Gremlin Leader fight has {len(gremlins)} gremlins (>3): "
+                         f"{[g[1].monster_id for g in gremlins]}")
+    # slot index -> live gremlin entry (or None for an open/dying buffer slot); leader fixed at 3.
+    by_slot = {0: None, 1: None, 2: None}
+    for gremlin, slot in zip(gremlins, (1, 2, 0)):
+        by_slot[slot] = gremlin
+    plan = [by_slot[0], by_slot[1], by_slot[2], leader_entry]
+
+    slot_to_spire = {}
+    for slot, entry in enumerate(plan):
+        if entry is None:
+            bc.monsters.skipMonsterSlot()
+            continue
+        spire_idx, monster, monster_id = entry
+        slot_to_spire[slot] = spire_idx
+        bc.monsters.createMonster(bc, monster_id)
+        _set_sts_monster_fields(bc.monsters[slot], monster, slot)
+    return slot_to_spire
+
+
 def _build_monster_group(bc: sts.BattleContext, spire_monsters) -> dict:
     """Populate bc.monsters from the live monster list and return slot_to_spire (sim slot ->
     spirecomm monster_index). Live monsters are packed in order; a free slot is reserved after each
-    splittable monster so largeSlimeSplit/slimeBossSplit have the slot they assume. Raises if the
-    reserved layout would exceed the 5-slot group (never happens for a legal slime lineage: at most
-    two large slimes -> four slots with reservations)."""
+    splittable monster so largeSlimeSplit/slimeBossSplit have the slot they assume. The Gremlin
+    Leader fight uses its own fixed layout (see _build_gremlin_leader_group). Raises if the reserved
+    layout would exceed the 5-slot group (never happens for a legal slime lineage: at most two large
+    slimes -> four slots with reservations)."""
     if not spire_monsters:
         return {}
 
-    # Plan the slot layout first so we can validate the slot count before mutating bc.monsters.
-    # Each entry is either ('mon', spire_idx, monster, monster_id) or ('gap',).
-    plan = []
+    # Resolve the live combatants once (alive, non-prop). map_monster_string_to_id raises on unknown.
+    live = []
     for spire_idx, monster in enumerate(spire_monsters):
         if monster.current_hp <= 0 or monster.is_gone:
             continue
@@ -605,8 +655,17 @@ def _build_monster_group(bc: sts.BattleContext, spire_monsters) -> dict:
         if monster.monster_id in _MONSTER_IDS_SKIP_IN_COMBAT:
             continue
         monster_id = map_monster_string_to_id(monster.monster_id)
-        plan.append(('mon', spire_idx, monster, monster_id))
-        if monster_id in _SPLITTABLE_MONSTER_IDS:
+        live.append((spire_idx, monster, monster_id))
+
+    leader = [e for e in live if e[2] == sts.MonsterId.GREMLIN_LEADER]
+    if leader:
+        return _build_gremlin_leader_group(bc, live, leader[0])
+
+    # Default layout: pack in order, reserving a free slot after each splittable monster.
+    plan = []
+    for entry in live:
+        plan.append(('mon',) + entry)
+        if entry[2] in _SPLITTABLE_MONSTER_IDS:
             plan.append(('gap',))
 
     if len(plan) > 5:
@@ -621,24 +680,7 @@ def _build_monster_group(bc: sts.BattleContext, spire_monsters) -> dict:
         _, spire_idx, monster, monster_id = entry
         slot_to_spire[slot] = spire_idx
         bc.monsters.createMonster(bc, monster_id)
-        sts_monster = bc.monsters[slot]
-
-        sts_monster.curHp = monster.current_hp
-        sts_monster.maxHp = monster.max_hp
-        sts_monster.block = monster.block
-        sts_monster.halfDead = monster.half_dead
-        sts_monster.idx = slot
-
-        # Move history drives the searcher's prediction of the monster's next move.
-        move_history = [0, 0]
-        if monster.move_id is not None:
-            move_history[0] = int(map_move_id(monster.monster_id, monster.move_id))
-        if monster.last_move_id is not None:
-            move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
-        sts_monster.moveHistory = move_history
-
-        for power in monster.powers:
-            apply_monster_power(sts_monster, power.power_id, power.amount)
+        _set_sts_monster_fields(bc.monsters[slot], monster, slot)
 
     return slot_to_spire
 
