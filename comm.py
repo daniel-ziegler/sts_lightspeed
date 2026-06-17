@@ -606,26 +606,42 @@ def _set_sts_monster_fields(sts_monster, monster, slot: int) -> None:
         apply_monster_power(sts_monster, power.power_id, power.amount)
 
 
-def _build_gremlin_leader_group(bc: sts.BattleContext, live, leader_entry) -> dict:
-    """Lay out a Gremlin Leader fight in the engine's rigid native layout: gremlins occupy slots
-    0/1/2 and the leader slot 3, with empty gremlin slots left as dying buffers. _SummonGremlins
-    (the leader's Rally) hardcodes those gremlin indices and asserts it finds exactly two open ones,
-    so a generic dense pack (leader off slot 3, no reserved gremlin slots) makes the search abort
-    when the leader rallies. Mirror MonsterGroup.cpp's GREMLIN_LEADER init: the two starting gremlins
-    sit at slots 1 and 2 with slot 0 the open buffer; we fill 1, then 2, then 0 (the summon's search
-    order) so any dead-gremlin buffers land where Rally expects them."""
-    gremlins = [e for e in live if e[2] != sts.MonsterId.GREMLIN_LEADER]
-    if len(gremlins) > 3:
-        raise ValueError(f"Gremlin Leader fight has {len(gremlins)} gremlins (>3): "
-                         f"{[g[1].monster_id for g in gremlins]}")
-    # slot index -> live gremlin entry (or None for an open/dying buffer slot); leader fixed at 3.
-    by_slot = {0: None, 1: None, 2: None}
-    for gremlin, slot in zip(gremlins, (1, 2, 0)):
-        by_slot[slot] = gremlin
-    plan = [by_slot[0], by_slot[1], by_slot[2], leader_entry]
+# Encounters whose summon/respawn actions write to hardcoded monster slots, so a converted group
+# must reproduce the engine's native slot layout instead of a dense pack -- otherwise the summon's
+# slot math (which assumes the summoner sits at a fixed slot with specific reserved minion slots)
+# overwrites a live monster or runs off the array and assert(false)s during search (an uncatchable
+# SIGABRT). Maps summoner MonsterId -> (summoner_slot, [minion slots in the summon's fill order]).
+# Slots/orders are read straight from MonsterGroup.cpp inits + the summon helpers:
+#   GremlinLeader  _SummonGremlins   gremlins {1,2,0}, leader @3   (MonsterGroup GREMLIN_LEADER)
+#   BronzeAutomaton spawnBronzeOrbs  orbs {0,2},       automaton @1 (AUTOMATON)
+#   TheCollector   _SpawnTorchHeads  torchheads {1,0}, collector @2
+#   Reptomancer    reptoSummonHelper daggers {4,1,3,0},reptomancer @2 (REPTOMANCER)
+def _fixed_slot_layouts():
+    return {
+        sts.MonsterId.GREMLIN_LEADER: (3, [1, 2, 0]),
+        sts.MonsterId.BRONZE_AUTOMATON: (1, [0, 2]),
+        sts.MonsterId.THE_COLLECTOR: (2, [1, 0]),
+        sts.MonsterId.REPTOMANCER: (2, [4, 1, 3, 0]),
+    }
+
+
+def _build_fixed_layout_group(bc, live, summoner_entry, summoner_slot, minion_slots) -> dict:
+    """Build a fixed-slot summoner encounter (see _fixed_slot_layouts). The summoner is pinned to
+    summoner_slot; live minions fill minion_slots in order; every other slot up to the highest used
+    one is left as a dying buffer so the summon finds open slots exactly where it looks. Returns
+    slot_to_spire."""
+    minions = [e for e in live if e is not summoner_entry]
+    if len(minions) > len(minion_slots):
+        raise ValueError(f"summoner fight has {len(minions)} minions (> {len(minion_slots)} slots): "
+                         f"{[m[1].monster_id for m in minions]}")
+    by_slot = {summoner_slot: summoner_entry}
+    for minion, slot in zip(minions, minion_slots):
+        by_slot[slot] = minion
+    n_slots = max([summoner_slot] + minion_slots) + 1
 
     slot_to_spire = {}
-    for slot, entry in enumerate(plan):
+    for slot in range(n_slots):
+        entry = by_slot.get(slot)
         if entry is None:
             bc.monsters.skipMonsterSlot()
             continue
@@ -657,9 +673,13 @@ def _build_monster_group(bc: sts.BattleContext, spire_monsters) -> dict:
         monster_id = map_monster_string_to_id(monster.monster_id)
         live.append((spire_idx, monster, monster_id))
 
-    leader = [e for e in live if e[2] == sts.MonsterId.GREMLIN_LEADER]
-    if leader:
-        return _build_gremlin_leader_group(bc, live, leader[0])
+    # Fixed-slot summoner encounters (Gremlin Leader, Bronze Automaton, Collector, Reptomancer)
+    # must reproduce the engine's native layout so their hardcoded summon slots stay valid.
+    fixed_layouts = _fixed_slot_layouts()
+    for entry in live:
+        layout = fixed_layouts.get(entry[2])
+        if layout is not None:
+            return _build_fixed_layout_group(bc, live, entry, layout[0], layout[1])
 
     # Default layout: pack in order, reserving a free slot after each splittable monster.
     plan = []
