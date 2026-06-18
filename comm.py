@@ -2019,6 +2019,7 @@ _CARD_SELECT_TASK_BY_ACTION = {
     "ExhumeAction": sts.CardSelectTask.EXHUME,                      # Exhume
     "ForethoughtAction": sts.CardSelectTask.FORETHOUGHT,           # Forethought
     "PutOnDeckAction": sts.CardSelectTask.WARCRY,                   # Warcry (a hand card to draw top)
+    "ExhaustAction": sts.CardSelectTask.EXHAUST_ONE,               # True Grit+ etc. (exhaust a chosen hand card)
     "DiscoveryAction": sts.CardSelectTask.DISCOVERY,               # Discovery / Attack-Skill-Power Potion (confirmed live)
     "ChooseOneColorless": sts.CardSelectTask.DISCOVERY,           # Colorless Potion: 1 of 3 colorless (confirmed live)
 }
