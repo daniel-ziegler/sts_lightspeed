@@ -398,7 +398,11 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         print(f"  >>> start seed {seed}", flush=True)
     ascension = (config.fixed_ascension if config.fixed_ascension is not None
                  else seed % (config.max_ascension + 1))
-    gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, ascension)
+    # 10% of games open on the 2-option Neow miniBlessing (the real game shows it when the
+    # previous run beat no boss). Derived from the seed with a fixed salt so a given seed always
+    # plays the same Neow, independent of the action-sampling RNG.
+    neow_mini = random.Random(seed ^ 0x4E454F57).random() < 0.10
+    gc = sts.GameContext(sts.CharacterClass.IRONCLAD, seed, ascension, neow_mini)
     rng = random.Random(sample_seed)
     
     agent = sts.Agent()

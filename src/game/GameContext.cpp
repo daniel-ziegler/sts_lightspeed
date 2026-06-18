@@ -32,7 +32,7 @@ SelectScreenCard::SelectScreenCard(const Card &card) : card(card) {}
 
 SelectScreenCard::SelectScreenCard(const Card &card, int deckIdx) : card(card), deckIdx(deckIdx) {}
 
-GameContext::GameContext(CharacterClass cc, std::int64_t seed, int ascension)
+GameContext::GameContext(CharacterClass cc, std::int64_t seed, int ascension, bool neowMiniBlessing)
     : seed(seed),
     neowRng(seed),
     treasureRng(seed),
@@ -64,7 +64,7 @@ GameContext::GameContext(CharacterClass cc, std::int64_t seed, int ascension)
     std::fill(potions.begin(), potions.end(), Potion::EMPTY_POTION_SLOT);
 
     curEvent = Event::NEOW;
-    info.neowRewards = Neow::getOptions(neowRng);
+    info.neowRewards = neowMiniBlessing ? Neow::getMiniBlessingOptions() : Neow::getOptions(neowRng);
     screenState = ScreenState::EVENT_SCREEN;
 }
 

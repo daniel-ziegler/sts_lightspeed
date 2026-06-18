@@ -837,6 +837,19 @@ def map_event_to_enum(spire_event_screen) -> "sts.Event":
     return sts.Event.INVALID
 
 
+def _is_mini_neow(spire_game) -> bool:
+    """True when the live game is showing the 2-option Neow miniBlessing (Neow's Lament / Max HP).
+    The real game presents it instead of the 4-option blessing when the previous run beat no boss
+    (NeowEvent.bossCount == 0). The GameContext must be built in that mode so its neowRewards and
+    option count match the screen, letting net_event_action drive it instead of falling back."""
+    if spire_game.screen_type != screen.ScreenType.EVENT:
+        return False
+    if map_event_to_enum(spire_game.screen) != sts.Event.NEOW:
+        return False
+    enabled = [o for o in spire_game.screen.options if not o.disabled]
+    return len(enabled) == 2
+
+
 def _normalize_monster_id(monster_id: str) -> str:
     """Casefold + strip ALL whitespace for monster-id matching. spirecomm sometimes sends a
     spaced display form ('Shelled Parasite') where the engine's id is the class name
@@ -1579,7 +1592,8 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     
     # Create GameContext with basic parameters
     character_class = map_character_class(spire_game.character)
-    gc = sts.GameContext(character_class, int(spire_game.seed), int(spire_game.ascension_level or 0))
+    gc = sts.GameContext(character_class, int(spire_game.seed), int(spire_game.ascension_level or 0),
+                         _is_mini_neow(spire_game))
     
     # Set basic game state
     gc.cur_hp = spire_game.current_hp

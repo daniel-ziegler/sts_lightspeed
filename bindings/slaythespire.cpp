@@ -437,7 +437,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("exploration_parameter", &search::BattleSearcher::explorationParameter);
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
-    gameContext.def(pybind11::init<CharacterClass, std::int64_t, int>())
+    gameContext.def(pybind11::init<CharacterClass, std::int64_t, int, bool>(),
+            pybind11::arg("character_class"), pybind11::arg("seed"),
+            pybind11::arg("ascension"), pybind11::arg("neow_mini_blessing") = false)
         .def("get_card_reward", &sts::py::getCardReward, "return the current card reward list")
         .def_property_readonly("encounter", [](const GameContext &gc) { return gc.info.encounter; })
         .def_property_readonly("deck",

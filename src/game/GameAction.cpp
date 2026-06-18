@@ -909,7 +909,17 @@ int GameAction::getValidEventSelectBits(const GameContext &gc) {
         case Event::WINDING_HALLS:
             return 0x7;
 
-        case Event::NEOW:
+        case Event::NEOW: {
+            // 4-option blessing or 2-option miniBlessing; unused slots are Bonus::INVALID.
+            int validCount = 0;
+            for (const auto &o : gc.info.neowRewards) {
+                if (o.r != Neow::Bonus::INVALID) {
+                    ++validCount;
+                }
+            }
+            return (1 << validCount) - 1;
+        }
+
         case Event::KNOWING_SKULL:
         case Event::THE_WOMAN_IN_BLUE:
             return 0xF;

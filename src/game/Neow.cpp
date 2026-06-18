@@ -74,6 +74,20 @@ std::array<Neow::Option, 4> Neow::getOptions(Random &r) {
     return rewards;
 }
 
+std::array<Neow::Option, 4> Neow::getMiniBlessingOptions() {
+    // NeowEvent.miniBlessing adds NeowReward(true) then NeowReward(false), consuming no RNG.
+    std::array<Option, 4> rewards {};
+    rewards[0].r = Bonus::THREE_ENEMY_KILL;     // Neow's Lament
+    rewards[0].d = Drawback::NONE;
+    rewards[1].r = Bonus::TEN_PERCENT_HP_BONUS; // Max HP +10%
+    rewards[1].d = Drawback::NONE;
+    rewards[2].r = Bonus::INVALID;
+    rewards[2].d = Drawback::NONE;
+    rewards[3].r = Bonus::INVALID;
+    rewards[3].d = Drawback::NONE;
+    return rewards;
+}
+
 CardReward sts::Neow::getColorlessCardReward(Random &neowRng, Random& cardRng, bool rareOnly) {
     CardReward reward;
     for (int i = 0; i < 3; ++i) {

@@ -233,7 +233,7 @@ namespace sts {
         GameContextAction regainControlAction = nullptr;
 
         GameContext() = default;
-        GameContext(CharacterClass cc, std::int64_t seed, int ascensionLevel);
+        GameContext(CharacterClass cc, std::int64_t seed, int ascensionLevel, bool neowMiniBlessing = false);
 
         void initFromSave(const SaveFile &s);
         void initRelicsFromSave(const SaveFile &s);

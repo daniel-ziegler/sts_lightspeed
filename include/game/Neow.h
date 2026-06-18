@@ -106,6 +106,11 @@ namespace sts {
 
         std::array<Option, 4> getOptions(Random &r);
 
+        // miniBlessing: the 2-option Neow shown when the previous run beat no boss
+        // (NeowEvent.bossCount == 0). Slots 0,1 hold the two no-drawback rewards; slots
+        // 2,3 are Bonus::INVALID so option-count logic sees exactly two choices.
+        std::array<Option, 4> getMiniBlessingOptions();
+
         CardReward getCardReward(Random &rng, CharacterClass cc, bool rareOnly= false);
         CardReward getColorlessCardReward(Random &neowRng, Random& cardRng, bool rareOnly=false);
 
