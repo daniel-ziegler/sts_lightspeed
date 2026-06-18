@@ -1924,6 +1924,38 @@ def test_basic_conversion():
         return False
 
 
+# In-combat card-select: the live game_state names the resolving Java AbstractGameAction in
+# `current_action`; map it to the engine CardSelectTask so the combat MCTS resolves the pick from
+# the reconstructed piles. Names confirmed against live captures where noted; the rest are the
+# decompiled card actions (com/megacrit/cardcrawl/cards/**). An unmapped action fails loud (logging
+# the name) so this table is filled from real games rather than guessed.
+_CARD_SELECT_TASK_BY_ACTION = {
+    "ArmamentsAction": sts.CardSelectTask.ARMAMENTS,                # Armaments (confirmed live)
+    "DiscardPileToTopOfDeckAction": sts.CardSelectTask.HEADBUTT,    # Headbutt (confirmed live)
+    "BetterDiscardPileToHandAction": sts.CardSelectTask.HEADBUTT,   # discard-retrieval (confirmed live)
+    "DualWieldAction": sts.CardSelectTask.DUAL_WIELD,               # Dual Wield
+    "ExhumeAction": sts.CardSelectTask.EXHUME,                      # Exhume
+    "ForethoughtAction": sts.CardSelectTask.FORETHOUGHT,           # Forethought
+    "PutOnDeckAction": sts.CardSelectTask.WARCRY,                   # Warcry (a hand card to draw top)
+}
+
+# Engine pile a task's getSelectIdx() indexes, used to translate the search's chosen index back to
+# the live screen card. Mirrors isValidSingleCardSelectAction's per-task pile (Action.cpp).
+_CARD_SELECT_POOL_BY_TASK = {
+    sts.CardSelectTask.ARMAMENTS: "hand",
+    sts.CardSelectTask.DUAL_WIELD: "hand",
+    sts.CardSelectTask.FORETHOUGHT: "hand",
+    sts.CardSelectTask.WARCRY: "hand",
+    sts.CardSelectTask.EXHAUST_ONE: "hand",
+    sts.CardSelectTask.HEADBUTT: "discard",
+    sts.CardSelectTask.HOLOGRAM: "discard",
+    sts.CardSelectTask.MEDITATE: "discard",
+    sts.CardSelectTask.EXHUME: "exhaust",
+    sts.CardSelectTask.SEEK: "draw",
+    sts.CardSelectTask.SECRET_TECHNIQUE: "draw",
+    sts.CardSelectTask.SECRET_WEAPON: "draw",
+}
+
 
 class STSLightspeedAgent:
 
@@ -2092,6 +2124,61 @@ class STSLightspeedAgent:
 
         return spirecomm_action
 
+    def mcts_card_select_action(self):
+        """Resolve an in-combat card-select (Armaments/Headbutt/Warcry/Dual Wield/Exhume/...) with
+        the combat MCTS -- the same way the search resolves it in-sim. Reconstruct the bc at the
+        mid-resolution state (the live piles already reflect the triggering card being played), put
+        it into the CARD_SELECT input state for that action's task, search, and translate the chosen
+        pile index back to the live screen card. Fails loud on an unmapped action or a select the
+        search can't place on the live screen."""
+        action_name = self.game.current_action
+        task = _CARD_SELECT_TASK_BY_ACTION.get(action_name)
+        if task is None:
+            cards = [c.name for c in self.game.screen.cards]
+            raise NotImplementedError(
+                f"in-combat card-select current_action {action_name!r} unmapped "
+                f"(screen {self.game.screen_type}, {len(cards)} cards: {cards}); "
+                f"add it to _CARD_SELECT_TASK_BY_ACTION")
+        num = self.game.screen.num_cards or 1
+        if num != 1:
+            raise NotImplementedError(
+                f"multi-card in-combat select (num_cards={num}, {action_name!r}) not yet supported")
+
+        gc = spirecomm_to_gamecontext(self.game)
+        bc, _ = convert_combat_state(self.game, gc)
+        bc.open_card_select(task, num)
+        searcher = sts.BattleSearcher(bc)
+        sim_count = self.search_agent.configure_searcher(searcher, bc)
+        searcher.search(sim_count)
+        sel_idx = searcher.get_best_action().get_select_idx()
+
+        pool_name = _CARD_SELECT_POOL_BY_TASK[task]
+        pool = {"hand": bc.cards.hand, "discard": bc.cards.discardPile,
+                "exhaust": bc.cards.exhaustPile, "draw": bc.cards.drawPile}[pool_name]
+        if not (0 <= sel_idx < len(pool)):
+            raise RuntimeError(f"MCTS card-select idx {sel_idx} out of range for the {pool_name} "
+                               f"pile (size {len(pool)}, task {task})")
+        chosen = pool[sel_idx]
+        live_card = self._match_live_select_card(chosen)
+        print(f"[mcts] card-select ({action_name}) -> {chosen.getName()}"
+              f"{'+' if chosen.upgraded else ''} ({pool_name} idx {sel_idx})", file=sys.stderr)
+        return CardSelectAction([live_card])
+
+    def _match_live_select_card(self, engine_card):
+        """Find the live select-screen candidate matching the engine-chosen card by stable CardId +
+        upgrade count (robust to display-name drift). Duplicate instances (same id/upgrade) are
+        interchangeable -- they resolve identically -- so first match is correct. Raises if the
+        search picked a card not offered live."""
+        want_id, want_upg = engine_card.id, engine_card.upgrade_count
+        for c in self.game.screen.cards:
+            if map_card_id(c.card_id) == want_id and c.upgrades == want_upg:
+                return c
+        for c in self.game.screen.cards:  # tolerate an upgrade-count mismatch (e.g. Searing Blow)
+            if map_card_id(c.card_id) == want_id:
+                return c
+        raise RuntimeError(
+            f"MCTS-selected card {engine_card.getName()} (id {want_id}, +{want_upg}) is not on the "
+            f"live select screen ({[(c.card_id, c.upgrades) for c in self.game.screen.cards]})")
 
     def capture_decision_state(self):
         """Append the raw CommunicationMod message for this out-of-combat decision to the
@@ -2398,10 +2485,9 @@ class STSLightspeedAgent:
             return ProceedAction()
 
         # In-combat card selects (Warcry/Headbutt/Armaments/Dual Wield, ...) are the combat MCTS's
-        # job, not the policy's. Not yet wired -> fail loud (rare: ~0 in dozens of games).
+        # job, not the policy's.
         if st == ScreenType.HAND_SELECT or (st == ScreenType.GRID and self.game.in_combat):
-            raise NotImplementedError(
-                "in-combat card-select must be driven by the combat MCTS (not yet implemented)")
+            return self.mcts_card_select_action()
 
         net_handlers = {
             ScreenType.CARD_REWARD: self.net_card_reward_action,

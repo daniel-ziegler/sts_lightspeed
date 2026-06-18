@@ -28,6 +28,7 @@
 #include "combat/MonsterGroup.h"
 #include "combat/CardManager.h"
 #include "combat/CardInstance.h"
+#include "combat/CardSelectInfo.h"
 #include "sim/ConsoleSimulator.h"
 #include "sim/search/SearchAgent.h"
 #include "sim/search/BattleSearcher.h"
@@ -820,7 +821,10 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def("register_relics_from", &BattleContext::registerRelicsFrom, "gc"_a,
             "copy the player's relic-ownership bits from a GameContext without firing atBattleStart "
-            "effects (for reconstructing a mid-combat state)");
+            "effects (for reconstructing a mid-combat state)")
+        .def("open_card_select", &BattleContext::openSimpleCardSelectScreen, "task"_a, "count"_a,
+            "put the bc into the CARD_SELECT input state for the given task (sets cardSelectTask + "
+            "pickCount), so the search resolves an in-combat card-select from the reconstructed piles");
 
     def_value(battleContext, "input_state", &BattleContext::inputState);
 
@@ -955,6 +959,8 @@ PYBIND11_MODULE(slaythespire, m) {
     cardInstance.def(pybind11::init<>())
         .def(pybind11::init<CardId, bool>(), pybind11::arg("id"), pybind11::arg("upgraded") = false)
         .def(pybind11::init<const Card&>())
+        .def_property_readonly("id", &CardInstance::getId)
+        .def_property_readonly("upgrade_count", &CardInstance::getUpgradeCount)
         .def_readwrite("uniqueId", &CardInstance::uniqueId)
         .def_readwrite("upgraded", &CardInstance::upgraded)
         .def_readwrite("specialData", &CardInstance::specialData)
@@ -1153,6 +1159,29 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("OBTAIN", CardSelectScreenType::OBTAIN)
         .value("BOTTLE", CardSelectScreenType::BOTTLE)
         .value("BONFIRE_SPIRITS", CardSelectScreenType::BONFIRE_SPIRITS);
+
+    pybind11::enum_<CardSelectTask> cardSelectTask(m, "CardSelectTask", pybind11::metaclass(enum_metaclass));
+    cardSelectTask.value("INVALID", CardSelectTask::INVALID)
+        .value("ARMAMENTS", CardSelectTask::ARMAMENTS)
+        .value("CODEX", CardSelectTask::CODEX)
+        .value("DISCOVERY", CardSelectTask::DISCOVERY)
+        .value("DUAL_WIELD", CardSelectTask::DUAL_WIELD)
+        .value("EXHAUST_ONE", CardSelectTask::EXHAUST_ONE)
+        .value("EXHAUST_MANY", CardSelectTask::EXHAUST_MANY)
+        .value("EXHUME", CardSelectTask::EXHUME)
+        .value("FORETHOUGHT", CardSelectTask::FORETHOUGHT)
+        .value("GAMBLE", CardSelectTask::GAMBLE)
+        .value("HEADBUTT", CardSelectTask::HEADBUTT)
+        .value("HOLOGRAM", CardSelectTask::HOLOGRAM)
+        .value("LIQUID_MEMORIES_POTION", CardSelectTask::LIQUID_MEMORIES_POTION)
+        .value("MEDITATE", CardSelectTask::MEDITATE)
+        .value("NIGHTMARE", CardSelectTask::NIGHTMARE)
+        .value("RECYCLE", CardSelectTask::RECYCLE)
+        .value("SECRET_TECHNIQUE", CardSelectTask::SECRET_TECHNIQUE)
+        .value("SECRET_WEAPON", CardSelectTask::SECRET_WEAPON)
+        .value("SEEK", CardSelectTask::SEEK)
+        .value("SETUP", CardSelectTask::SETUP)
+        .value("WARCRY", CardSelectTask::WARCRY);
 
     pybind11::enum_<GameAction::RewardsActionType> rewardsActionType(m, "RewardsActionType");
     rewardsActionType.value("CARD", GameAction::RewardsActionType::CARD)
