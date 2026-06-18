@@ -2087,11 +2087,23 @@ class STSLightspeedAgent:
                 return e.node.evaluation_sum / e.node.simulation_count if e.node.simulation_count else -1e9
             et_val = max((_val(e) for e in all_edges
                           if e.action.get_action_type() == sts.ActionType.END_TURN), default=0.0)
+            def _retaliates(edge):
+                # An attack into Sharp Hide (Guardian's defensive mode) or Thorns deals damage back
+                # to the player. When every affordable attack hits such a monster, ending the turn to
+                # avoid that self-damage is a deliberate defensive hold, not a stall -- so never force
+                # one. (Slimes carry neither status, so the trivial-enemy stall case is unaffected.)
+                ti = edge.action.get_target_idx()
+                if not (0 <= ti < bc.monsters.monsterCount):
+                    return False
+                m = bc.monsters[ti]
+                return (m.hasStatus(sts.MonsterStatus.SHARP_HIDE)
+                        or m.hasStatus(sts.MonsterStatus.THORNS))
             attacks = [e for e in all_edges
                        if e.action.get_action_type() == sts.ActionType.CARD
                        and 0 <= e.action.get_source_idx() < len(self.game.hand)
                        and self.game.hand[e.action.get_source_idx()].has_target
-                       and e.action.is_valid_action(bc)]
+                       and e.action.is_valid_action(bc)
+                       and not _retaliates(e)]
             if attacks:
                 best_atk = max(attacks, key=lambda e: e.node.simulation_count)
                 if _val(best_atk) >= et_val - 5.0:
