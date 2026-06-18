@@ -2173,6 +2173,11 @@ class STSLightspeedAgent:
             chosen = offered[sel_idx]
             print(f"[mcts] discovery ({action_name}) -> {chosen.card_id} (idx {sel_idx})",
                   file=sys.stderr)
+            # A Discovery/potion choice is delivered on a CARD_REWARD screen, where the pick is a
+            # "choose <index>" command (CardSelectAction only works on HAND_SELECT/GRID). The
+            # choice_list / screen.cards order matches sel_idx.
+            if self.game.screen_type == ScreenType.CARD_REWARD:
+                return ChooseAction(sel_idx)
             return CardSelectAction([chosen])
 
         bc.open_card_select(task, num)
