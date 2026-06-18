@@ -806,14 +806,21 @@ _EVENT_ENUM_NAME_ID_GAME = [
     ('WORLD_OF_GOOP', 'World of Goop', 'World of Goop'),
 ]
 
+def _normalize_event_name(name: str) -> str:
+    """Strip all non-alphanumerics and casefold, so the live event_id/event_name matches the table
+    regardless of spacing/punctuation/case drift -- CommunicationMod sends the Java event id
+    ('NoteForYourself', 'Match and Keep!') while the table carries the spaced game name."""
+    return "".join(ch for ch in name if ch.isalnum()).casefold()
+
+
 def _build_event_name_to_enum():
     m = {}
     for enum_name, id_str, game_name in _EVENT_ENUM_NAME_ID_GAME:
         ev = getattr(sts.Event, enum_name)
-        m[id_str] = ev
-        m[game_name] = ev
+        m[_normalize_event_name(id_str)] = ev
+        m[_normalize_event_name(game_name)] = ev
     # CommunicationMod labels the start-of-run blessing screen "Neow Event"; the engine id is NEOW.
-    m["Neow Event"] = sts.Event.NEOW
+    m[_normalize_event_name("Neow Event")] = sts.Event.NEOW
     return m
 
 _EVENT_NAME_TO_ENUM = _build_event_name_to_enum()
@@ -833,8 +840,10 @@ def map_event_to_enum(spire_event_screen) -> "sts.Event":
     caller can fail loud rather than net-drive an unmapped event."""
     for key in (getattr(spire_event_screen, "event_id", None),
                 getattr(spire_event_screen, "event_name", None)):
-        if key and key in _EVENT_NAME_TO_ENUM:
-            return _EVENT_NAME_TO_ENUM[key]
+        if key:
+            ev = _EVENT_NAME_TO_ENUM.get(_normalize_event_name(key))
+            if ev is not None:
+                return ev
     return sts.Event.INVALID
 
 
