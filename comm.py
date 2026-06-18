@@ -1937,7 +1937,12 @@ _CARD_SELECT_TASK_BY_ACTION = {
     "ExhumeAction": sts.CardSelectTask.EXHUME,                      # Exhume
     "ForethoughtAction": sts.CardSelectTask.FORETHOUGHT,           # Forethought
     "PutOnDeckAction": sts.CardSelectTask.WARCRY,                   # Warcry (a hand card to draw top)
+    "DiscoveryAction": sts.CardSelectTask.DISCOVERY,               # Discovery / Attack-Skill-Power Potion (confirmed live)
 }
+
+# Tasks whose candidates are freshly-generated cards offered on the screen (not drawn from a pile):
+# the offered cards are injected into the select and the chosen index maps straight back to them.
+_DISCOVERY_TASKS = frozenset({sts.CardSelectTask.DISCOVERY})
 
 # Engine pile a task's getSelectIdx() indexes, used to translate the search's chosen index back to
 # the live screen card. Mirrors isValidSingleCardSelectAction's per-task pile (Action.cpp).
@@ -2139,17 +2144,40 @@ class STSLightspeedAgent:
                 f"in-combat card-select current_action {action_name!r} unmapped "
                 f"(screen {self.game.screen_type}, {len(cards)} cards: {cards}); "
                 f"add it to _CARD_SELECT_TASK_BY_ACTION")
-        num = self.game.screen.num_cards or 1
+        # CardRewardScreen (the in-combat Discovery/potion choice) has no num_cards; it always picks 1.
+        num = getattr(self.game.screen, "num_cards", None) or 1
         if num != 1:
             raise NotImplementedError(
                 f"multi-card in-combat select (num_cards={num}, {action_name!r}) not yet supported")
+        offered = self.game.screen.cards
 
         gc = spirecomm_to_gamecontext(self.game)
         bc, _ = convert_combat_state(self.game, gc)
+
+        if task in _DISCOVERY_TASKS:
+            # Generated-card choice: the candidates are the offered cards themselves. Inject them and
+            # let the search pick; the chosen index maps straight back to the live screen card.
+            ids = []
+            for c in offered:
+                cid = map_card_id(c.card_id)
+                if cid == sts.CardId.INVALID:
+                    raise ValueError(f"unknown offered card in discovery select: {c.card_id}")
+                ids.append(cid)
+            bc.open_discovery_select(ids, 1, True)
+            searcher = sts.BattleSearcher(bc)
+            searcher.search(self.search_agent.configure_searcher(searcher, bc))
+            sel_idx = searcher.get_best_action().get_select_idx()
+            if not (0 <= sel_idx < len(offered)):
+                raise RuntimeError(f"MCTS discovery idx {sel_idx} out of range "
+                                   f"({len(offered)} offered, {action_name})")
+            chosen = offered[sel_idx]
+            print(f"[mcts] discovery ({action_name}) -> {chosen.card_id} (idx {sel_idx})",
+                  file=sys.stderr)
+            return CardSelectAction([chosen])
+
         bc.open_card_select(task, num)
         searcher = sts.BattleSearcher(bc)
-        sim_count = self.search_agent.configure_searcher(searcher, bc)
-        searcher.search(sim_count)
+        searcher.search(self.search_agent.configure_searcher(searcher, bc))
         sel_idx = searcher.get_best_action().get_select_idx()
 
         pool_name = _CARD_SELECT_POOL_BY_TASK[task]
@@ -2484,9 +2512,11 @@ class STSLightspeedAgent:
             self.visited_shop = False
             return ProceedAction()
 
-        # In-combat card selects (Warcry/Headbutt/Armaments/Dual Wield, ...) are the combat MCTS's
-        # job, not the policy's.
-        if st == ScreenType.HAND_SELECT or (st == ScreenType.GRID and self.game.in_combat):
+        # In-combat card selects -- pile-based (Warcry/Headbutt/Armaments/Dual Wield/Exhume) on
+        # HAND_SELECT/GRID, and generated-card choices (Discovery / Attack-Skill-Power Potion) that
+        # arrive as an in-combat CARD_REWARD -- are the combat MCTS's job, not the policy's.
+        if (st == ScreenType.HAND_SELECT
+                or (st in (ScreenType.GRID, ScreenType.CARD_REWARD) and self.game.in_combat)):
             return self.mcts_card_select_action()
 
         net_handlers = {

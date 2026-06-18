@@ -824,7 +824,17 @@ PYBIND11_MODULE(slaythespire, m) {
             "effects (for reconstructing a mid-combat state)")
         .def("open_card_select", &BattleContext::openSimpleCardSelectScreen, "task"_a, "count"_a,
             "put the bc into the CARD_SELECT input state for the given task (sets cardSelectTask + "
-            "pickCount), so the search resolves an in-combat card-select from the reconstructed piles");
+            "pickCount), so the search resolves an in-combat card-select from the reconstructed piles")
+        .def("open_discovery_select", [](BattleContext &bc, std::vector<CardId> cards, int copyCount,
+                bool setCostToZero) {
+            std::array<CardId, 3> arr { CardId::INVALID, CardId::INVALID, CardId::INVALID };
+            for (size_t i = 0; i < cards.size() && i < 3; ++i) {
+                arr[i] = cards[i];
+            }
+            bc.openDiscoveryScreen(arr, copyCount, setCostToZero);
+        }, "cards"_a, "copy_count"_a = 1, "set_cost_to_zero"_a = true,
+            "put the bc into a DISCOVERY card-select over the given generated cards (Discovery / "
+            "Attack-Skill-Power Potion / etc.), so the search picks which to add to hand");
 
     def_value(battleContext, "input_state", &BattleContext::inputState);
 
