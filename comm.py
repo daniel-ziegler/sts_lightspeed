@@ -827,11 +827,10 @@ _EVENT_NAME_TO_ENUM = _build_event_name_to_enum()
 
 # Events whose option choice depends on which specific player relic/card/potion is offered. The
 # engine's setup_event picks those items via the gc's eventRng, which doesn't match the live game's
-# pick, so a reconstructed gc reasons about (or, in extract_event_info, indexes past) the wrong
-# item. We can't reconstruct these from RNG faithfully, and don't yet inject the live-observed items
-# for them (N'loth IS injected, in net_event_action via _inject_nloth_offers, so it's not here) -> we
-# fail loud rather than net-drive a screen we know is wrong.
-_EVENTS_NOT_FAITHFULLY_RECONSTRUCTED = frozenset({sts.Event.WE_MEET_AGAIN})
+# pick. Both events we know of (N'loth, We Meet Again) are now reconstructed by injecting the
+# live-observed items in net_event_action (_inject_nloth_offers / _inject_wemeetagain), so this set
+# is empty -- any future such event would fail loud here until it gets an injector.
+_EVENTS_NOT_FAITHFULLY_RECONSTRUCTED = frozenset()
 
 
 def map_event_to_enum(spire_event_screen) -> "sts.Event":
@@ -895,6 +894,66 @@ def _inject_nloth_offers(gc, spire_game) -> bool:
     gc.screen_state_info.relicIdx0 = offers[0]
     gc.screen_state_info.relicIdx1 = offers[1]
     return True
+
+
+def _inject_wemeetagain(gc, spire_game) -> bool:
+    """We Meet Again offers a relic back for one of the player's items -- a card, a potion, or gold --
+    chosen by the gc's eventRng, which a live snapshot can't match. The engine's option bitmask keys
+    on info.potionIdx/gold/cardIdx (each -1 = that offer absent; bit 8 = leave is always present), and
+    extract_event_info reads gc.deck[cardIdx] + info.gold. Read the offered items off the live option
+    labels and set those fields so both the option count and the net's reasoning match live. Live
+    options are ordered potion, gold, card, leave -- the same ascending bit/idx1 order the engine
+    emits. Returns True if every ENABLED give-option resolved."""
+    import re
+    info = gc.screen_state_info
+    info.potionIdx = -1
+    info.gold = -1
+    info.cardIdx = -1
+    gc_card_index = {}
+    for i, c in enumerate(gc.deck):
+        gc_card_index.setdefault(c.id, i)
+    real_potions = spire_game.get_real_potions()
+    for opt in spire_game.screen.options:
+        if opt.disabled:
+            continue
+        text = getattr(opt, "text", "") or ""
+        if "Gold" in text:
+            m = re.search(r"Lose\s+(\d+)\s+Gold", text)
+            if not m:
+                return False
+            info.gold = int(m.group(1))
+        elif "Card" in text:
+            # "[Give Card] Lose <CardName>. Obtain a Relic." -- match the named card to a held deck
+            # card by CardId (copies are interchangeable, so first index is fine).
+            m = re.search(r"Lose\s+(.+?)\.\s", text)
+            if not m:
+                return False
+            cid = _card_name_to_id(m.group(1).strip(), spire_game)
+            if cid is None or cid not in gc_card_index:
+                return False
+            info.cardIdx = gc_card_index[cid]
+        elif "Potion" in text:
+            m = re.search(r"Lose\s+(.+?)\.\s", text)
+            if not m:
+                return False
+            pname = m.group(1).strip()
+            pidx = next((i for i, p in enumerate(real_potions) if p.name == pname), None)
+            if pidx is None:
+                return False
+            info.potionIdx = pidx
+        # the "[Attack]" / leave option names no item
+    return info.gold != -1 or info.cardIdx != -1 or info.potionIdx != -1
+
+
+def _card_name_to_id(name: str, spire_game) -> "sts.CardId | None":
+    """Resolve a card display name (from an event option label) to a CardId via the live deck's
+    stable card_id, falling back to the normalized-name card table."""
+    for c in spire_game.deck:
+        if c.name == name:
+            cid = map_card_id(c.card_id)
+            return cid if cid != sts.CardId.INVALID else None
+    cid = map_card_id(name)
+    return cid if cid != sts.CardId.INVALID else None
 
 
 def _normalize_monster_id(monster_id: str) -> str:
@@ -2518,6 +2577,11 @@ class STSLightspeedAgent:
             # Couldn't match both offered relics off the live labels; the gc's RNG-rolled relicIdxs
             # would point the net at the wrong relics, so fail loud rather than choose blind.
             print(f"[net] N'loth offered relics unresolved; failing loud", file=sys.stderr)
+            return None
+        if ev == sts.Event.WE_MEET_AGAIN and not _inject_wemeetagain(gc, self.game):
+            # Couldn't parse the offered card/potion/gold off the live labels; the RNG-rolled items
+            # would diverge from live, so fail loud rather than reason about the wrong items.
+            print(f"[net] We Meet Again offered items unresolved; failing loud", file=sys.stderr)
             return None
         actions = sts.GameAction.getAllActionsInState(gc)
         if len(actions) != len(enabled):
