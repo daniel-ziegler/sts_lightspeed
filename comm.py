@@ -1758,6 +1758,12 @@ def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext"
         if not (0 <= potion_idx < len(potions)):
             raise ValueError(f"Invalid potion index: {potion_idx}")
         potion = potions[potion_idx]
+        # The engine encodes a potion DISCARD as target_idx > 5 (Action.cpp): a passive Fairy in a
+        # Bottle (never drinkable -- it auto-revives on lethal), or a target-requiring potion with no
+        # valid target. Send a discard, not a use, or the live game rejects "potion use" with
+        # "Selected potion cannot be used."
+        if action.get_target_idx() > 5:
+            return PotionAction(False, potion=potion)
         target_idx = (_sim_target_to_spire_index(action.get_target_idx(), slot_to_spire)
                       if potion.requires_target else None)
         return PotionAction(True, potion=potion, target_index=target_idx)
