@@ -1530,6 +1530,14 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
             gc.cur_event = ev
             gc.screen_state = sts.ScreenState.EVENT_SCREEN
             gc.setup_event()
+            if ev == sts.Event.COLOSSEUM:
+                # Colosseum is a multi-phase combat event the engine doesn't simulate forward (the
+                # live game runs the fights). Its option count is phase-keyed on eventData: the
+                # intro/fight phase has 1 option, the post-combat phase (leave / fight the Nobs) has
+                # 2. Reconstruct the phase from the live screen so getValidEventSelectBits matches and
+                # the net drives the post-combat choice (idx1 0 = leave, 1 = fight the Nobs).
+                enabled = [o for o in spire_game.screen.options if not o.disabled]
+                gc.screen_state_info.event_data = 0 if len(enabled) <= 1 else 1
 
     elif spire_game.screen_type == screen.ScreenType.GRID:
         # Grid select screen (transform/upgrade/remove/obtain). The engine builds one select action
