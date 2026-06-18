@@ -2471,6 +2471,16 @@ class STSLightspeedAgent:
             # Forced acknowledgement / single path: no decision to make.
             return ChooseAction(0)
 
+        # Match and Keep is a blind matching game: CommunicationMod serializes the grid as bare
+        # position labels (card0..card11) with NO card identities (no 'cards' field, empty body),
+        # so the bot has zero observable signal -- there is nothing for the net or MCTS to reason
+        # about, and every position is equivalent in expectation. Play it out mechanically (flip the
+        # first available card each step). This is forced participation, not a value choice.
+        if (getattr(self.game.screen, "event_id", "") or "").startswith("Match and Keep"):
+            print("[event] Match and Keep (blind: no card identities exposed) -> flip card 0",
+                  file=sys.stderr)
+            return ChooseAction(0)
+
         ev = map_event_to_enum(self.game.screen)
         if ev == sts.Event.INVALID:
             print(f"[net] event {self.game.screen.event_id!r} unmapped; failing loud", file=sys.stderr)
