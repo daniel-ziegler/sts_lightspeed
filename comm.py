@@ -1944,6 +1944,24 @@ _CARD_SELECT_TASK_BY_ACTION = {
 # the offered cards are injected into the select and the chosen index maps straight back to them.
 _DISCOVERY_TASKS = frozenset({sts.CardSelectTask.DISCOVERY})
 
+
+# StS seed alphabet (base-35, no 'O'); matches SeedHelper.CHARACTERS.
+_SEED_CHARS = "0123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
+
+
+def seed_long_to_string(seed: int) -> str:
+    """Convert a numeric game seed (the live game_state's `seed`, a signed int64) to the base-35
+    string the game's `start`/`--seed` command expects -- mirrors SeedHelper.getString (unsigned
+    base-35). Lets a captured game be replayed deterministically with `comm.py --seed <string>`."""
+    n = seed & 0xFFFFFFFFFFFFFFFF  # interpret as unsigned 64-bit, like Long.toUnsignedString
+    if n == 0:
+        return "0"
+    out = []
+    while n:
+        out.append(_SEED_CHARS[n % 35])
+        n //= 35
+    return "".join(reversed(out))
+
 # Engine pile a task's getSelectIdx() indexes, used to translate the search's chosen index back to
 # the live screen card. Mirrors isValidSingleCardSelectAction's per-task pile (Action.cpp).
 _CARD_SELECT_POOL_BY_TASK = {
@@ -1994,12 +2012,23 @@ class STSLightspeedAgent:
     def change_class(self, new_class):
         self.chosen_class = new_class
 
+    def _log_seed_once(self):
+        """Print the replayable base-35 seed string the first time we see each game, so any later
+        crash leaves the exact seed to deterministically reproduce it with `comm.py --seed <s>`."""
+        seed = getattr(self.game, "seed", None)
+        if seed is None or seed == getattr(self, "_logged_seed", None):
+            return
+        self._logged_seed = seed
+        print(f"[seed] game seed {seed} = {seed_long_to_string(int(seed))!r} "
+              f"(replay: --seed {seed_long_to_string(int(seed))})", file=sys.stderr)
+
     def handle_error(self, error):
         raise Exception(error)
 
     def get_next_action_in_game(self, game_state):
         self.choice_count += 1
         self.game = game_state
+        self._log_seed_once()
         if self.game.choice_available:
             # nchoice = min(4, len(self.game.choice_list))
             # if self.choice_count < 6:
