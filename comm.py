@@ -17,12 +17,11 @@ from typing import Optional, Union
 
 import slaythespire as sts
 from spirecomm.spire.game import Game
-from spirecomm.spire.character import Intent, PlayerClass
+from spirecomm.spire.character import PlayerClass
 from spirecomm.spire import character
 from spirecomm.spire import card, relic, game, screen
 from spirecomm.spire.screen import RestOption, ScreenType
 from spirecomm.communication.action import *
-from spirecomm.ai.priorities import *
 from spirecomm.communication.coordinator import Coordinator
 
 
@@ -822,15 +821,16 @@ _EVENT_NAME_TO_ENUM = _build_event_name_to_enum()
 # Events whose option choice depends on which specific player relic/card/potion is offered. The
 # engine's setup_event picks those items via the gc's eventRng, which doesn't match the live game's
 # pick, so a reconstructed gc reasons about (or, in extract_event_info, indexes past) the wrong
-# item. We can't reconstruct these from RNG faithfully -> fall back to the heuristic unless we can
-# inject the live-observed items (N'loth does this in net_event_action via _inject_nloth_offers).
+# item. We can't reconstruct these from RNG faithfully, and don't yet inject the live-observed items
+# for them (N'loth IS injected, in net_event_action via _inject_nloth_offers, so it's not here) -> we
+# fail loud rather than net-drive a screen we know is wrong.
 _EVENTS_NOT_FAITHFULLY_RECONSTRUCTED = frozenset({sts.Event.WE_MEET_AGAIN})
 
 
 def map_event_to_enum(spire_event_screen) -> "sts.Event":
     """Resolve a spirecomm event screen to the engine Event enum, trying both the id-string
     (screen.event_id) and game-name (screen.event_name). Returns Event.INVALID if unknown so the
-    caller can fall back to the heuristic rather than crash."""
+    caller can fail loud rather than net-drive an unmapped event."""
     for key in (getattr(spire_event_screen, "event_id", None),
                 getattr(spire_event_screen, "event_name", None)):
         if key and key in _EVENT_NAME_TO_ENUM:
@@ -1524,7 +1524,7 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
         # event's options and the NN (construct_choice) can encode them. setup_event regenerates the
         # event's info fields from the gc's RNG; for the start-of-run NEOW the constructor already
         # rolled info.neowRewards. cur_event drives setup_event's per-event branch. Unknown events
-        # leave the gc as-is (the net handler falls back to the heuristic).
+        # leave the gc as-is (the net handler fails loud).
         ev = map_event_to_enum(spire_game.screen)
         if ev != sts.Event.INVALID:
             gc.cur_event = ev
@@ -1934,18 +1934,17 @@ class STSLightspeedAgent:
         # When set (a base-35 StS seed string, e.g. "54FYPZX13RLTT"), new runs start on this exact
         # seed -- used to replay a specific game (e.g. the captured slime-boss crash seed).
         self.start_seed = start_seed
-        self.choose_good_card = False
+        # Set when heart1 skips the combat card reward, so _collect_combat_reward doesn't re-open it.
         self.skipped_cards = False
+        # Toggles the two-step SHOP_ROOM transition (approach merchant, then leave).
         self.visited_shop = False
-        self.map_route = []
         self.chosen_class = chosen_class
-        self.priorities = Priority()
         self.change_class(chosen_class)
         self.choice_count = 0
         # Set by run_agent_cli so out-of-combat decision states can be captured for replay.
         self.coordinator = None
-        # heart1 policy (an NNService) used for out-of-combat choices; None => heuristics only.
-        # temperature<=0 picks greedily (argmax); >0 samples (Boltzmann) with net_rng.
+        # heart1 policy (an NNService) driving every out-of-combat choice; required (no heuristic
+        # fallback). temperature<=0 picks greedily (argmax); >0 samples (Boltzmann) with net_rng.
         self.net = net
         self.temperature = temperature
         self.net_rng = random.Random(net_seed)
@@ -1957,14 +1956,6 @@ class STSLightspeedAgent:
 
     def change_class(self, new_class):
         self.chosen_class = new_class
-        if self.chosen_class == PlayerClass.THE_SILENT:
-            self.priorities = SilentPriority()
-        elif self.chosen_class == PlayerClass.IRONCLAD:
-            self.priorities = IroncladPriority()
-        elif self.chosen_class == PlayerClass.DEFECT:
-            self.priorities = DefectPowerPriority()
-        else:
-            self.priorities = random.choice(list(PlayerClass))
 
     def handle_error(self, error):
         raise Exception(error)
@@ -1991,36 +1982,6 @@ class STSLightspeedAgent:
 
     def get_next_action_out_of_game(self):
         return StartGameAction(self.chosen_class, seed=self.start_seed)
-
-    def is_monster_attacking(self):
-        for monster in self.game.monsters:
-            if monster.intent.is_attack() or monster.intent == Intent.NONE:
-                return True
-        return False
-
-    def get_incoming_damage(self):
-        incoming_damage = 0
-        for monster in self.game.monsters:
-            if not monster.is_gone and not monster.half_dead:
-                if monster.move_adjusted_damage is not None:
-                    incoming_damage += monster.move_adjusted_damage * monster.move_hits
-                elif monster.intent == Intent.NONE:
-                    incoming_damage += 5 * self.game.act
-        return incoming_damage
-
-    def get_low_hp_target(self):
-        available_monsters = [monster for monster in self.game.monsters if monster.current_hp > 0 and not monster.half_dead and not monster.is_gone]
-        best_monster = min(available_monsters, key=lambda x: x.current_hp)
-        return best_monster
-
-    def get_high_hp_target(self):
-        available_monsters = [monster for monster in self.game.monsters if monster.current_hp > 0 and not monster.half_dead and not monster.is_gone]
-        best_monster = max(available_monsters, key=lambda x: x.current_hp)
-        return best_monster
-
-    def many_monsters_alive(self):
-        available_monsters = [monster for monster in self.game.monsters if monster.current_hp > 0 and not monster.half_dead and not monster.is_gone]
-        return len(available_monsters) > 1
 
     def handle_combat(self):
         self.capture_battle_state()
@@ -2132,14 +2093,6 @@ class STSLightspeedAgent:
         return spirecomm_action
 
 
-    def use_next_potion(self):
-        for potion in self.game.get_real_potions():
-            if potion.can_use:
-                if potion.requires_target:
-                    return PotionAction(True, potion=potion, target_monster=self.get_low_hp_target())
-                else:
-                    return PotionAction(True, potion=potion)
-
     def capture_decision_state(self):
         """Append the raw CommunicationMod message for this out-of-combat decision to the
         capture file named by $STS_COMM_CAPTURE (one JSON object per line), so real screens
@@ -2182,8 +2135,7 @@ class STSLightspeedAgent:
     def net_pick_action(self, gc):
         """Run heart1 on gc's current choice screen and return the chosen sts.GameAction (in
         GameContext space), or None if construct_choice can't represent this screen (so the
-        caller falls back to heuristics). Real errors propagate -- we don't play on a guessed
-        state."""
+        caller fails loud). Real errors propagate -- we don't play on a guessed state."""
         from playouts import construct_choice, pick_card_with_net, get_card_probs, path_to_action_and_desc
         from network import choice_space
         import numpy as np
@@ -2208,7 +2160,7 @@ class STSLightspeedAgent:
 
     def net_card_reward_action(self):
         """heart1's pick for a single (already-revealed) card reward screen: take a card, take
-        the Singing Bowl, or skip. Returns a spirecomm Action, or None to fall back. The
+        the Singing Bowl, or skip. Returns a spirecomm Action, or None to fail loud. The
         multi-group Prayer Wheel reveal flow layers on top of this later."""
         gc = spirecomm_to_gamecontext(self.game)
         action = self.net_pick_action(gc)
@@ -2226,12 +2178,12 @@ class STSLightspeedAgent:
             print("[net] card reward -> skip", file=sys.stderr)
             self.skipped_cards = True
             return CancelAction()
-        print(f"[net] unexpected card-reward action {rtype}; heuristic fallback", file=sys.stderr)
+        print(f"[net] unexpected card-reward action {rtype}; failing loud", file=sys.stderr)
         return None
 
     def net_boss_relic_action(self):
-        """heart1's pick among the three boss relics. Returns a spirecomm Action, or None to fall
-        back. Vanilla can't skip a boss relic, so a SKIP pick defers to the heuristic."""
+        """heart1's pick among the three boss relics. Returns a spirecomm Action, or None to fail
+        loud. Vanilla can't skip a boss relic, so a SKIP pick shouldn't occur -> fail loud."""
         gc = spirecomm_to_gamecontext(self.game)
         action = self.net_pick_action(gc)
         if action is None:
@@ -2240,13 +2192,13 @@ class STSLightspeedAgent:
             chosen = self.game.screen.relics[action.idx1]
             print(f"[net] boss relic -> take {chosen.name} (idx {action.idx1})", file=sys.stderr)
             return BossRewardAction(chosen)
-        print(f"[net] boss relic -> {action.rewards_action_type}; heuristic fallback", file=sys.stderr)
+        print(f"[net] boss relic -> {action.rewards_action_type}; failing loud", file=sys.stderr)
         return None
 
     def net_card_select_action(self):
         """heart1's pick on an out-of-combat single-card grid select (transform/upgrade/remove/
-        obtain -- e.g. shop card removal, rest-site smith, event transforms). Falls back (None) for
-        in-combat selects (Headbutt/Exhume etc., left to the heuristic) and multi-card selects."""
+        obtain -- e.g. shop card removal, rest-site smith, event transforms). Returns None (-> fail
+        loud) for in-combat selects (those are the combat MCTS's job) and multi-card selects."""
         scr = self.game.screen
         if self.game.in_combat:
             return None
@@ -2281,14 +2233,14 @@ class STSLightspeedAgent:
             if desc.startswith(key) and opt in self.game.screen.rest_options:
                 print(f"[net] rest -> {opt}", file=sys.stderr)
                 return RestAction(opt)
-        print(f"[net] rest pick {desc!r} not an available option; heuristic fallback", file=sys.stderr)
+        print(f"[net] rest pick {desc!r} not an available option; failing loud", file=sys.stderr)
         return None
 
     def net_shop_action(self):
         """heart1's shop decision: buy a card/relic/potion, start a card removal, or leave. The
         engine Shop (injected with live prices) makes getAllActionsInState offer exactly the
         affordable buys, so the net only ever picks something we can afford. Returns a spirecomm
-        Action, or None to fall back. One purchase per call; the shop screen re-opens for the next."""
+        Action, or None to fail loud. One purchase per call; the shop screen re-opens for the next."""
         gc = spirecomm_to_gamecontext(self.game)
         action = self.net_pick_action(gc)
         if action is None:
@@ -2307,7 +2259,7 @@ class STSLightspeedAgent:
             # The gc now carries the real potion belt so the sim shouldn't offer this when full;
             # guard anyway, since BuyPotionAction raises (kills the run) on a full belt.
             if self.game.are_potions_full():
-                print("[net] shop -> buy potion skipped (belt full); heuristic fallback", file=sys.stderr)
+                print("[net] shop -> buy potion skipped (belt full); failing loud", file=sys.stderr)
                 return None
             chosen = shop.potions[action.idx1]
             print(f"[net] shop -> buy potion {chosen.potion_id} ({chosen.price}g)", file=sys.stderr)
@@ -2319,13 +2271,13 @@ class STSLightspeedAgent:
         if rtype == sts.RewardsActionType.SKIP:
             print("[net] shop -> leave", file=sys.stderr)
             return CancelAction()
-        print(f"[net] shop -> {rtype}; heuristic fallback", file=sys.stderr)
+        print(f"[net] shop -> {rtype}; failing loud", file=sys.stderr)
         return None
 
     def net_map_action(self):
         """heart1's pick of the next map node. The GameContext regenerates this seed's map and is
         placed on the player's current node, so getAllActionsInState offers the real next-row
-        nodes as path choices (idx1 == node x). Returns a spirecomm Action, or None to fall back."""
+        nodes as path choices (idx1 == node x). Returns a spirecomm Action, or None to fail loud."""
         gc = spirecomm_to_gamecontext(self.game)
         action = self.net_pick_action(gc)
         if action is None:
@@ -2340,7 +2292,7 @@ class STSLightspeedAgent:
             if node.x == chosen_x:
                 print(f"[net] map -> node x={chosen_x} (y={node.y}, {node.symbol})", file=sys.stderr)
                 return ChooseMapNodeAction(node)
-        print(f"[net] map pick x={chosen_x} not in next_nodes; heuristic fallback", file=sys.stderr)
+        print(f"[net] map pick x={chosen_x} not in next_nodes; failing loud", file=sys.stderr)
         return None
 
     def net_event_action(self):
@@ -2353,8 +2305,8 @@ class STSLightspeedAgent:
         game's enabled options in order, so the chosen action's rank among the valid engine actions
         IS the live choice index. We only net-drive when the engine and the live game agree on the
         number of available options -- otherwise the gc reconstruction diverged from live (e.g. a
-        sub-phase or RNG-dependent option set we can't mirror) and we fall back to the heuristic
-        rather than risk picking the wrong option."""
+        sub-phase or RNG-dependent option set we can't mirror) and we fail loud (return None) rather
+        than risk picking the wrong option."""
         options = self.game.screen.options
         enabled = [o for o in options if not o.disabled]
         if len(enabled) <= 1:
@@ -2363,31 +2315,31 @@ class STSLightspeedAgent:
 
         ev = map_event_to_enum(self.game.screen)
         if ev == sts.Event.INVALID:
-            print(f"[net] event {self.game.screen.event_id!r} unmapped; heuristic fallback", file=sys.stderr)
+            print(f"[net] event {self.game.screen.event_id!r} unmapped; failing loud", file=sys.stderr)
             return None
         if ev in _EVENTS_NOT_FAITHFULLY_RECONSTRUCTED:
             # The choice hinges on which specific player relic/item is offered, but setup_event picks
             # those via the gc's eventRng, which doesn't match the live game's pick -- so the net
             # would (and extract_event_info does, crashing on an out-of-range index) reason about the
-            # wrong item. Cannot reconstruct faithfully; let the heuristic handle it.
+            # wrong item. Cannot reconstruct faithfully -> fail loud.
             print(f"[net] event {self.game.screen.event_id!r} not faithfully reconstructable; "
-                  f"heuristic fallback", file=sys.stderr)
+                  f"failing loud", file=sys.stderr)
             return None
 
         gc = spirecomm_to_gamecontext(self.game)
         if gc.screen_state != sts.ScreenState.EVENT_SCREEN:
             # setup_event routed into a card-select / combat-reward sub-screen the live screen
-            # doesn't match; let the heuristic handle it.
+            # doesn't match; fail loud.
             return None
         if ev == sts.Event.NLOTH and not _inject_nloth_offers(gc, self.game):
             # Couldn't match both offered relics off the live labels; the gc's RNG-rolled relicIdxs
-            # would point the net at the wrong relics, so fall back rather than choose blind.
-            print(f"[net] N'loth offered relics unresolved; heuristic fallback", file=sys.stderr)
+            # would point the net at the wrong relics, so fail loud rather than choose blind.
+            print(f"[net] N'loth offered relics unresolved; failing loud", file=sys.stderr)
             return None
         actions = sts.GameAction.getAllActionsInState(gc)
         if len(actions) != len(enabled):
             print(f"[net] event {self.game.screen.event_id!r}: engine {len(actions)} vs live "
-                  f"{len(enabled)} options; heuristic fallback", file=sys.stderr)
+                  f"{len(enabled)} options; failing loud", file=sys.stderr)
             return None
 
         action = self.net_pick_action(gc)
@@ -2398,7 +2350,7 @@ class STSLightspeedAgent:
         try:
             rank = sorted_idx1.index(action.idx1)
         except ValueError:
-            print(f"[net] event pick idx1={action.idx1} not among options {sorted_idx1}; fallback",
+            print(f"[net] event pick idx1={action.idx1} not among options {sorted_idx1}; failing loud",
                   file=sys.stderr)
             return None
         chosen = enabled[rank]
@@ -2406,170 +2358,83 @@ class STSLightspeedAgent:
               file=sys.stderr)
         return ChooseAction(chosen.choice_index)
 
-    def handle_screen_with_net(self):
-        """Route the out-of-combat screens that are wired to heart1. Returns a spirecomm Action,
-        or None for screens not yet net-driven (caller falls back to heuristics)."""
-        if self.game.screen_type == ScreenType.CARD_REWARD:
-            return self.net_card_reward_action()
-        if self.game.screen_type == ScreenType.BOSS_REWARD:
-            return self.net_boss_relic_action()
-        if self.game.screen_type == ScreenType.MAP:
-            return self.net_map_action()
-        if self.game.screen_type == ScreenType.SHOP_SCREEN:
-            return self.net_shop_action()
-        if self.game.screen_type == ScreenType.REST:
-            return self.net_rest_action()
-        if self.game.screen_type == ScreenType.GRID:
-            return self.net_card_select_action()
-        if self.game.screen_type == ScreenType.EVENT:
-            return self.net_event_action()
-        return None
+    def net_chest_action(self):
+        """heart1's open-or-skip decision for a treasure chest. Opening isn't free -- Cursed Key
+        adds a curse on open, and act 4's sapphire key sits behind a chest -- so it's a real policy
+        choice, not a mechanical 'always open'. The reconstructed gc is on the TREASURE_ROOM screen
+        (open == idx1 0, skip == idx1 1)."""
+        gc = spirecomm_to_gamecontext(self.game)
+        action = self.net_pick_action(gc)
+        if action is None:
+            return None
+        if action.idx1 == 0:
+            print("[net] chest -> open", file=sys.stderr)
+            return OpenChestAction()
+        print("[net] chest -> skip", file=sys.stderr)
+        return ProceedAction()
 
     def handle_screen(self):
+        """Drive an out-of-combat decision screen exactly as the RL training loop drives the
+        engine's equivalent: heart1 for every value choice, the combat MCTS for in-combat selects.
+        There is NO heuristic fallback -- if a screen can't be net-reconstructed/represented we fail
+        loud rather than play a guessed move (a diverged reconstruction must never silently pick)."""
         self.capture_decision_state()
-        if self.net is not None:
-            net_action = self.handle_screen_with_net()
-            if net_action is not None:
-                return net_action
-        if self.game.screen_type == ScreenType.EVENT:
-            if self.game.screen.event_id in ["Vampires", "Masked Bandits", "Knowing Skull", "Ghosts", "Liars Game", "Golden Idol", "Drug Dealer", "The Library"]:
-                return ChooseAction(len(self.game.screen.options) - 1)
-            else:
-                return ChooseAction(0)
-        elif self.game.screen_type == ScreenType.CHEST:
-            return OpenChestAction()
-        elif self.game.screen_type == ScreenType.SHOP_ROOM:
+        st = self.game.screen_type
+        if self.net is None:
+            raise RuntimeError("no policy loaded: comm.py drives every decision with heart1/MCTS "
+                               "and keeps no heuristic fallback")
+
+        # Mechanical, non-decision transitions: collect the (free) combat rewards, and walk up to or
+        # away from the merchant. These make no value judgment -- the real choices (which card to
+        # take, which item to buy, whether to leave) are separate net-driven screens -- so they
+        # mirror the engine auto-advancing, not a heuristic.
+        if st == ScreenType.COMBAT_REWARD:
+            return self._collect_combat_reward()
+        if st == ScreenType.SHOP_ROOM:
             if not self.visited_shop:
                 self.visited_shop = True
                 return ChooseShopkeeperAction()
-            else:
-                self.visited_shop = False
-                return ProceedAction()
-        elif self.game.screen_type == ScreenType.REST:
-            return self.choose_rest_option()
-        elif self.game.screen_type == ScreenType.CARD_REWARD:
-            return self.choose_card_reward()
-        elif self.game.screen_type == ScreenType.COMBAT_REWARD:
-            for reward_item in self.game.screen.rewards:
-                if reward_item.reward_type == RewardType.POTION and self.game.are_potions_full():
-                    continue
-                elif reward_item.reward_type == RewardType.CARD and self.skipped_cards:
-                    continue
-                else:
-                    return CombatRewardAction(reward_item)
-            self.skipped_cards = False
-            return ProceedAction()
-        elif self.game.screen_type == ScreenType.MAP:
-            return self.make_map_choice()
-        elif self.game.screen_type == ScreenType.BOSS_REWARD:
-            relics = self.game.screen.relics
-            best_boss_relic = self.priorities.get_best_boss_relic(relics)
-            return BossRewardAction(best_boss_relic)
-        elif self.game.screen_type == ScreenType.SHOP_SCREEN:
-            if self.game.screen.purge_available and self.game.gold >= self.game.screen.purge_cost:
-                return ChooseAction(name="purge")
-            for card in self.game.screen.cards:
-                if self.game.gold >= card.price and not self.priorities.should_skip(card):
-                    return BuyCardAction(card)
-            for relic in self.game.screen.relics:
-                if self.game.gold >= relic.price:
-                    return BuyRelicAction(relic)
-            return CancelAction()
-        elif self.game.screen_type == ScreenType.GRID:
-            if not self.game.choice_available:
-                return ProceedAction()
-            if self.game.screen.for_upgrade or self.choose_good_card:
-                available_cards = self.priorities.get_sorted_cards(self.game.screen.cards)
-            else:
-                available_cards = self.priorities.get_sorted_cards(self.game.screen.cards, reverse=True)
-            num_cards = self.game.screen.num_cards
-            return CardSelectAction(available_cards[:num_cards])
-        elif self.game.screen_type == ScreenType.HAND_SELECT:
-            if not self.game.choice_available:
-                return ProceedAction()
-            # Usually, we don't want to choose the whole hand for a hand select. 3 seems like a good compromise.
-            num_cards = min(self.game.screen.num_cards, 3)
-            return CardSelectAction(self.priorities.get_cards_for_action(self.game.current_action, self.game.screen.cards, num_cards))
-        else:
+            self.visited_shop = False
             return ProceedAction()
 
-    def choose_rest_option(self):
-        rest_options = self.game.screen.rest_options
-        if len(rest_options) > 0 and not self.game.screen.has_rested:
-            if RestOption.REST in rest_options and self.game.current_hp < self.game.max_hp / 2:
-                return RestAction(RestOption.REST)
-            elif RestOption.REST in rest_options and self.game.act != 1 and self.game.floor % 17 == 15 and self.game.current_hp < self.game.max_hp * 0.9:
-                return RestAction(RestOption.REST)
-            elif RestOption.SMITH in rest_options:
-                return RestAction(RestOption.SMITH)
-            elif RestOption.LIFT in rest_options:
-                return RestAction(RestOption.LIFT)
-            elif RestOption.DIG in rest_options:
-                return RestAction(RestOption.DIG)
-            elif RestOption.REST in rest_options and self.game.current_hp < self.game.max_hp:
-                return RestAction(RestOption.REST)
-            else:
-                return ChooseAction(0)
-        else:
-            return ProceedAction()
+        # In-combat card selects (Warcry/Headbutt/Armaments/Dual Wield, ...) are the combat MCTS's
+        # job, not the policy's. Not yet wired -> fail loud (rare: ~0 in dozens of games).
+        if st == ScreenType.HAND_SELECT or (st == ScreenType.GRID and self.game.in_combat):
+            raise NotImplementedError(
+                "in-combat card-select must be driven by the combat MCTS (not yet implemented)")
 
-    def count_copies_in_deck(self, card):
-        count = 0
-        for deck_card in self.game.deck:
-            if deck_card.card_id == card.card_id:
-                count += 1
-        return count
+        net_handlers = {
+            ScreenType.CARD_REWARD: self.net_card_reward_action,
+            ScreenType.BOSS_REWARD: self.net_boss_relic_action,
+            ScreenType.MAP: self.net_map_action,
+            ScreenType.SHOP_SCREEN: self.net_shop_action,
+            ScreenType.REST: self.net_rest_action,
+            ScreenType.GRID: self.net_card_select_action,
+            ScreenType.EVENT: self.net_event_action,
+            ScreenType.CHEST: self.net_chest_action,
+        }
+        handler = net_handlers.get(st)
+        if handler is None:
+            raise RuntimeError(f"no net handler for decision screen {st}; failing loud rather than "
+                               f"guessing an action")
+        action = handler()
+        if action is None:
+            raise RuntimeError(f"heart1 could not drive the {st} screen (unrepresentable or diverged "
+                               f"reconstruction); failing loud rather than playing a heuristic")
+        return action
 
-    def choose_card_reward(self):
-        reward_cards = self.game.screen.cards
-        if self.game.screen.can_skip and not self.game.in_combat:
-            pickable_cards = [card for card in reward_cards if self.priorities.needs_more_copies(card, self.count_copies_in_deck(card))]
-        else:
-            pickable_cards = reward_cards
-        if len(pickable_cards) > 0:
-            potential_pick = self.priorities.get_best_card(pickable_cards)
-            return CardRewardAction(potential_pick)
-        elif self.game.screen.can_bowl:
-            return CardRewardAction(bowl=True)
-        else:
-            self.skipped_cards = True
-            return CancelAction()
-
-    def generate_map_route(self):
-        node_rewards = self.priorities.MAP_NODE_PRIORITIES.get(self.game.act)
-        best_rewards = {0: {node.x: node_rewards[node.symbol] for node in self.game.map.nodes[0].values()}}
-        best_parents = {0: {node.x: 0 for node in self.game.map.nodes[0].values()}}
-        min_reward = min(node_rewards.values())
-        map_height = max(self.game.map.nodes.keys())
-        for y in range(0, map_height):
-            best_rewards[y+1] = {node.x: min_reward * 20 for node in self.game.map.nodes[y+1].values()}
-            best_parents[y+1] = {node.x: -1 for node in self.game.map.nodes[y+1].values()}
-            for x in best_rewards[y]:
-                node = self.game.map.get_node(x, y)
-                best_node_reward = best_rewards[y][x]
-                for child in node.children:
-                    test_child_reward = best_node_reward + node_rewards[child.symbol]
-                    if test_child_reward > best_rewards[y+1][child.x]:
-                        best_rewards[y+1][child.x] = test_child_reward
-                        best_parents[y+1][child.x] = node.x
-        best_path = [0] * (map_height + 1)
-        best_path[map_height] = max(best_rewards[map_height].keys(), key=lambda x: best_rewards[map_height][x])
-        for y in range(map_height, 0, -1):
-            best_path[y - 1] = best_parents[y][best_path[y]]
-        self.map_route = best_path
-
-    def make_map_choice(self):
-        if len(self.game.screen.next_nodes) > 0 and self.game.screen.next_nodes[0].y == 0:
-            self.generate_map_route()
-            self.game.screen.current_node.y = -1
-        if self.game.screen.boss_available:
-            return ChooseMapBossAction()
-        chosen_x = self.map_route[self.game.screen.current_node.y + 1]
-        for choice in self.game.screen.next_nodes:
-            if choice.x == chosen_x:
-                return ChooseMapNodeAction(choice)
-        # This should never happen
-        return ChooseAction(0)
+    def _collect_combat_reward(self):
+        """Take the post-combat rewards. Gold/relic/potion/keys are free and always taken (the same
+        the engine's own pick does); a CARD reward opens the CARD_REWARD screen where heart1 chooses
+        the card. skipped_cards (set when heart1 skipped the card) stops us re-opening it."""
+        for reward_item in self.game.screen.rewards:
+            if reward_item.reward_type == RewardType.POTION and self.game.are_potions_full():
+                continue
+            if reward_item.reward_type == RewardType.CARD and self.skipped_cards:
+                continue
+            return CombatRewardAction(reward_item)
+        self.skipped_cards = False
+        return ProceedAction()
 
 
 DEFAULT_CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "heart1.pt.iter_1295")
@@ -2578,9 +2443,9 @@ DEFAULT_CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", 
 def load_policy_service(ckpt_path, device=None):
     """Load the heart1 policy checkpoint into an NNService for inference.
 
-    Imports torch/network/playouts lazily so comm.py still runs heuristic-only (--no-net)
-    without torch installed. Mirrors eval_hero.py's loader: single net, value head, default
-    ModelHP (the architecture rl_train.py used for the heart1 run)."""
+    Imports torch/network/playouts lazily (kept out of module import so the conversion tests and
+    offline replay tooling load without torch). Mirrors eval_hero.py's loader: single net, value
+    head, default ModelHP (the architecture rl_train.py used for the heart1 run)."""
     import torch
     from network import NN, ModelHP, load_network_backward_compatible
     from playouts import NNService
@@ -2615,8 +2480,6 @@ def run_agent_cli():
                        help="Run conversion tests instead of playing")
     parser.add_argument("--ckpt", default=DEFAULT_CKPT,
                        help="heart1 policy checkpoint for out-of-combat decisions")
-    parser.add_argument("--no-net", action="store_true",
-                       help="Disable the network; use heuristics for all out-of-combat choices")
     parser.add_argument("--temperature", type=float, default=0.0,
                        help="Network action-sampling temperature (0 = greedy/argmax)")
     parser.add_argument("--seed", default=None,
@@ -2640,7 +2503,7 @@ def run_agent_cli():
     
     print(f"Starting STS Lightspeed Agent for {args.character.title()}", file=sys.stderr)
 
-    net = None if args.no_net else load_policy_service(args.ckpt)
+    net = load_policy_service(args.ckpt)
 
     # Create agent and coordinator
     agent = STSLightspeedAgent(chosen_class, net=net, temperature=args.temperature,
