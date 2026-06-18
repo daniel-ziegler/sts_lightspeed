@@ -2681,7 +2681,10 @@ def run_agent_cli():
         print(f"Playing game {games_played + 1} as {current_class.name}", file=sys.stderr)
         
         try:
-            result = coordinator.play_one_game(current_class)
+            # Pass --seed through so play_one_game's StartGameAction uses it (it defaults to a random
+            # seed otherwise). With a seed set, every game replays the same run -- intended for
+            # deterministic crash repro (--seed <s> --games 1).
+            result = coordinator.play_one_game(current_class, seed=args.seed)
             games_played += 1
             print(f"Game {games_played} completed with result: {result}", file=sys.stderr)
         except KeyboardInterrupt:
