@@ -822,8 +822,9 @@ _EVENT_NAME_TO_ENUM = _build_event_name_to_enum()
 # Events whose option choice depends on which specific player relic/card/potion is offered. The
 # engine's setup_event picks those items via the gc's eventRng, which doesn't match the live game's
 # pick, so a reconstructed gc reasons about (or, in extract_event_info, indexes past) the wrong
-# item. We can't reconstruct these faithfully -> never net-drive them; fall back to the heuristic.
-_EVENTS_NOT_FAITHFULLY_RECONSTRUCTED = frozenset({sts.Event.NLOTH, sts.Event.WE_MEET_AGAIN})
+# item. We can't reconstruct these from RNG faithfully -> fall back to the heuristic unless we can
+# inject the live-observed items (N'loth does this in net_event_action via _inject_nloth_offers).
+_EVENTS_NOT_FAITHFULLY_RECONSTRUCTED = frozenset({sts.Event.WE_MEET_AGAIN})
 
 
 def map_event_to_enum(spire_event_screen) -> "sts.Event":
@@ -848,6 +849,43 @@ def _is_mini_neow(spire_game) -> bool:
         return False
     enabled = [o for o in spire_game.screen.options if not o.disabled]
     return len(enabled) == 2
+
+
+def _inject_nloth_offers(gc, spire_game) -> bool:
+    """N'loth offers to take one of two of the player's relics (chosen by an RNG shuffle the live
+    snapshot doesn't expose), so setup_event's relicIdx0/relicIdx1 -- rolled from the gc's RNG --
+    won't match the live offer. Read the two offered relics off the live option labels (each offer
+    option's text names the relic it takes) and point relicIdx0/relicIdx1 at those relics' positions
+    in gc.relics, so the net's reasoning (extract_event_info reads gc.relics[relicIdx*]) matches the
+    real game. The live options are ordered offer-choice1, offer-choice2, leave -- the same ascending
+    idx1 order the engine emits -- so offers[0]->relicIdx0, offers[1]->relicIdx1. Returns True only if
+    both offers resolved to held relics."""
+    gc_relic_index = {}
+    for i, r in enumerate(gc.relics):
+        gc_relic_index.setdefault(r.id, i)
+    enabled = [o for o in spire_game.screen.options if not o.disabled]
+    offers = []
+    for opt in enabled:
+        text = getattr(opt, "text", "") or ""
+        # Longest relic name first so a longer name ("Bag of Marbles") isn't shadowed by a shorter
+        # substring of it. The leave option names no relic and is skipped.
+        match = None
+        for spire_relic in sorted(spire_game.relics, key=lambda r: -len(r.name or "")):
+            name = spire_relic.name or ""
+            if name and name in text:
+                match = spire_relic
+                break
+        if match is None:
+            continue
+        rid = map_relic_id(match.name)
+        if rid == sts.RelicId.INVALID or rid not in gc_relic_index:
+            return False
+        offers.append(gc_relic_index[rid])
+    if len(offers) < 2:
+        return False
+    gc.screen_state_info.relicIdx0 = offers[0]
+    gc.screen_state_info.relicIdx1 = offers[1]
+    return True
 
 
 def _normalize_monster_id(monster_id: str) -> str:
@@ -2328,6 +2366,11 @@ class STSLightspeedAgent:
         if gc.screen_state != sts.ScreenState.EVENT_SCREEN:
             # setup_event routed into a card-select / combat-reward sub-screen the live screen
             # doesn't match; let the heuristic handle it.
+            return None
+        if ev == sts.Event.NLOTH and not _inject_nloth_offers(gc, self.game):
+            # Couldn't match both offered relics off the live labels; the gc's RNG-rolled relicIdxs
+            # would point the net at the wrong relics, so fall back rather than choose blind.
+            print(f"[net] N'loth offered relics unresolved; heuristic fallback", file=sys.stderr)
             return None
         actions = sts.GameAction.getAllActionsInState(gc)
         if len(actions) != len(enabled):
