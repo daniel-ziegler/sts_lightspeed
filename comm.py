@@ -624,6 +624,14 @@ def _infer_boss_encounter(spire_monsters):
     return sts.MonsterEncounter.INVALID
 
 
+# Monsters whose move is assigned by a summoner (not their own getMoveForRoll) -- rolling them
+# assert(false)s in the engine. When one is converted with no committed intent (just spawned, no
+# live move_id), set this fixed move directly instead of rolling. TorchHead only ever tackles.
+_UNKNOWN_INTENT_DEFAULT_MOVE = {
+    sts.MonsterId.TORCH_HEAD: sts.MonsterMoveId.TORCH_HEAD_TACKLE,
+}
+
+
 def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
     """Copy a live monster's hp/block/move-history/powers onto a freshly created sim Monster.
 
@@ -660,11 +668,18 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
         apply_monster_power(sts_monster, power.power_id, power.amount)
 
     if not move_known:
-        sts_monster.rollMove(bc)
-        if sts_monster.isAlive() and sts_monster.moveHistory[0] == invalid \
-                and sts_monster.pending_move_rolls == 0:
-            raise ValueError(f"rollMove left {monster.monster_id} with no move "
-                             f"(intent {monster.intent})")
+        # A summoned minion whose move is set by its summoner (TorchHead via the Collector spawn)
+        # has no getMoveForRoll case -- rolling it assert(false)s in the engine (uncatchable). When
+        # it appears with no committed intent (just spawned), set its fixed move directly instead.
+        default_move = _UNKNOWN_INTENT_DEFAULT_MOVE.get(sts_monster.id)
+        if default_move is not None:
+            sts_monster.moveHistory = [int(default_move), sts_monster.moveHistory[1]]
+        else:
+            sts_monster.rollMove(bc)
+            if sts_monster.isAlive() and sts_monster.moveHistory[0] == invalid \
+                    and sts_monster.pending_move_rolls == 0:
+                raise ValueError(f"rollMove left {monster.monster_id} with no move "
+                                 f"(intent {monster.intent})")
 
 
 # Encounters whose summon/respawn actions write to hardcoded monster slots, so a converted group
