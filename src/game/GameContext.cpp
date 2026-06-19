@@ -414,7 +414,7 @@ bool GameContext::canAddEvent(Event event) const {
             return gold >= 75;
 
         case Event::COLOSSEUM:
-            return curMapNodeY > 7 && !disableColosseum;
+            return curMapNodeY > 7;
 
         default:
             return true;
@@ -852,6 +852,7 @@ void GameContext::setupEvent() { // todo necronomicon event
             openCardSelectScreen(CardSelectScreenType::BONFIRE_SPIRITS, 1);
             break;
 
+        case Event::COLOSSEUM:
         case Event::CURSED_TOME:
             info.eventData = 0;
             break;
@@ -953,10 +954,6 @@ void GameContext::setupEvent() { // todo necronomicon event
         }
 
         case Event::MATCH_AND_KEEP: {
-            if (disableMatchAndKeep) { // additional safeguard as it should also be prevented from spawning
-                regainControl();
-            }
-
             info.toSelectCards.clear();
 
             Card cards[6];
@@ -1992,9 +1989,7 @@ Event GameContext::getShrine(Random &eventRngCopy) {  // todo fix, this is slow
     Event tempShrines[20];
 
     for (auto shrine : shrineList) {
-        if (shrine != Event::MATCH_AND_KEEP || !disableMatchAndKeep) {
-            tempShrines[tempLength++] = shrine;
-        }
+        tempShrines[tempLength++] = shrine;
     }
 
     for (auto event : specialOneTimeEventList) {
@@ -2563,8 +2558,46 @@ void GameContext::chooseEventOption(int idx) {
             break;
         }
 
-        case Event::COLOSSEUM: // todo
-            regainControl();
+        case Event::COLOSSEUM:
+            // Two-phase combat event (info.eventData is the phase). Phase 0: the only option
+            // begins the fight against the slavers; on victory take the spoils and return to the
+            // event for the second choice. Phase 1: idx 0 leaves, idx 1 fights the champions
+            // (the Nobs) for a rare relic.
+            if (info.eventData == 0) {
+                info.eventData = 1;
+                const int goldAmt = rng.random(25, 35);
+                regainControlAction = [=, this](GameContext &gc) {
+                    Rewards reward;
+                    reward.addGold(goldAmt);
+                    reward.addCardReward(createCardReward(Room::EVENT));
+                    addPotionRewards(reward);
+                    gc.openCombatRewardScreen(reward);
+                    // After the slaver spoils, re-open the colosseum for the leave/fight choice.
+                    // returnToMapAction is the default for "leave"; "fight the Nobs" overrides it.
+                    gc.regainControlAction = [](GameContext &g) {
+                        g.screenState = ScreenState::EVENT_SCREEN;
+                        g.regainControlAction = returnToMapAction;
+                    };
+                };
+                enterBattle(MonsterEncounter::COLOSSEUM_EVENT_SLAVERS);
+
+            } else if (idx == 1) {
+                const int goldAmt = rng.random(25, 35);
+                const RelicId rareRelic = returnRandomRelic(RelicTier::RARE);
+                regainControlAction = [=, this](GameContext &gc) {
+                    Rewards reward;
+                    reward.addGold(goldAmt);
+                    reward.addRelic(rareRelic);
+                    reward.addCardReward(createCardReward(Room::EVENT));
+                    addPotionRewards(reward);
+                    gc.openCombatRewardScreen(reward);
+                    gc.regainControlAction = returnToMapAction;
+                };
+                enterBattle(MonsterEncounter::COLOSSEUM_EVENT_NOBS);
+
+            } else {
+                regainControl(); // leave with the spoils
+            }
             break;
 
         case Event::CURSED_TOME: {

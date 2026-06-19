@@ -162,13 +162,15 @@ std::ostream &GameAction::printDesc(std::ostream &os, const GameContext &gc) con
 }
 
 bool isValidMatchAndKeepEventAction(const GameContext &gc, const GameAction a) {
-//    const auto &m = matchAndKeepCardMap;
-//    const int idx1 = option / m.size();
-//    int idx2 = option % m.size();
-//    if (idx2 == idx1) {
-//        idx2 = idx1+1;
-//    }
-    return true;
+    // Two distinct in-range grid slots holding real cards (mirrors chooseMatchAndKeepCards' guard).
+    // A tight check matters so a divergent replay prefix is rejected here rather than asserting.
+    const int idx1 = a.getIdx1();
+    const int idx2 = a.getIdx2();
+    const auto &cards = gc.info.toSelectCards;
+    const int n = static_cast<int>(cards.size());
+    return idx1 >= 0 && idx1 < n && idx2 >= 0 && idx2 < n && idx1 != idx2
+        && cards[idx1].card.id != CardId::INVALID && cards[idx1].deckIdx != 0
+        && cards[idx2].card.id != CardId::INVALID && cards[idx2].deckIdx != 0;
 }
 
 bool isValidDesignerInSpireEventAction(const GameContext &gc, const GameAction a) {
@@ -831,7 +833,23 @@ std::vector<GameAction> GameAction::getAllActionsInState(const sts::GameContext 
 
         case ScreenState::EVENT_SCREEN:
             if (gc.curEvent == Event::MATCH_AND_KEEP) {
-                return {};
+                // Two-card grid select: offer every pair of distinct, not-yet-kept face cards
+                // (deckIdx == 0 marks a matched-and-kept slot). Each pick is a GameAction(i, j)
+                // routed to chooseMatchAndKeepCards.
+                std::vector<GameAction> actions;
+                const auto &cards = gc.info.toSelectCards;
+                const int n = static_cast<int>(cards.size());
+                for (int i = 0; i < n; ++i) {
+                    if (cards[i].card.id == CardId::INVALID || cards[i].deckIdx == 0) {
+                        continue;
+                    }
+                    for (int j = i + 1; j < n; ++j) {
+                        if (cards[j].card.id != CardId::INVALID && cards[j].deckIdx != 0) {
+                            actions.emplace_back(i, j);
+                        }
+                    }
+                }
+                return actions;
             } else {
                 return getAllActionsInEventState(gc);
             }
