@@ -1381,9 +1381,15 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("BanditBear", 2): sts.MonsterMoveId.BEAR_BEAR_HUG,
         ("BanditBear", 3): sts.MonsterMoveId.BEAR_LUNGE,
         
-        # Bandit Pointy
-        ("BanditPointy", 1): sts.MonsterMoveId.POINTY_ATTACK,
-        
+        # Masked Bandits (live ids BanditChild=Pointy, BanditLeader=Romeo; keyed to the live name
+        # map_move_id looks up). Byte ids read from live data + matched to engine damage:
+        #   Pointy ATTACK 5x2 = POINTY_ATTACK
+        #   Romeo CROSS_SLASH=1 (15 dmg), MOCK=2 (no dmg, turn 1), AGONIZING_SLASH=3 (10 + Weak)
+        ("BanditChild", 1): sts.MonsterMoveId.POINTY_ATTACK,
+        ("BanditLeader", 1): sts.MonsterMoveId.ROMEO_CROSS_SLASH,
+        ("BanditLeader", 2): sts.MonsterMoveId.ROMEO_MOCK,
+        ("BanditLeader", 3): sts.MonsterMoveId.ROMEO_AGONIZING_SLASH,
+
         # Gremlin Leader (byte ids from GremlinLeader.java: RALLY=2, ENCOURAGE=3, STAB=4)
         ("GremlinLeader", 2): sts.MonsterMoveId.GREMLIN_LEADER_RALLY,
         ("GremlinLeader", 3): sts.MonsterMoveId.GREMLIN_LEADER_ENCOURAGE,
