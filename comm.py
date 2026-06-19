@@ -2124,6 +2124,7 @@ _CARD_SELECT_TASK_BY_ACTION = {
     "ExhaustAction": sts.CardSelectTask.EXHAUST_ONE,               # True Grit+ etc. (exhaust a chosen hand card)
     "DiscoveryAction": sts.CardSelectTask.DISCOVERY,               # Discovery / Attack-Skill-Power Potion (confirmed live)
     "ChooseOneColorless": sts.CardSelectTask.DISCOVERY,           # Colorless Potion: 1 of 3 colorless (confirmed live)
+    "SkillFromDeckToHandAction": sts.CardSelectTask.SECRET_TECHNIQUE,  # Secret Technique (a Skill from the draw pile)
 }
 
 # Tasks whose candidates are freshly-generated cards offered on the screen (not drawn from a pile):
