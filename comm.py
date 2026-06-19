@@ -112,7 +112,8 @@ def map_character_class(spire_class: PlayerClass) -> sts.CharacterClass:
 # energy every 3 turns, Incense Burner Intangible every 6, Ink Bottle draw, Sundial energy). These
 # are the engine's persistent Player counter fields; inserterCounter is omitted (Defect orb slots,
 # inert for Ironclad). The per-TURN counts (attacksPlayedThisTurn etc. -- Kunai/Shuriken/Ornamental
-# Fan/Letter Opener/Velvet Choker) can't be synced: CommunicationMod doesn't expose them.
+# Fan/Letter Opener/Velvet Choker) are synced separately in convert_combat_state from the forked
+# CommunicationMod's per-turn fields.
 _RELIC_COUNTER_ATTR = {
     _normalize_relic_name("Pen Nib"): "penNibCounter",
     _normalize_relic_name("Nunchaku"): "nunchakuCounter",
@@ -535,6 +536,14 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
         # Convert player powers/buffs/debuffs (keyed on the stable power_id, not the display name)
         for power in player.powers:
             apply_player_power(bc, power.power_id, power.amount)
+
+        # Per-turn play counts (exposed by the forked CommunicationMod). The engine reads these
+        # absolutely -- Kunai/Shuriken/Ornamental Fan fire on every 3rd attack, Letter Opener on
+        # every 3rd skill, Velvet Choker/Normality lock at 6 cards -- so a mid-turn reconstruction
+        # must restore them or the search mis-times those triggers.
+        bc.player.cardsPlayedThisTurn = spire_game.cards_played_this_turn
+        bc.player.attacksPlayedThisTurn = spire_game.attacks_played_this_turn
+        bc.player.skillsPlayedThisTurn = spire_game.skills_played_this_turn
 
     # Restore per-combat relic counters (progress toward the next every-Nth trigger) from the live
     # relics; register_relics_from only copies ownership bits, leaving these at zero.
@@ -1772,15 +1781,6 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
             offered.append(sts.Card(card_id, spire_card.upgrades))
         rc.add_card_reward(offered)
                     
-    elif spire_game.screen_type == screen.ScreenType.REST:
-        # The engine derives campfire options from gc state (relics + keys). The Ruby Key (whose
-        # RECALL option is offered until taken) is the one input CommunicationMod never exposes, so
-        # infer it from the live options: an active site that does NOT offer RECALL means the key is
-        # already held. Set it (red = ruby) so the engine offers the same options as live -- and the
-        # net's representation matches -- instead of picking a Recall the live site no longer has.
-        if RestOption.RECALL not in spire_game.screen.rest_options:
-            gc.red_key = True
-
     elif spire_game.screen_type == screen.ScreenType.MAP:
         # The GameContext regenerates this seed's map (RNG-accurate, so it matches the live map);
         # we only need to place the player on their current node so getAllActionsInState offers the
@@ -1875,6 +1875,14 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
             rid = map_relic_id(spire_relic.name)
             if rid in _OPTION_GATING_RELIC_VALUES:
                 gc.set_relic_value(rid, spire_relic.counter)
+
+    # Act-4 keys (forked CommunicationMod exposes them on every screen). They gate out-of-combat
+    # options the engine derives from gc state -- the Ruby (red) key's RECALL at a campfire is the
+    # most visible -- and feed the net's representation. Set from the live values so the engine offers
+    # exactly the live choices.
+    gc.red_key = spire_game.has_ruby_key
+    gc.green_key = spire_game.has_emerald_key
+    gc.blue_key = spire_game.has_sapphire_key
 
     # Set the potion belt (capacity + held). Without this the gc has an empty belt, so the sim
     # offers a buy-potion action in the shop even when the live belt is full -- the net then picks

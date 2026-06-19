@@ -48,6 +48,15 @@ class Game:
         self.card_in_play = None
         self.turn = 0
         self.cards_discarded_this_turn = 0
+        self.cards_played_this_turn = 0
+        self.attacks_played_this_turn = 0
+        self.skills_played_this_turn = 0
+
+        # Act-4 keys (exposed by CommunicationMod's `keys` object)
+
+        self.has_ruby_key = False
+        self.has_emerald_key = False
+        self.has_sapphire_key = False
 
         # Current Screen
 
@@ -115,6 +124,16 @@ class Game:
                 game.card_in_play = spirecomm.spire.card.Card.from_json(game.card_in_play)
             game.turn = combat_state.get("turn", 0)
             game.cards_discarded_this_turn = combat_state.get("cards_discarded_this_turn", 0)
+            game.cards_played_this_turn = combat_state.get("cards_played_this_turn", 0)
+            game.attacks_played_this_turn = combat_state.get("attacks_played_this_turn", 0)
+            game.skills_played_this_turn = combat_state.get("skills_played_this_turn", 0)
+
+        # Act-4 keys
+
+        keys = json_state.get("keys", {})
+        game.has_ruby_key = keys.get("ruby", False)
+        game.has_emerald_key = keys.get("emerald", False)
+        game.has_sapphire_key = keys.get("sapphire", False)
 
         # Available Commands
 
