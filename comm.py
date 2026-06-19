@@ -1336,6 +1336,7 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("TheCollector", 2): sts.MonsterMoveId.THE_COLLECTOR_FIREBALL,
         ("TheCollector", 3): sts.MonsterMoveId.THE_COLLECTOR_BUFF,
         ("TheCollector", 4): sts.MonsterMoveId.THE_COLLECTOR_MEGA_DEBUFF,
+        ("TheCollector", 5): sts.MonsterMoveId.THE_COLLECTOR_SPAWN,   # re-summon (engine: "5 spawn")
         
         # Shelled Parasite
         ("ShelledParasite", 1): sts.MonsterMoveId.SHELLED_PARASITE_FELL,
