@@ -1746,8 +1746,13 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
         rc.add_card_reward(offered)
                     
     elif spire_game.screen_type == screen.ScreenType.REST:
-        # The C++ code knows what rest options are available
-        pass
+        # The engine derives campfire options from gc state (relics + keys). The Ruby Key (whose
+        # RECALL option is offered until taken) is the one input CommunicationMod never exposes, so
+        # infer it from the live options: an active site that does NOT offer RECALL means the key is
+        # already held. Set it (red = ruby) so the engine offers the same options as live -- and the
+        # net's representation matches -- instead of picking a Recall the live site no longer has.
+        if RestOption.RECALL not in spire_game.screen.rest_options:
+            gc.red_key = True
 
     elif spire_game.screen_type == screen.ScreenType.MAP:
         # The GameContext regenerates this seed's map (RNG-accurate, so it matches the live map);
