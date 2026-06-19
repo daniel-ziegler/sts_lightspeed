@@ -455,6 +455,13 @@ PYBIND11_MODULE(slaythespire, m) {
              "add a card to the deck"
         )
         .def("obtain_relic", &GameContext::obtainRelic, "add a relic to the player")
+        .def("set_relic_value", [](GameContext &gc, RelicId relic, int value) {
+            if (gc.relics.has(relic)) {
+                gc.relics.getRelicValueRef(relic) = value;
+            }
+        }, "relic"_a, "value"_a,
+           "set a held relic's stored value/counter to match the live game (e.g. Girya's lift "
+           "count, which gates whether LIFT is offered at a campfire)")
         .def("setup_event", &GameContext::setupEvent,
              "initialize the current event (gc.cur_event) into EVENT_SCREEN state, populating the "
              "event-specific info fields getValidEventSelectBits/the NN reads; consumes RNG for "

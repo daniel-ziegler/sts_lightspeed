@@ -1833,6 +1833,12 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
         # Add each relic to the GameContext
         for sts_relic in sts_relics:
             gc.obtain_relic(sts_relic.id)
+        # Sync Girya's stored value (its lift count, 0-3): the engine offers LIFT at a campfire only
+        # while the value != 3, so without this it would offer a Lift the live site (counter maxed)
+        # no longer does, and the net could pick that unavailable option.
+        for spire_relic in spire_game.relics:
+            if map_relic_id(spire_relic.name) == sts.RelicId.GIRYA:
+                gc.set_relic_value(sts.RelicId.GIRYA, spire_relic.counter)
 
     # Set the potion belt (capacity + held). Without this the gc has an empty belt, so the sim
     # offers a buy-potion action in the shop even when the live belt is full -- the net then picks
