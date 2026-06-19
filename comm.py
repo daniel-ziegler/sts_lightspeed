@@ -2102,7 +2102,8 @@ _DISCOVERY_TASKS = frozenset({sts.CardSelectTask.DISCOVERY})
 # spirecomm action name can be single (True Grit -> one card) or multi (Elixir Potion / Purity ->
 # exhaust any number), so these are keyed separately and chosen by num_cards in the handler.
 _MULTI_CARD_SELECT_TASK_BY_ACTION = {
-    "ExhaustAction": sts.CardSelectTask.EXHAUST_MANY,   # Elixir Potion / Purity (exhaust any number)
+    "ExhaustAction": sts.CardSelectTask.EXHAUST_MANY,    # Elixir Potion / Purity (exhaust any number)
+    "GamblingChipAction": sts.CardSelectTask.GAMBLE,     # Gambling Chip / Gambler's Brew (discard any number, redraw)
 }
 
 
@@ -2276,20 +2277,15 @@ class STSLightspeedAgent:
         pile index back to the live screen card. Fails loud on an unmapped action or a select the
         search can't place on the live screen."""
         action_name = self.game.current_action
-        task = _CARD_SELECT_TASK_BY_ACTION.get(action_name)
-        if task is None:
-            cards = [c.name for c in self.game.screen.cards]
-            raise NotImplementedError(
-                f"in-combat card-select current_action {action_name!r} unmapped "
-                f"(screen {self.game.screen_type}, {len(cards)} cards: {cards}); "
-                f"add it to _CARD_SELECT_TASK_BY_ACTION")
         # CardRewardScreen (the in-combat Discovery/potion choice) has no num_cards; it always picks 1.
         num = getattr(self.game.screen, "num_cards", None) or 1
         if num != 1:
-            # "Choose any number" exhaust/gamble select. The battle search does not enumerate these
-            # subsets -- it resolves them to "select nothing" -- so playout_battle (and thus RL
-            # training) always picks zero. Drive the search the same way and forward whatever it
-            # selects (empty => confirm nothing), so live play matches training instead of guessing.
+            # "Choose any number" select: exhaust any number (Elixir Potion / Purity -> EXHAUST_MANY)
+            # or discard any number then redraw (Gambling Chip / Gambler's Brew -> GAMBLE). Keyed
+            # separately because a few of these share a spirecomm action name with a single-card
+            # select. The battle search does not enumerate these subsets -- it resolves them to
+            # "select nothing" -- so playout_battle (and thus RL training) always picks zero. Drive
+            # the search the same way and forward whatever it selects (empty => confirm nothing).
             multi_task = _MULTI_CARD_SELECT_TASK_BY_ACTION.get(action_name)
             if multi_task is None:
                 raise NotImplementedError(
@@ -2311,6 +2307,14 @@ class STSLightspeedAgent:
             print(f"[mcts] multi-select ({action_name}, {multi_task}) -> {len(chosen)} card(s)",
                   file=sys.stderr)
             return CardSelectAction(chosen)
+
+        task = _CARD_SELECT_TASK_BY_ACTION.get(action_name)
+        if task is None:
+            cards = [c.name for c in self.game.screen.cards]
+            raise NotImplementedError(
+                f"in-combat card-select current_action {action_name!r} unmapped "
+                f"(screen {self.game.screen_type}, {len(cards)} cards: {cards}); "
+                f"add it to _CARD_SELECT_TASK_BY_ACTION")
         offered = self.game.screen.cards
 
         gc = spirecomm_to_gamecontext(self.game)
