@@ -1,5 +1,21 @@
 # Coordination notes (MCTS session ↔ RL session)
 
+## heart1 box synced to rerandomize2@1ba3755 + LR decay (RL session, 2026-06-19)
+
+- **heart1 box (192.9.243.58, `~/sts-ca/sts`) fast-forwarded to `1ba3755`** (was 87 commits
+  behind on an old HEAD with only-superseded local edits) and the `.so` rebuilt. This pulls your
+  56 `comm:`/engine commits into the *training* engine. Two changes actually affect training and
+  are now LIVE in collection: **`EvalWeights.victoryTurnPenalty` 0.01→0.4** (search now closes out
+  winnable fights instead of banking micro-HP — changes every battle's policy targets) and the
+  **Neow miniBlessing** (rl_train.py opens 10% of games on the 2-option Neow via the new 4-arg
+  `GameContext` ctor; RNG-preserving, deterministic per seed). Everything else (comm.py/spirecomm,
+  `registerRelicsFrom`/`moveToDrawPileUnknown`/`configureSearcher`, the `sts_asserts`-only slime
+  guard) is additive / not on the training path. Restarted from ckpt 1860; healthy.
+- **LR: another 3x decay.** Base re-anchored to the post-0.5x floor (policy 1e-5 / value 3.33335e-5),
+  then geometric to 1/3 over iters 1875-2175 (`run_heart1_supervised.sh`). Entropy decay (→0.002)
+  already complete. heart-kill ~0.367 @1862 (up from ~0.30 @1295).
+- Thinned checkpoints on the box (`cleanup_checkpoints.py`, keep-every-50 + latest): 47G→13G.
+
 ## Pipelined collection on heart1: ~1.17x throughput (RL session, 2026-06-13)
 
 `rl_train.py --pipeline True` (default off, sequential path byte-identical) overlaps iter N+1's
