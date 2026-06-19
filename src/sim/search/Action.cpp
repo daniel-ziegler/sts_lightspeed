@@ -187,7 +187,19 @@ bool isValidSingleCardSelectAction(const BattleContext &bc, const search::Action
             return a.getSelectIdx() >= 0 && a.getSelectIdx() < bc.cards.drawPile.size();
 
         case CardSelectTask::EXHAUST_MANY:
-        case CardSelectTask::GAMBLE:
+        case CardSelectTask::GAMBLE: {
+            // A single pick adds one more card to the running selection.
+            const int idx = a.getSelectIdx();
+            if (idx < 0 || idx >= bc.cards.cardsInHand) {
+                return false;
+            }
+            if (bc.cardSelectInfo.selectedBits & (1 << idx)) {
+                return false; // already picked
+            }
+            const int numSelected = __builtin_popcount(static_cast<unsigned>(bc.cardSelectInfo.selectedBits));
+            return bc.cardSelectInfo.canPickAnyNumber || numSelected < bc.cardSelectInfo.pickCount;
+        }
+
         default:
             return false;
     }
@@ -389,6 +401,14 @@ void executeSingleCardSelectActionHelper(BattleContext &bc, search::Action a) {
             bc.chooseWarcryCard(idx);
             break;
 
+        case CardSelectTask::EXHAUST_MANY:
+        case CardSelectTask::GAMBLE:
+            // Add the card to the running selection and re-open the screen to pick another (or
+            // confirm). The set is applied all at once on the MULTI_CARD_SELECT confirm.
+            bc.cardSelectInfo.selectedBits |= (1 << idx);
+            bc.addToBot(Actions::OpenCardSelectScreen());
+            break;
+
         case CardSelectTask::MEDITATE:
         case CardSelectTask::NIGHTMARE:
         case CardSelectTask::RECYCLE:
@@ -536,10 +556,22 @@ std::vector<search::Action> search::Action::enumerateCardSelectActions(const Bat
             break;
 
         case CardSelectTask::EXHAUST_MANY:
-        case CardSelectTask::GAMBLE:
-            // just dont deal with this right now
-            actions.push_back({search::Action(search::ActionType::MULTI_CARD_SELECT, 0)});
+        case CardSelectTask::GAMBLE: {
+            // Sequential multi-select: offer each not-yet-picked hand card (while more may be
+            // picked), plus a confirm carrying the running selection. See CardSelectInfo::selectedBits.
+            const auto &csi = bc.cardSelectInfo;
+            const int numSelected = __builtin_popcount(static_cast<unsigned>(csi.selectedBits));
+            const bool canSelectMore = csi.canPickAnyNumber || numSelected < csi.pickCount;
+            if (canSelectMore) {
+                for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+                    if (!(csi.selectedBits & (1 << i))) {
+                        actions.push_back({search::Action(search::ActionType::SINGLE_CARD_SELECT, i)});
+                    }
+                }
+            }
+            actions.push_back({search::Action(search::ActionType::MULTI_CARD_SELECT, csi.selectedBits)});
             break;
+        }
 
         default:
 #ifdef sts_asserts

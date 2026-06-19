@@ -819,10 +819,22 @@ void search::BattleSearcher::enumerateCardSelectActions(search::BattleSearcher::
             break;
 
         case CardSelectTask::EXHAUST_MANY:
-        case CardSelectTask::GAMBLE:
-            // just dont deal with this right now
-            node.edges.push_back({search::Action(search::ActionType::MULTI_CARD_SELECT, 0)});
+        case CardSelectTask::GAMBLE: {
+            // Sequential multi-select: offer each not-yet-picked hand card (while more may be
+            // picked), plus a confirm carrying the running selection. See CardSelectInfo::selectedBits.
+            const auto &csi = bc.cardSelectInfo;
+            const int numSelected = __builtin_popcount(static_cast<unsigned>(csi.selectedBits));
+            const bool canSelectMore = csi.canPickAnyNumber || numSelected < csi.pickCount;
+            if (canSelectMore) {
+                for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+                    if (!(csi.selectedBits & (1 << i))) {
+                        node.edges.push_back({search::Action(search::ActionType::SINGLE_CARD_SELECT, i)});
+                    }
+                }
+            }
+            node.edges.push_back({search::Action(search::ActionType::MULTI_CARD_SELECT, csi.selectedBits)});
             break;
+        }
 
         default:
 #ifdef sts_asserts

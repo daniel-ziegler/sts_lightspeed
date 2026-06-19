@@ -750,8 +750,9 @@ search::Action search::SimpleAgent::chooseBattleCardSelect(BattleContext &bc) {
 
         case CardSelectTask::EXHAUST_MANY:
         case CardSelectTask::GAMBLE:
-            // just select none
-            return search::Action(search::ActionType::MULTI_CARD_SELECT, 0);
+            // Rollout policy: stop and confirm whatever has been picked so far (the tree policy
+            // may have already selected some cards via SINGLE_CARD_SELECT).
+            return search::Action(search::ActionType::MULTI_CARD_SELECT, bc.cardSelectInfo.selectedBits);
 
         default:
 #ifdef sts_asserts

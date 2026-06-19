@@ -67,6 +67,11 @@ namespace sts {
         int data0 = 0;
         bool setCostToZero = true;
 
+        // For the sequential multi-select tasks (EXHAUST_MANY, GAMBLE): the cards picked so far,
+        // as a bitmask over hand indices. Each SINGLE_CARD_SELECT sets a bit and re-opens the
+        // screen; a MULTI_CARD_SELECT(selectedBits) confirms and applies the whole set at once.
+        int selectedBits = 0;
+
         CardSelectTask cardSelectTask;
 
         std::array<CardId, 3>& discovery_Cards() { return cards; }
@@ -81,6 +86,7 @@ namespace sts {
                    pickCount == rhs.pickCount &&
                    data0 == rhs.data0 &&
                    setCostToZero == rhs.setCostToZero &&
+                   selectedBits == rhs.selectedBits &&
                    cardSelectTask == rhs.cardSelectTask;
         }
     };

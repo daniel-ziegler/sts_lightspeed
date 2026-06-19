@@ -874,14 +874,34 @@ void _CodexAction::operator()(BattleContext &bc) const {
 }
 
 void _ExhaustMany::operator()(BattleContext &bc) const {
+    // Exhaust up to `limit` cards of the player's choice (Purity: 3/5; Elixir potion: 10).
+    if (bc.cards.cardsInHand == 0) {
+        return;
+    }
     bc.inputState = InputState::CARD_SELECT;
     bc.cardSelectInfo.cardSelectTask = CardSelectTask::EXHAUST_MANY;
     bc.cardSelectInfo.pickCount = limit;
+    bc.cardSelectInfo.canPickAnyNumber = false;
+    bc.cardSelectInfo.canPickZero = true;
+    bc.cardSelectInfo.selectedBits = 0;
 }
 
 void _GambleAction::operator()(BattleContext &bc) const {
+    // Gambling Chip: discard any number of cards, then draw that many.
+    if (bc.cards.cardsInHand == 0) {
+        return;
+    }
     bc.inputState = InputState::CARD_SELECT;
     bc.cardSelectInfo.cardSelectTask = CardSelectTask::GAMBLE;
+    bc.cardSelectInfo.canPickAnyNumber = true;
+    bc.cardSelectInfo.canPickZero = true;
+    bc.cardSelectInfo.selectedBits = 0;
+}
+
+void _OpenCardSelectScreen::operator()(BattleContext &bc) const {
+    // Re-open the current card-select screen after a sequential pick (cardSelectInfo, incl. the
+    // accumulated selectedBits, is preserved). Lets the searcher pick one card at a time.
+    bc.inputState = InputState::CARD_SELECT;
 }
 
 void _ToolboxAction::operator()(BattleContext &bc) const {

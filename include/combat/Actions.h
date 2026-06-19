@@ -84,6 +84,7 @@ namespace sts {
     X(CodexAction) \
     X(ExhaustMany, int,limit) \
     X(GambleAction) \
+    X(OpenCardSelectScreen) \
     X(ToolboxAction) \
     X(FiendFireAction, int,targetIdx, int,calculatedDamage) \
     X(SwordBoomerangAction, int,baseDamage) \
