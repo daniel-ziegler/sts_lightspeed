@@ -107,6 +107,12 @@ def map_character_class(spire_class: PlayerClass) -> sts.CharacterClass:
 # normalized relic id -> the writable Player counter field. Restored from the live relic.counter
 # so a converted mid-fight state keeps its progress (e.g. Pen Nib's next-attack double damage).
 # Letter Opener isn't here -- the engine doesn't track its counter.
+# Per-combat relic counters (progress toward an every-Nth trigger): synced onto bc.player so the
+# search models WHEN the relic next fires (Nunchaku/Pen Nib energy & double-damage, Happy Flower
+# energy every 3 turns, Incense Burner Intangible every 6, Ink Bottle draw, Sundial energy). These
+# are the engine's persistent Player counter fields; inserterCounter is omitted (Defect orb slots,
+# inert for Ironclad). The per-TURN counts (attacksPlayedThisTurn etc. -- Kunai/Shuriken/Ornamental
+# Fan/Letter Opener/Velvet Choker) can't be synced: CommunicationMod doesn't expose them.
 _RELIC_COUNTER_ATTR = {
     _normalize_relic_name("Pen Nib"): "penNibCounter",
     _normalize_relic_name("Nunchaku"): "nunchakuCounter",
@@ -115,6 +121,11 @@ _RELIC_COUNTER_ATTR = {
     _normalize_relic_name("Incense Burner"): "incenseBurnerCounter",
     _normalize_relic_name("Sundial"): "sundialCounter",
 }
+
+# Relics whose persistent stored VALUE gates an out-of-combat option the net can pick; their live
+# counter is synced onto the gc (see spirecomm_to_gamecontext) so the engine offers exactly the live
+# choices. GIRYA -> LIFT at a campfire; WING_BOOTS -> map "bypass to any next node" routes.
+_OPTION_GATING_RELIC_VALUES = frozenset({sts.RelicId.GIRYA, sts.RelicId.WING_BOOTS})
 
 
 # Powers are keyed on the live game's stable power_id (the json "id", e.g. "DexLoss"), NOT the
@@ -1854,12 +1865,16 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
         # Add each relic to the GameContext
         for sts_relic in sts_relics:
             gc.obtain_relic(sts_relic.id)
-        # Sync Girya's stored value (its lift count, 0-3): the engine offers LIFT at a campfire only
-        # while the value != 3, so without this it would offer a Lift the live site (counter maxed)
-        # no longer does, and the net could pick that unavailable option.
+        # Sync the stored value of relics whose value GATES AN OUT-OF-COMBAT OPTION the net could
+        # pick -- otherwise the engine offers a choice the live game no longer does and the net may
+        # pick it (fail-loud). Both mirror the game's own counter, so the live counter maps straight
+        # to the engine value:
+        #   GIRYA       lift count (0-3); LIFT offered at a campfire only while value != 3
+        #   WING_BOOTS  bypass charges remaining (3->0); "go to any next node" offered while value>0
         for spire_relic in spire_game.relics:
-            if map_relic_id(spire_relic.name) == sts.RelicId.GIRYA:
-                gc.set_relic_value(sts.RelicId.GIRYA, spire_relic.counter)
+            rid = map_relic_id(spire_relic.name)
+            if rid in _OPTION_GATING_RELIC_VALUES:
+                gc.set_relic_value(rid, spire_relic.counter)
 
     # Set the potion belt (capacity + held). Without this the gc has an empty belt, so the sim
     # offers a buy-potion action in the shop even when the live belt is full -- the net then picks
