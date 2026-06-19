@@ -1708,7 +1708,11 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
         # Hand select screen (in-combat: Warcry/Headbutt/etc.). Same to_select_cards reconstruction.
         hand_screen = spire_game.screen
         info.select_screen_type = sts.CardSelectScreenType.DUPLICATE
-        info.to_select_count = hand_screen.num_cards
+        # num_cards is the screen's max_cards: 99 for an any-number select, and sometimes absent
+        # (None) on the combat-start frame of one (e.g. Gambling Chip). Either way you can never
+        # select more than the hand holds, so clamp; None falls back to the whole hand.
+        info.to_select_count = min(hand_screen.num_cards or len(hand_screen.cards),
+                                   len(hand_screen.cards))
         info.clear_to_select_cards()
         for i, hand_card in enumerate(hand_screen.cards):
             card_id = map_card_id(hand_card.card_id)
@@ -2279,18 +2283,17 @@ class STSLightspeedAgent:
         action_name = self.game.current_action
         # CardRewardScreen (the in-combat Discovery/potion choice) has no num_cards; it always picks 1.
         num = getattr(self.game.screen, "num_cards", None) or 1
-        if num != 1:
-            # "Choose any number" select: exhaust any number (Elixir Potion / Purity -> EXHAUST_MANY)
-            # or discard any number then redraw (Gambling Chip / Gambler's Brew -> GAMBLE). Keyed
-            # separately because a few of these share a spirecomm action name with a single-card
-            # select. The battle search does not enumerate these subsets -- it resolves them to
-            # "select nothing" -- so playout_battle (and thus RL training) always picks zero. Drive
-            # the search the same way and forward whatever it selects (empty => confirm nothing).
-            multi_task = _MULTI_CARD_SELECT_TASK_BY_ACTION.get(action_name)
-            if multi_task is None:
-                raise NotImplementedError(
-                    f"multi-card in-combat select (num_cards={num}, {action_name!r}) unmapped; "
-                    f"add it to _MULTI_CARD_SELECT_TASK_BY_ACTION")
+        single_task = _CARD_SELECT_TASK_BY_ACTION.get(action_name)
+        multi_task = _MULTI_CARD_SELECT_TASK_BY_ACTION.get(action_name)
+        # Route to the multi-card path for a "choose any number" select. GamblingChip is ONLY ever
+        # multi (discard any number at combat start), so route it by name -- the screen's max_cards
+        # is sometimes absent on the combat-start frame, which would otherwise misroute it to the
+        # single path. ExhaustAction is in BOTH tables (True Grit = one card; Elixir/Purity = any
+        # number), so for it we disambiguate on num.
+        if multi_task is not None and (single_task is None or num != 1):
+            # The battle search does not enumerate these subsets -- it resolves them to "select
+            # nothing" -- so playout_battle (and thus RL training) always picks zero. Drive the
+            # search the same way and forward whatever it selects (empty => confirm nothing).
             gc = spirecomm_to_gamecontext(self.game)
             bc, _ = convert_combat_state(self.game, gc)
             bc.open_card_select(multi_task, min(num, bc.cards.cardsInHand))
@@ -2308,7 +2311,7 @@ class STSLightspeedAgent:
                   file=sys.stderr)
             return CardSelectAction(chosen)
 
-        task = _CARD_SELECT_TASK_BY_ACTION.get(action_name)
+        task = single_task
         if task is None:
             cards = [c.name for c in self.game.screen.cards]
             raise NotImplementedError(
