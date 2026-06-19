@@ -26,7 +26,12 @@ namespace sts::search {
     struct EvalWeights {
         double winBonus = 53.0;
         double potionWeight = 11.0;
-        double victoryTurnPenalty = 0.01;
+        // Per-turn cost subtracted from a victory's score. Must be large enough to break ties
+        // toward finishing a winnable fight (otherwise the search banks micro-HP by stalling,
+        // since end-of-fight HP is weighted ~1.0/HP and this term is the only pressure to close
+        // out), but small enough not to trade real HP for speed. Sweepable live via comm.py's
+        // STS_VICTORY_TURN_PENALTY env knob.
+        double victoryTurnPenalty = 0.4;
         double monsterDamageWeight = 37.0;
         double aliveWeight = 3.4;
         double energyWasteWeight = 1.75;

@@ -217,7 +217,9 @@ _PLAYER_POWER_ID_TO_STATUS = {
     'StaticDischarge': sts.PlayerStatus.STATIC_DISCHARGE,
     'Strength': sts.PlayerStatus.STRENGTH,
     'Surrounded': sts.PlayerStatus.SURROUNDED,
-    'TheBomb': sts.PlayerStatus.THE_BOMB,
+    # 'TheBomb' is NOT routed through the generic buff() path: the live power id carries a per-bomb
+    # index suffix ('TheBomb0'/'TheBomb1'/...) and reports countdown-vs-damage separately, so it's
+    # handled specially in convert_combat_state (see apply_the_bomb).
     'Thorns': sts.PlayerStatus.THORNS,
     'Thousand Cuts': sts.PlayerStatus.THOUSAND_CUTS,
     'Tools Of The Trade': sts.PlayerStatus.TOOLS_OF_THE_TRADE,
@@ -338,6 +340,23 @@ def apply_player_power(bc: sts.BattleContext, power_id: str, amount: int) -> Non
         bc.player.debuff(status, amount, False)
     else:
         bc.player.buff(status, amount)
+
+
+def apply_the_bomb(bc: sts.BattleContext, countdown: int, damage: int) -> None:
+    """Place a live The Bomb power into the engine's countdown slots. The engine holds each bomb's
+    explosion damage in bomb1/bomb2/bomb3, where bombN fires N end-of-turns from now (bomb1 at the
+    end of this turn, then the slots shift down). The live power reports the turns-until-explosion in
+    `amount` and the explosion damage in `damage`, so damage goes into bomb{countdown}. Multiple
+    bombs at the same countdown stack in the same slot, matching the engine's single DamageAllEnemy."""
+    if not (1 <= countdown <= 3):
+        raise ValueError(f"The Bomb countdown {countdown} outside the engine's 3 slots "
+                         f"(damage={damage}); live power desync")
+    if countdown == 1:
+        bc.player.bomb1 += damage
+    elif countdown == 2:
+        bc.player.bomb2 += damage
+    else:
+        bc.player.bomb3 += damage
 
 
 def apply_monster_power(sts_monster, power_id: str, amount: int) -> None:
@@ -533,8 +552,14 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
         bc.player.energy = player.energy
         bc.player.block = player.block
             
-        # Convert player powers/buffs/debuffs (keyed on the stable power_id, not the display name)
+        # Convert player powers/buffs/debuffs (keyed on the stable power_id, not the display name).
+        # The Bomb is special-cased: its live id carries a per-bomb index ('TheBomb0', 'TheBomb1',
+        # ...) and it reports countdown and damage separately, so it can't go through the generic
+        # buff() path (which would treat the countdown as the buff amount and always land slot 3).
         for power in player.powers:
+            if power.power_id.startswith("TheBomb"):
+                apply_the_bomb(bc, power.amount, power.damage)
+                continue
             apply_player_power(bc, power.power_id, power.amount)
 
         # Per-turn play counts (exposed by the forked CommunicationMod). The engine reads these
@@ -2241,6 +2266,16 @@ class STSLightspeedAgent:
         # the agent's defaults supply the jointly-tuned exploration/widening/eval weights.
         self.search_agent = sts.Agent()
         self.search_agent.simulation_count_base = 1000
+        # Live-sweepable override for the victory turn penalty (per-turn score cost of a win). The
+        # compiled default already finishes winnable fights promptly; set STS_VICTORY_TURN_PENALTY
+        # to retune without a C++ rebuild. Read-modify-write the whole EvalWeights struct so the
+        # change sticks regardless of pybind's nested-member return policy.
+        _vtp = os.environ.get("STS_VICTORY_TURN_PENALTY")
+        if _vtp is not None:
+            ew = self.search_agent.eval_weights
+            ew.victory_turn_penalty = float(_vtp)
+            self.search_agent.eval_weights = ew
+            print(f"[search] victory_turn_penalty override = {ew.victory_turn_penalty}", file=sys.stderr)
 
     def change_class(self, new_class):
         self.chosen_class = new_class

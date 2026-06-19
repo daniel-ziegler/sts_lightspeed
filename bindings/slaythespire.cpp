@@ -880,6 +880,12 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("nunchakuCounter", &Player::nunchakuCounter)
         .def_readwrite("penNibCounter", &Player::penNibCounter)
         .def_readwrite("sundialCounter", &Player::sundialCounter)
+        // The Bomb countdown slots: bombN explodes for that much damage to all enemies N end-of-turns
+        // from now (bomb1 fires this end of turn, then slots shift down). Writable so a converted
+        // mid-fight state restores in-flight bombs at their correct countdown instead of dropping them.
+        .def_readwrite("bomb1", &Player::bomb1)
+        .def_readwrite("bomb2", &Player::bomb2)
+        .def_readwrite("bomb3", &Player::bomb3)
         .def("hasStatus", [](const Player &p, PlayerStatus s) -> bool {
             return p.hasStatusRuntime(s);
         })
