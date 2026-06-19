@@ -90,6 +90,10 @@ void def_value(pybind11::class_<C> &cls, const char *name, T C::*m) {
 PYBIND11_MODULE(slaythespire, m) {
     m.doc() = "pybind11 example plugin"; // optional module docstring
     m.def("play", &sts::py::play, "play Slay the Spire Console");
+    m.def("potion_requires_target", &sts::potionRequiresTarget,
+          "whether a potion needs a target monster (true only for Fear/Fire/Poison/Weak); the "
+          "authoritative source vs spirecomm's requires_target, which mis-flags AOE potions like "
+          "Explosive");
     m.def("get_seed_str", &SeedHelper::getString, "gets the integral representation of seed string used in the game ui");
     m.def("get_seed_long", &SeedHelper::getLong, "gets the seed string representation of an integral seed");
 

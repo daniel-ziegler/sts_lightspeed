@@ -1918,8 +1918,14 @@ def map_search_action_to_spirecomm(action: "sts.Action", bc: "sts.BattleContext"
         # "Selected potion cannot be used."
         if action.get_target_idx() > 5:
             return PotionAction(False, potion=potion)
+        # Use the ENGINE's notion of whether the potion targets, not spirecomm's requires_target:
+        # spirecomm mis-flags AOE potions (e.g. Explosive Potion) as requires_target, which would
+        # send us mapping the search's meaningless default target_idx (often 0, an empty/reserved
+        # sim slot) and raise. Only Fear/Fire/Poison/Weak truly target. spirecomm's PotionAction
+        # appends a target only when target_index is not None, so a target-less AOE potion is fine.
+        needs_target = sts.potion_requires_target(map_potion_id(potion.potion_id))
         target_idx = (_sim_target_to_spire_index(action.get_target_idx(), slot_to_spire)
-                      if potion.requires_target else None)
+                      if needs_target else None)
         return PotionAction(True, potion=potion, target_index=target_idx)
             
     elif action_type == sts.ActionType.END_TURN:
