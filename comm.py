@@ -532,30 +532,41 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
         if attr is not None:
             setattr(bc.player, attr, spire_relic.counter)
 
-    # Card piles conversion - create CardInstance objects from spirecomm cards
-    for spire_card in spire_game.hand:
+    # Card piles conversion - create CardInstance objects from spirecomm cards.
+    # Every card needs a DISTINCT uniqueId: the engine tracks cards through hand/queue/piles by id
+    # (e.g. removeFromHandById on play), so leaving them all at the default -1 makes a played card
+    # fail to leave the search's simulated hand -- the searcher then thinks it can replay its best
+    # card every turn, massively over-valuing offense. Assign ids sequentially and leave
+    # next_unique_card_id past the highest so cards generated mid-search don't collide.
+    _uid = 0
+    def _add(spire_card, mover):
+        nonlocal _uid
         card_instance = convert_spire_card_to_instance(spire_card)
-        bc.cards.moveToHand(card_instance)
-    
+        card_instance.uniqueId = _uid
+        _uid += 1
+        mover(card_instance)
+
+    for spire_card in spire_game.hand:
+        _add(spire_card, bc.cards.moveToHand)
+
     if spire_game.draw_pile:
         # Add to the UNKNOWN region, not the known top: the player can't actually see the draw
         # order, so the searcher must draw stochastically (chance nodes) like native play.
         # moveToDrawPileTop would mark the whole pile known-order, letting the search "cheat" on
         # a reconstructed order and e.g. decline to block because it thinks a Defend is coming.
         for spire_card in spire_game.draw_pile:
-            card_instance = convert_spire_card_to_instance(spire_card)
-            bc.cards.moveToDrawPileUnknown(card_instance)
-        
+            _add(spire_card, bc.cards.moveToDrawPileUnknown)
+
     if spire_game.discard_pile:
         for spire_card in spire_game.discard_pile:
-            card_instance = convert_spire_card_to_instance(spire_card)
-            bc.cards.moveToDiscardPile(card_instance)
-        
+            _add(spire_card, bc.cards.moveToDiscardPile)
+
     if spire_game.exhaust_pile:
         for spire_card in spire_game.exhaust_pile:
-            card_instance = convert_spire_card_to_instance(spire_card)
-            bc.cards.moveToExhaustPile(card_instance)
-    
+            _add(spire_card, bc.cards.moveToExhaustPile)
+
+    bc.cards.next_unique_card_id = _uid
+
     # Monster states conversion. The live game keeps every monster in a fixed positional slot and
     # reports dead/split ones as is_gone entries that still occupy their slot, so a converted slime
     # fight can have a still-splittable large slime sitting directly beside a live monster. The

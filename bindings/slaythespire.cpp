@@ -1017,6 +1017,10 @@ PYBIND11_MODULE(slaythespire, m) {
     // CardManager bindings
     pybind11::class_<CardManager> cardManager(m, "CardManager");
     cardManager.def_readwrite("cardsInHand", &CardManager::cardsInHand)
+        .def_readwrite("next_unique_card_id", &CardManager::nextUniqueCardId,
+            "the counter the engine assigns to each new in-battle card; reconstructing a state must "
+            "give every card a distinct id (cards are tracked through hand/queue/piles by uniqueId) "
+            "and leave this past the highest assigned id so generated cards don't collide")
         .def_property_readonly("hand", [](CardManager &cm) {
             return std::vector<CardInstance>(cm.hand.begin(), cm.hand.begin() + cm.cardsInHand);
         })
