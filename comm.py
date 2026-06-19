@@ -1738,10 +1738,12 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
     elif spire_game.screen_type == screen.ScreenType.MAP:
         # The GameContext regenerates this seed's map (RNG-accurate, so it matches the live map);
         # we only need to place the player on their current node so getAllActionsInState offers the
-        # real next-row choices. At game start current_node.y is -1 (no node entered yet), which
-        # correctly yields the first row.
+        # real next-row choices. Valid in-act rows are 0..14. At game start current_node.y is -1, and
+        # at the START of a new act the live game reports the just-cleared boss as y=15 (x=-1); both
+        # must leave curMapNodeY at the engine's default -1, which yields the act's first row.
+        # Copying y=15 would index a 15-row map array out of bounds (getNode -> array::at(15)).
         cur = spire_game.screen.current_node
-        if cur is not None:
+        if cur is not None and 0 <= cur.y <= 14:
             gc.cur_map_node_x = cur.x
             gc.cur_map_node_y = cur.y
 
