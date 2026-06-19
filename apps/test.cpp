@@ -1324,6 +1324,53 @@ static int dumpBattleOutcomes(int argc, const char *argv[]) {
     return 0;
 }
 
+// Filter pre-battle states to those that can trigger an in-combat multi-select (for the
+// multi-select A/B): Gambling Chip / Gambler's Brew drive GAMBLE; Purity-in-deck / Elixir drive
+// EXHAUST_MANY. Re-emits each matching record's line to stdout (genStates format) so the existing
+// eval_states command can score the filtered subset under old vs new builds. Counts go to stderr.
+static int filterTriggerStates(int argc, const char *argv[]) {
+    const std::string stateFile = argv[2];
+    const int limit = argc > 3 ? std::stoi(argv[3]) : 0;
+    const auto records = loadRecords(stateFile, limit);
+
+    int nGamble = 0, nExhaust = 0, nSkipped = 0, nKept = 0;
+    for (const auto &rec : records) {
+        GameContext gc;
+        try {
+            gc = loadPreBattleState(rec);
+        } catch (const std::runtime_error &) {
+            ++nSkipped;  // stale prefix that no longer replays on this engine
+            continue;
+        }
+        bool gamble = gc.relics.has(RelicId::GAMBLING_CHIP);
+        bool exhaustMany = false;
+        for (const auto &p : gc.potions) {
+            gamble |= (p == Potion::GAMBLERS_BREW);
+            exhaustMany |= (p == Potion::ELIXIR_POTION);
+        }
+        for (const auto &c : gc.deck.cards) {
+            if (c.getId() == CardId::PURITY) { exhaustMany = true; break; }
+        }
+        if (!gamble && !exhaustMany) {
+            continue;
+        }
+        nGamble += gamble;
+        nExhaust += exhaustMany;
+        ++nKept;
+        std::ostringstream line;
+        line << rec.charInt << ' ' << std::hex << rec.seed << std::dec << ' '
+             << rec.ascension << ' ' << rec.actions.size();
+        for (auto a : rec.actions) {
+            line << ' ' << std::hex << a << std::dec;
+        }
+        std::cout << line.str() << '\n';
+    }
+    std::cerr << "filter_trigger_states: kept " << nKept << "/" << records.size()
+              << " (gamble=" << nGamble << " exhaustMany=" << nExhaust
+              << " skipped=" << nSkipped << ")\n";
+    return 0;
+}
+
 int main(int argc, const char* argv[]) {
 
     if (argc < 2) {
@@ -1395,6 +1442,8 @@ int main(int argc, const char* argv[]) {
         return genStates(argc, argv);
     } else if (command == "eval_states") {
         return evalStates(argc, argv);
+    } else if (command == "filter_trigger_states") {
+        return filterTriggerStates(argc, argv);
     } else if (command == "show_states") {
         return showStates(argc, argv);
     } else if (command == "dump_battle_outcomes") {
