@@ -567,6 +567,10 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
     # back to its spirecomm monster_index for translating the searcher's target back to a command.
     slot_to_spire = _build_monster_group(bc, spire_game.monsters)
 
+    # Boss fights search wider + deeper (SearchAgent gates on isBossEncounter(bc.encounter)); the
+    # live game doesn't report the encounter, so recover it from the boss monster on the field.
+    bc.encounter = _infer_boss_encounter(spire_game.monsters)
+
     return bc, slot_to_spire
 
 
@@ -579,24 +583,77 @@ _SPLITTABLE_MONSTER_IDS = frozenset({
 })
 
 
-def _set_sts_monster_fields(sts_monster, monster, slot: int) -> None:
-    """Copy a live monster's hp/block/move-history/powers onto a freshly created sim Monster."""
+# Boss fights get wider chance/end-turn search and a higher sim count (SearchAgent gates both on
+# isBossEncounter(bc.encounter)). The live game doesn't report its encounter id, so we recover it
+# from the boss monster on the field -- keyed on the spirecomm monster_id. Non-boss fights keep
+# bc.encounter == INVALID, which is all isBossEncounter needs (it only distinguishes boss vs not).
+_BOSS_ENCOUNTER_BY_MONSTER = {
+    'SlimeBoss': sts.MonsterEncounter.SLIME_BOSS,
+    'TheGuardian': sts.MonsterEncounter.THE_GUARDIAN,
+    'Hexaghost': sts.MonsterEncounter.HEXAGHOST,
+    'HexaghostBody': sts.MonsterEncounter.HEXAGHOST,
+    'BronzeAutomaton': sts.MonsterEncounter.AUTOMATON,
+    'TheCollector': sts.MonsterEncounter.COLLECTOR,
+    'Champ': sts.MonsterEncounter.CHAMP,
+    'AwakenedOne': sts.MonsterEncounter.AWAKENED_ONE,
+    'TimeEater': sts.MonsterEncounter.TIME_EATER,
+    'Donu': sts.MonsterEncounter.DONU_AND_DECA,
+    'Deca': sts.MonsterEncounter.DONU_AND_DECA,
+    'CorruptHeart': sts.MonsterEncounter.THE_HEART,
+}
+
+
+def _infer_boss_encounter(spire_monsters):
+    """Return the MonsterEncounter for a boss fight (recognized by its signature monster), or
+    INVALID for any non-boss fight."""
+    for monster in spire_monsters:
+        enc = _BOSS_ENCOUNTER_BY_MONSTER.get(monster.monster_id)
+        if enc is not None:
+            return enc
+    return sts.MonsterEncounter.INVALID
+
+
+def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
+    """Copy a live monster's hp/block/move-history/powers onto a freshly created sim Monster.
+
+    moveHistory[0] (the current intent) drives what the engine makes the monster do on its turn; a
+    stray INVALID there hits an assert(false) in Monster::takeTurn during search -- an uncatchable
+    SIGABRT. Two distinct cases produce a missing current move, handled differently:
+      * move_id present but unmapped -> a real gap in our move table; raise (fail loud) so it gets
+        added rather than silently mis-simulated.
+      * move_id absent (CommunicationMod reports intent NONE with no move_id, e.g. a flying Byrd
+        between turns) -> the live game itself hasn't committed the move, so there's no ground truth
+        to mirror; let the engine's own AI roll a legal move via rollMove, exactly as the game will
+        when the monster's turn comes."""
     sts_monster.curHp = monster.current_hp
     sts_monster.maxHp = monster.max_hp
     sts_monster.block = monster.block
     sts_monster.halfDead = monster.half_dead
     sts_monster.idx = slot
 
-    # Move history drives the searcher's prediction of the monster's next move.
+    # spirecomm reports an absent move_id as -1 (None for last_move_id); a real move byte is >= 0.
+    invalid = int(sts.MonsterMoveId.INVALID)
+    move_known = monster.move_id is not None and monster.move_id >= 0
     move_history = [0, 0]
-    if monster.move_id is not None:
-        move_history[0] = int(map_move_id(monster.monster_id, monster.move_id))
-    if monster.last_move_id is not None:
+    if move_known:
+        mapped = int(map_move_id(monster.monster_id, monster.move_id))
+        if mapped == invalid:
+            raise ValueError(f"unmapped current move for {monster.monster_id} (move_id="
+                             f"{monster.move_id}); add (monster, move_id) to map_move_id")
+        move_history[0] = mapped
+    if monster.last_move_id is not None and monster.last_move_id >= 0:
         move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
     sts_monster.moveHistory = move_history
 
     for power in monster.powers:
         apply_monster_power(sts_monster, power.power_id, power.amount)
+
+    if not move_known:
+        sts_monster.rollMove(bc)
+        if sts_monster.isAlive() and sts_monster.moveHistory[0] == invalid \
+                and sts_monster.pending_move_rolls == 0:
+            raise ValueError(f"rollMove left {monster.monster_id} with no move "
+                             f"(intent {monster.intent})")
 
 
 # Encounters whose summon/respawn actions write to hardcoded monster slots, so a converted group
@@ -641,7 +698,7 @@ def _build_fixed_layout_group(bc, live, summoner_entry, summoner_slot, minion_sl
         spire_idx, monster, monster_id = entry
         slot_to_spire[slot] = spire_idx
         bc.monsters.createMonster(bc, monster_id)
-        _set_sts_monster_fields(bc.monsters[slot], monster, slot)
+        _set_sts_monster_fields(bc, bc.monsters[slot], monster, slot)
     return slot_to_spire
 
 
@@ -693,7 +750,7 @@ def _build_monster_group(bc: sts.BattleContext, spire_monsters) -> dict:
         _, spire_idx, monster, monster_id = entry
         slot_to_spire[slot] = spire_idx
         bc.monsters.createMonster(bc, monster_id)
-        _set_sts_monster_fields(bc.monsters[slot], monster, slot)
+        _set_sts_monster_fields(bc, bc.monsters[slot], monster, slot)
 
     return slot_to_spire
 
@@ -2140,19 +2197,6 @@ class STSLightspeedAgent:
         bc, slot_to_spire = convert_combat_state(self.game, gc)
         print(bc, file=sys.stderr)
 
-        # A live monster whose current move didn't map (moveHistory[0] == INVALID) makes the engine
-        # assert(false) inside Monster::takeTurn during search -- an uncatchable SIGABRT that hangs
-        # live play. Catch it here instead: end the turn (one bad fight beats a hung run) and dump
-        # the state loudly so the missing (monster, move_id) mapping can be added.
-        invalid_move = int(sts.MonsterMoveId.INVALID)
-        for i in range(bc.monsters.monsterCount):
-            m = bc.monsters[i]
-            if m.isAlive() and m.moveHistory[0] == invalid_move:
-                print(f"!!! UNMAPPED MONSTER MOVE -- alive monster slot {i} ({m.id}, {m.getName()}) "
-                      f"has INVALID move; ending turn to avoid a search SIGABRT. Add its (id, move_id) "
-                      f"to map_move_id.", file=sys.stderr)
-                return EndTurnAction()
-        
         # Configure the searcher with heart1's exact training/eval battle-search knobs
         # (exploration / chance + end-turn widening / eval weights, boss variants) and matching
         # per-decision sim count, via the shared SearchAgent config -- so live play uses the same
@@ -2184,44 +2228,6 @@ class STSLightspeedAgent:
             except Exception:
                 pass
             return EndTurnAction()
-
-        # Stall-breaker. The battle search can go near-indifferent between attacking and ending the
-        # turn against trivial enemies it can't see itself finishing -- victory sits behind several
-        # chance nodes its rollouts rarely reach -- and end-turn edges out on value, so the bot ends
-        # every turn without acting and the fight loops forever (observed vs two small slimes). If
-        # the search picked END_TURN while holding energy and a targeted attack of nearly-equal value
-        # is available, that turn is wasted: play the best such attack so the fight progresses. A
-        # clearly-better END_TURN (a real defensive hold) keeps its value margin and is respected.
-        if first_action.get_action_type() == sts.ActionType.END_TURN and bc.player.energy > 0:
-            all_edges = searcher.get_root_edges()
-            def _val(e):
-                return e.node.evaluation_sum / e.node.simulation_count if e.node.simulation_count else -1e9
-            et_val = max((_val(e) for e in all_edges
-                          if e.action.get_action_type() == sts.ActionType.END_TURN), default=0.0)
-            def _retaliates(edge):
-                # An attack into Sharp Hide (Guardian's defensive mode) or Thorns deals damage back
-                # to the player. When every affordable attack hits such a monster, ending the turn to
-                # avoid that self-damage is a deliberate defensive hold, not a stall -- so never force
-                # one. (Slimes carry neither status, so the trivial-enemy stall case is unaffected.)
-                ti = edge.action.get_target_idx()
-                if not (0 <= ti < bc.monsters.monsterCount):
-                    return False
-                m = bc.monsters[ti]
-                return (m.hasStatus(sts.MonsterStatus.SHARP_HIDE)
-                        or m.hasStatus(sts.MonsterStatus.THORNS))
-            attacks = [e for e in all_edges
-                       if e.action.get_action_type() == sts.ActionType.CARD
-                       and 0 <= e.action.get_source_idx() < len(self.game.hand)
-                       and self.game.hand[e.action.get_source_idx()].has_target
-                       and e.action.is_valid_action(bc)
-                       and not _retaliates(e)]
-            if attacks:
-                best_atk = max(attacks, key=lambda e: e.node.simulation_count)
-                if _val(best_atk) >= et_val - 5.0:
-                    print(f"[stall-breaker] end-turn chosen with {bc.player.energy} energy + a near-equal "
-                          f"attack ({_val(best_atk):.1f} vs end-turn {et_val:.1f}); playing "
-                          f"{best_atk.action.print_desc(bc)} instead", file=sys.stderr)
-                    first_action = best_atk.action
 
         # Map the search action to a spirecomm action
         spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game, slot_to_spire)

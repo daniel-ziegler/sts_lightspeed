@@ -837,6 +837,7 @@ PYBIND11_MODULE(slaythespire, m) {
             "Attack-Skill-Power Potion / etc.), so the search picks which to add to hand");
 
     def_value(battleContext, "input_state", &BattleContext::inputState);
+    def_value(battleContext, "encounter", &BattleContext::encounter);
 
     // Player bindings
     pybind11::class_<Player> player(m, "Player");
@@ -930,7 +931,11 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("isDying", &Monster::isDying)
         .def("isEscaping", &Monster::isEscaping)
         .def("addBlock", &Monster::addBlock)
-        .def("heal", &Monster::heal);
+        .def("heal", &Monster::heal)
+        .def("rollMove", &Monster::rollMove, "bc"_a,
+            "roll this monster's next move via its own AI (keys on moveHistory). Used to reconstruct "
+            "an intent the live game hasn't committed yet -- e.g. a flying Byrd between turns whose "
+            "intent CommunicationMod reports as NONE with no move_id.");
 
     def_value(monster, "id", &Monster::id);
 
