@@ -1450,9 +1450,10 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("Reptomancer", 2): sts.MonsterMoveId.REPTOMANCER_SUMMON,
         ("Reptomancer", 3): sts.MonsterMoveId.REPTOMANCER_BIG_BITE,
         
-        # Snake Dagger
-        ("SnakeDagger", 1): sts.MonsterMoveId.DAGGER_STAB,
-        ("SnakeDagger", 2): sts.MonsterMoveId.DAGGER_EXPLODE,
+        # Reptomancer's Daggers (live id "Dagger"; keyed to the live name map_move_id looks up).
+        # move 1 = STAB (ATTACK_DEBUFF 9), 2 = EXPLODE.
+        ("Dagger", 1): sts.MonsterMoveId.DAGGER_STAB,
+        ("Dagger", 2): sts.MonsterMoveId.DAGGER_EXPLODE,
         
         # Spiker
         ("Spiker", 1): sts.MonsterMoveId.SPIKER_CUT,
