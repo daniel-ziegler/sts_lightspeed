@@ -2098,6 +2098,13 @@ _CARD_SELECT_TASK_BY_ACTION = {
 # the offered cards are injected into the select and the chosen index maps straight back to them.
 _DISCOVERY_TASKS = frozenset({sts.CardSelectTask.DISCOVERY})
 
+# Multi-card "choose any number" selects (the live screen reports num_cards>1 / max 99). The same
+# spirecomm action name can be single (True Grit -> one card) or multi (Elixir Potion / Purity ->
+# exhaust any number), so these are keyed separately and chosen by num_cards in the handler.
+_MULTI_CARD_SELECT_TASK_BY_ACTION = {
+    "ExhaustAction": sts.CardSelectTask.EXHAUST_MANY,   # Elixir Potion / Purity (exhaust any number)
+}
+
 
 # StS seed alphabet (base-35, no 'O'); matches SeedHelper.CHARACTERS.
 _SEED_CHARS = "0123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
@@ -2279,8 +2286,31 @@ class STSLightspeedAgent:
         # CardRewardScreen (the in-combat Discovery/potion choice) has no num_cards; it always picks 1.
         num = getattr(self.game.screen, "num_cards", None) or 1
         if num != 1:
-            raise NotImplementedError(
-                f"multi-card in-combat select (num_cards={num}, {action_name!r}) not yet supported")
+            # "Choose any number" exhaust/gamble select. The battle search does not enumerate these
+            # subsets -- it resolves them to "select nothing" -- so playout_battle (and thus RL
+            # training) always picks zero. Drive the search the same way and forward whatever it
+            # selects (empty => confirm nothing), so live play matches training instead of guessing.
+            multi_task = _MULTI_CARD_SELECT_TASK_BY_ACTION.get(action_name)
+            if multi_task is None:
+                raise NotImplementedError(
+                    f"multi-card in-combat select (num_cards={num}, {action_name!r}) unmapped; "
+                    f"add it to _MULTI_CARD_SELECT_TASK_BY_ACTION")
+            gc = spirecomm_to_gamecontext(self.game)
+            bc, _ = convert_combat_state(self.game, gc)
+            bc.open_card_select(multi_task, min(num, bc.cards.cardsInHand))
+            searcher = sts.BattleSearcher(bc)
+            searcher.search(self.search_agent.configure_searcher(searcher, bc))
+            sel_idxs = searcher.get_best_action().get_selected_idxs()
+            hand = bc.cards.hand
+            chosen = []
+            for i in sel_idxs:
+                if not (0 <= i < len(hand)):
+                    raise RuntimeError(f"MCTS multi-select idx {i} out of range "
+                                       f"(hand {len(hand)}, {multi_task})")
+                chosen.append(self._match_live_select_card(hand[i]))
+            print(f"[mcts] multi-select ({action_name}, {multi_task}) -> {len(chosen)} card(s)",
+                  file=sys.stderr)
+            return CardSelectAction(chosen)
         offered = self.game.screen.cards
 
         gc = spirecomm_to_gamecontext(self.game)

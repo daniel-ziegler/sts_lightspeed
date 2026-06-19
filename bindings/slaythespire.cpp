@@ -409,7 +409,10 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("get_source_idx", &search::Action::getSourceIdx)
         .def("get_target_idx", &search::Action::getTargetIdx)
         .def("get_select_idx", &search::Action::getSelectIdx)
-        .def("get_selected_idxs", &search::Action::getSelectedIdxs)
+        .def("get_selected_idxs", [](const search::Action &a) {
+            const auto sel = a.getSelectedIdxs();
+            return std::vector<int>(sel.begin(), sel.end());
+        })
         .def("is_valid_action", &search::Action::isValidAction)
         .def("print_desc", [](const search::Action &action, const BattleContext &bc) {
             std::ostringstream oss;
