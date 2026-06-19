@@ -802,17 +802,20 @@ _MONSTER_ID_SYNONYMS = {
     "HexaghostBody": "Hexaghost",
     # The act-2 "Healer" combatant is the engine's Mystic (its moves are already keyed "Healer").
     "Healer": "Mystic",
+    # Spire Growth's live id is "Serpent" (its StS class id); the engine names it SpireGrowth.
+    "Serpent": "SpireGrowth",
 }
 
 # Entries that appear in a combat's monster list but are not separate engine combatants: the
 # Hexaghost's orbs are part of the single engine Hexaghost. Skipped during conversion (like is_gone).
 _MONSTER_IDS_SKIP_IN_COMBAT = frozenset({"HexaghostOrb"})
 
-# Monster ids that are non-combat event props (Apology Slime, the Serpent's merchant) -- they never
-# appear in a real battle's monster list, so reaching one in combat is a real bug we want to fail
-# loud on rather than silently mishandle. (The act-2 "Healer" is NOT here: it is a real combatant,
-# the engine's Mystic -- see _MONSTER_ID_SYNONYMS.)
-_MONSTER_IDS_NON_COMBAT = frozenset({"Apology Slime", "Serpent"})
+# Monster ids that are non-combat event props (Apology Slime) -- they never appear in a real
+# battle's monster list, so reaching one in combat is a real bug we want to fail loud on rather than
+# silently mishandle. (The act-2 "Healer" is NOT here: it is a real combatant, the engine's Mystic
+# -- see _MONSTER_ID_SYNONYMS. "Serpent" is NOT here either: it is Spire Growth's live id -- the
+# act-3 combatant SpireGrowth -- not the "The Ssssserpent" event prop.)
+_MONSTER_IDS_NON_COMBAT = frozenset({"Apology Slime"})
 
 
 # (engine Event enum name, eventIdStrings value, eventGameNames value) for every ? -room event the
@@ -1467,11 +1470,11 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         ("Maw", 4): sts.MonsterMoveId.THE_MAW_DROOL,    # DROOL = 4
         ("Maw", 5): sts.MonsterMoveId.THE_MAW_NOM,      # NOMNOMNOM = 5
         
-        # Spire Growth
-        # byte ids from SpireGrowth.java: QUICK_TACKLE=1, CONSTRICT=2, SMASH=3
-        ("SpireGrowth", 1): sts.MonsterMoveId.SPIRE_GROWTH_QUICK_TACKLE,
-        ("SpireGrowth", 2): sts.MonsterMoveId.SPIRE_GROWTH_CONSTRICT,
-        ("SpireGrowth", 3): sts.MonsterMoveId.SPIRE_GROWTH_SMASH,
+        # Spire Growth (live id "Serpent" -- the StS class id -- keyed to match map_move_id's
+        # raw-name lookup). byte ids from SpireGrowth.java: QUICK_TACKLE=1, CONSTRICT=2, SMASH=3
+        ("Serpent", 1): sts.MonsterMoveId.SPIRE_GROWTH_QUICK_TACKLE,
+        ("Serpent", 2): sts.MonsterMoveId.SPIRE_GROWTH_CONSTRICT,
+        ("Serpent", 3): sts.MonsterMoveId.SPIRE_GROWTH_SMASH,
         
         # Ending Monsters
         # Corrupt Heart (final boss)
