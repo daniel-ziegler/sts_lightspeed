@@ -10,6 +10,9 @@
 #     3x geometric decay (lr-final-frac 0.33333) over iters 1875-2175
 #   - entropy coef: 0.0083333 -> 0.002 geometric over iters 1235-1435 (done; pinned at 0.002)
 #   - --pipeline True (overlap collection N+1 with training N, ~1.17x; see COORD.md)
+#   - --record-battle-states True: dumps replayable pre-battle action prefixes for every battle
+#     start to runs/heart1.pt.battle_states/iter_N.txt (real-policy states; eval_states/A-B input).
+#     ~MBs/iter -- pull + rotate. neow-miniBlessing games (10%) are skipped (unreplayable).
 cd ~/sts-ca/sts
 while true; do
   it=$(ls runs/heart1.pt.iter_* 2>/dev/null | grep -v optimizer | sed 's/.*iter_//' | sort -n | tail -1)
@@ -23,7 +26,7 @@ while true; do
     --policy-lr 1e-5 --value-lr 3.33335e-5 --entropy-coef 0.0083333 --entropy-coef-final 0.002 --entropy-coef-decay-steps 200 --entropy-coef-decay-start 1235 \
     --lr-final-frac 0.33333 --lr-decay-steps 300 --lr-decay-start 1875 \
     --max-ascension 20 \
-    --save-every 5 --save-episodes --num-workers 30 --torch-compile default --pipeline True \
+    --save-every 5 --save-episodes --record-battle-states True --num-workers 30 --torch-compile default --pipeline True \
     $RESUME --save-path runs/heart1.pt >> runs/heart1.log 2>&1
   echo "$(date -u +%FT%TZ) rl_train exited ($?); restarting from latest checkpoint in 30s" >> runs/heart1_supervisor.log
   sleep 30

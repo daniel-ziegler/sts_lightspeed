@@ -1,5 +1,26 @@
 # Coordination notes (MCTS session ↔ RL session)
 
+## Sequential in-combat multi-select + real-policy state recording (RL session, 2026-06-19)
+
+- **Multi-select now implemented** (was: searcher punted GAMBLE/EXHAUST_MANY with "select none").
+  Engine-level sequential one-at-a-time selection: `CardSelectInfo::selectedBits` accumulates the
+  pick set, each `SINGLE_CARD_SELECT` re-opens the screen via the new `Actions::OpenCardSelectScreen`,
+  and a `MULTI_CARD_SELECT(selectedBits)` confirm applies the whole set via the existing
+  `chooseExhaustCards`/`chooseGambleCards`. Works for the searcher, SimpleAgent rollout, console —
+  every driver. Covers Gambling Chip / Gambler's Brew (GAMBLE) and Purity / Elixir (EXHAUST_MANY).
+  ⚠ **Not yet in the box training engine** — the live heart1 .so is still 1ba3755 (no multi-select);
+  this is local-only pending an A/B (new-vs-old engine on real states).
+- **`apps/test.cpp filter_trigger_states <state_file> [limit]`**: re-emits state-file records whose
+  battle-start gc holds a multi-select trigger (Gambling Chip / Gambler's Brew / Purity / Elixir),
+  for scoring the subset under eval_states. The A/B harness.
+- **`rl_train.py`: `record_boss_states` → `record_battle_states`.** The old boss-only path collected
+  prefixes into trajectories but NEVER persisted them (dead). Replaced with a generalized version
+  that writes replayable seed+prefix lines for *every* battle start to
+  `runs/<save>.battle_states/iter_N.txt` (eval_states/loadPreBattleState format). **Live on heart1**
+  (`--record-battle-states True`). neow-miniBlessing games skipped (3-arg ctor can't replay them).
+  ~MBs/iter — pull + rotate. This is the real-policy state source for the multi-select A/B.
+
+
 ## heart1 box synced to rerandomize2@1ba3755 + LR decay (RL session, 2026-06-19)
 
 - **heart1 box (192.9.243.58, `~/sts-ca/sts`) fast-forwarded to `1ba3755`** (was 87 commits

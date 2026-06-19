@@ -181,7 +181,7 @@ class TrainConfig:
     mcts_boss_widening_alpha: Optional[float] = None
     log_battle_outcomes: bool = False                 # attach per-battle snapshots to trajectories
     randomize_path_choices: bool = False              # intervention eval: uniform-random path picks
-    record_boss_states: bool = False                  # attach replayable pre-boss-battle action prefixes
+    record_battle_states: bool = False                # persist replayable pre-battle action prefixes for every battle start
     # Battle-search eval weights (None = engine's jointly-tuned defaults). Like the search knobs,
     # these are a coupled set -- override all of them together or none.
     mcts_win_bonus: Optional[float] = None
@@ -277,7 +277,7 @@ class Trajectory(NamedTuple):
     final_deck: List[sts.Card]  # Final deck state
     final_relics: List[sts.RelicId]  # Final relics
     battle_log: list = []  # per-battle BattleSnapshots (when config.log_battle_outcomes)
-    boss_state_records: list = []  # (floor, prefix_bits) per boss battle (when config.record_boss_states)
+    battle_state_records: list = []  # replayable action-prefix per battle start (when config.record_battle_states)
     ascension: int = 0
 
 
@@ -421,12 +421,14 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         agent.boss_chance_widening_alpha = config.mcts_boss_widening_alpha
     if config.log_battle_outcomes:
         agent.log_battle_outcomes = True
-    # Pre-boss-state recording: the mixed action stream (out-of-combat GameAction bits +
-    # in-battle search::Action bits) up to each boss battle, replayable by eval_states'
-    # loadPreBattleState. _rec is None when recording is off.
-    _rec = [] if config.record_boss_states else None
-    _boss_records = []
-    if config.record_boss_states:
+    # Pre-battle-state recording: the mixed action stream (out-of-combat GameAction bits +
+    # in-battle search::Action bits) up to each battle start, replayable by eval_states'
+    # loadPreBattleState. neow-miniBlessing games are skipped -- loadPreBattleState reconstructs
+    # with the 3-arg GameContext ctor (no miniBlessing), so their prefixes wouldn't replay. _rec
+    # is None when recording is off (or for a skipped game).
+    _rec = [] if (config.record_battle_states and not neow_mini) else None
+    _battle_records = []
+    if _rec is not None:
         agent.record_actions = True
     _ew_overrides = [
         ('win_bonus', config.mcts_win_bonus),
@@ -456,8 +458,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                     print(f"  [seed {seed}] BATTLE playout start floor={gc.floor_num}", flush=True)
                 if _rec is not None:
                     _pre_bits = len(agent.game_action_history)
-                    if gc.cur_room == sts.Room.BOSS:
-                        _boss_records.append((gc.floor_num, list(_rec)))
+                    _battle_records.append(list(_rec))
                 # Use MCTS agent for battles in background thread
                 future = battle_executor.submit(agent.playout_battle, gc)
                 
@@ -638,7 +639,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         final_deck=list(gc.deck),
         final_relics=list(gc.relics),
         battle_log=list(agent.battle_log) if config.log_battle_outcomes else [],
-        boss_state_records=_boss_records,
+        battle_state_records=_battle_records,
         ascension=ascension,
     )
 
@@ -930,6 +931,21 @@ def save_episodes(experiences: List[Experience], advantages: List[float], return
             'old_log_prob': float(exp.log_prob),
         })
     pd.DataFrame(rows).to_parquet(path, engine='pyarrow')
+
+
+def save_battle_states(trajectories: List[Trajectory], path: str) -> int:
+    """Write every recorded pre-battle state as a replayable seed + mixed-action-prefix line, in
+    the text format eval_states/loadPreBattleState (apps/test.cpp) consumes. Returns the count."""
+    cc = int(sts.CharacterClass.IRONCLAD)
+    n = 0
+    with open(path, 'w') as f:
+        for t in trajectories:
+            for prefix in t.battle_state_records:
+                bits = ' '.join(f'{int(b):x}' for b in prefix)
+                f.write(f'{cc} {t.seed:x} {t.ascension} {len(prefix)}'
+                        + (f' {bits}' if prefix else '') + '\n')
+                n += 1
+    return n
 
 
 def experiences_to_batches(experiences: List[Experience], advantages: List[float], returns: List[float]) -> List[dict]:
@@ -1556,7 +1572,14 @@ def main():
                 ep_path = f"{ep_dir}/iter_{iteration + 1}.parquet"
                 save_episodes(experiences, advantages, returns, ep_meta, ep_path)
                 print(f"Saved {len(experiences)} decisions to {ep_path}")
-            
+
+            if config.record_battle_states:
+                bs_dir = f"{args.save_path}.battle_states"
+                os.makedirs(bs_dir, exist_ok=True)
+                bs_path = f"{bs_dir}/iter_{iteration + 1}.txt"
+                n_states = save_battle_states(trajectories, bs_path)
+                print(f"Saved {n_states} replayable battle-start states to {bs_path}")
+
             # Perform PPO training step (entropy coef / lr possibly decayed for this iteration)
             ent_coef = effective_entropy_coef(config, iteration)
             step_config = replace(config, entropy_coef=ent_coef) if ent_coef != config.entropy_coef else config
