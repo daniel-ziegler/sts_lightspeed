@@ -2833,8 +2833,18 @@ class STSLightspeedAgent:
     def _collect_combat_reward(self):
         """Take the post-combat rewards. Gold/relic/potion/keys are free and always taken (the same
         the engine's own pick does); a CARD reward opens the CARD_REWARD screen where heart1 chooses
-        the card. skipped_cards (set when heart1 skipped the card) stops us re-opening it."""
-        for reward_item in self.game.screen.rewards:
+        the card. skipped_cards (set when heart1 skipped the card) stops us re-opening it.
+
+        Keys are taken BEFORE relics: at a sapphire-key chest the key and the relic are mutually
+        exclusive (engine: taking the relic clears the key, executeRewardsAction in GameAction.cpp),
+        and heart1 routes for all three keys -- a plain first-reward grab could take the relic and
+        forfeit heart access. Taking the key first is correct for a heart agent and harmless when
+        they don't conflict (emerald key: the relic is still taken on a later call)."""
+        rewards = self.game.screen.rewards
+        for reward_item in rewards:
+            if reward_item.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY):
+                return CombatRewardAction(reward_item)
+        for reward_item in rewards:
             if reward_item.reward_type == RewardType.POTION and self.game.are_potions_full():
                 continue
             if reward_item.reward_type == RewardType.CARD and self.skipped_cards:
