@@ -197,10 +197,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("EXECUTING_ACTIONS", InputState::EXECUTING_ACTIONS)
         .value("PLAYER_NORMAL", InputState::PLAYER_NORMAL)
         .value("CARD_SELECT", InputState::CARD_SELECT)
-        .value("CHOOSE_STANCE_ACTION", InputState::CHOOSE_STANCE_ACTION)
-        .value("CHOOSE_TOOLBOX_COLORLESS_CARD", InputState::CHOOSE_TOOLBOX_COLORLESS_CARD)
-        .value("CHOOSE_EXHAUST_POTION_CARDS", InputState::CHOOSE_EXHAUST_POTION_CARDS)
-        .value("CHOOSE_GAMBLING_CARDS", InputState::CHOOSE_GAMBLING_CARDS);
+        .value("CHOOSE_STANCE_ACTION", InputState::CHOOSE_STANCE_ACTION);
 
     // MonsterMoveId enum binding (complete enum)
     pybind11::enum_<MonsterMoveId>(m, "MonsterMoveId")
