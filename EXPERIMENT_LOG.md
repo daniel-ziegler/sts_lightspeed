@@ -18,6 +18,46 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-06-20 (heart1 card-preference re-analysis @iter 1950/1955 + boss/ascension conditioning)
+
+Re-ran the card-preference diagnostics on the latest heart1 checkpoint (iter 1950, episodes
+iter_1906-1955 = 50 training iterations ≈ 24.6k games / 2.15M decisions; 933k card-acquisition
+decisions). Headline structure unchanged from the 2026-06-09/19 runs: identity alone predicts
+~55% of picks (McFadden R2 +0.28), +context ~67%, duplicate-aversion still ~0 (deck_count
+−0.001). **But the taste content improved:** Perfected Strike fell from rank 5/107 (+3.19) to
+46/107 (−0.24) — the deck-blind unconditional-PStrike symptom from 2026-06-09 has self-corrected
+— and a coherent power/exhaust archetype now leads (Corruption #1, then Feel No Pain / Dark
+Embrace / Barricade / Offering). Wild Strike is the most-avoided (−4.57).
+
+**New question: does the policy condition card choice on the upcoming act boss?** Two methods,
+both say *weakly*:
+1. Correlational logit (`analyze_card_boss.py`): per-card × boss interaction on top of
+   identity+act adds only **+0.10 nats/decision** (+3.7pp acc, 0.583→0.620) beyond the act.
+2. Counterfactual probe (`analyze_boss_probe.py`): override ONLY fixed_observation[4] (boss
+   token; encoding 0-8, see bindings-util.cpp) across the act's 3 bosses on real card-choice
+   states. Mean pairwise **TV 0.053** (act1 0.047 / act2 0.048 / act3 0.068) vs a 0.84 cross-
+   state scale; top card pick flips in only 8.6% of states. Biggest pair: act3 Donu&Deca vs
+   AwakenedOne (0.076).
+
+**Ascension conditioning (`analyze_ascension_probe.py`, re-run):** card-choice TV only ~0.067
+across the *entire* A0→A20 range — about as weak as boss. The VALUE head, by contrast, reads
+ascension strongly (mean V +0.880→+0.519 A0→A20, corr −0.83, lower at A20 in 100% of states).
+So the net ingests the tokens; the policy just barely lets them move card picks.
+
+**Per-card attribution (`analyze_card_token_sensitivity.py`):** maps each logit slot back to its
+offered card (slot j == cards_offered[j]). Magnitudes are single-digit pp everywhere. Boss
+swings top out ~0.05 (act3: Mayhem/Evolve/Panic Button/Apotheosis) with directions mostly at the
+noise floor — no defensible boss-specific plan. Ascension is the more coherent, larger signal,
+sharpest in act 3: UP at A20 = Apotheosis (+0.058, the single biggest effect) + immediate
+defense (Shrug It Off, Ghostly Armor); DOWN = slow scaling / setup (Demon Form, Rupture, Feed,
+Berserk, Entrench) and combo enablers (Dual Wield, Double Tap). The right qualitative adjustment,
+applied weakly.
+
+Conclusion: consistent with the deck-blindness story — card taste is a near-fixed identity
+ranking with only marginal context conditioning; the upcoming boss is among the *weakest*
+signals (strongest in act 3, where boss identity matters most), ascension slightly stronger and
+directionally sensible. No training change made; diagnostics only.
+
 ## 2026-06-12 (battle-outcome prediction: pretraining/aux task — design + datagen + SL gate launched)
 
 **Hypothesis**: making the trunk predict a SPECIFIC battle's ΔHP from (state, encounter) teaches
