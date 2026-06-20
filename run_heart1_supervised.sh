@@ -8,7 +8,9 @@
 #     0.02 / offset 0.307), gamma 1.0
 #   - lr: base re-anchored to the post-0.5x floor (policy 1e-5 / value 3.33335e-5), then a further
 #     3x geometric decay (lr-final-frac 0.33333) over iters 1875-2175
-#   - entropy coef: 0.0083333 -> 0.002 geometric over iters 1235-1435 (done; pinned at 0.002)
+#   - entropy coef: re-anchored to 0.002, then a further 3x geometric decay to 0.000667 over
+#     iters 1875-2175 (prior 0.0083333 -> 0.002 decay done)
+#   - engine: multi-select (GAMBLE/EXHAUST_MANY) + Colosseum/Match-and-Keep events now enabled
 #   - --pipeline True (overlap collection N+1 with training N, ~1.17x; see COORD.md)
 #   - --record-battle-states True: dumps replayable pre-battle action prefixes for every battle
 #     start to runs/heart1.pt.battle_states/iter_N.txt (real-policy states; eval_states/A-B input).
@@ -23,7 +25,7 @@ while true; do
     --num-iterations 9999 --mcts-simulations 1000 --battle-timeout 60 \
     --reward-function heart \
     --shaping-upg-coef 0.035 --shaping-offset 0.307 --shaping-starter-coef 0.02 \
-    --policy-lr 1e-5 --value-lr 3.33335e-5 --entropy-coef 0.0083333 --entropy-coef-final 0.002 --entropy-coef-decay-steps 200 --entropy-coef-decay-start 1235 \
+    --policy-lr 1e-5 --value-lr 3.33335e-5 --entropy-coef 0.002 --entropy-coef-final 0.000667 --entropy-coef-decay-steps 300 --entropy-coef-decay-start 1875 \
     --lr-final-frac 0.33333 --lr-decay-steps 300 --lr-decay-start 1875 \
     --max-ascension 20 \
     --save-every 5 --save-episodes --record-battle-states True --num-workers 30 --torch-compile default --pipeline True \
