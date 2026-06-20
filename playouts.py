@@ -508,11 +508,11 @@ class Decision:
             'choice_type': self.choice_type,
         }
 
-def load_net(model_path, device=None, torch_compile_mode='default'):
+def load_net(model_path, device=None, torch_compile_mode='default', use_value_head=False):
     if device is None:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    
-    net = NN(ModelHP())
+
+    net = NN(ModelHP(use_value_head=use_value_head))
     net = net.to(device)
     
     if model_path is not None:
@@ -746,6 +746,37 @@ def path_to_action_and_desc(choice: Choice, path: list, gc: Optional[sts.GameCon
         raise ValueError(f"Unknown path type: {path[0]}")
     
     return action, action_desc
+
+def take_free_rewards(gc: sts.GameContext) -> list:
+    """Auto-collect gold and relics on a combat REWARDS screen and return the actions taken.
+
+    construct_choice does NOT encode gold/relic rewards (only cards/potions/keys/skip), so the
+    network can never take them -- and on a REWARDS screen SKIP is regainControl(), which abandons
+    the WHOLE screen and forfeits everything still unclaimed. Gold/relics are always strictly good
+    to take, so we sweep them up front; this leaves only the genuine card/potion/key decision for
+    the policy and makes SKIP forfeit only the card (never the gold/relics).
+
+    Gold is always free. Relics are auto-taken ONLY when no key reward is on the same screen:
+    at a chest the sapphire key sits behind the last relic (taking the relic clears it, see
+    executeRewardsAction in GameAction.cpp), so a heart run must be free to take the key over the
+    relic via the net's TAKE_KEY option. When a key is present we leave the relic/key tradeoff to
+    the policy and only sweep the gold.
+
+    No-op off REWARDS. Stops if a relic pickup changes the screen (e.g. a bottled relic opening a
+    card-select), so the caller's normal loop handles the new screen next."""
+    taken = []
+    while gc.screen_state == sts.ScreenState.REWARDS:
+        actions = sts.GameAction.getAllActionsInState(gc)
+        has_key = any(a.rewards_action_type == sts.RewardsActionType.KEY for a in actions)
+        free = [a for a in actions
+                if a.rewards_action_type == sts.RewardsActionType.GOLD
+                or (a.rewards_action_type == sts.RewardsActionType.RELIC and not has_key)]
+        if not free:
+            break
+        free[0].execute(gc)
+        taken.append(free[0])
+    return taken
+
 
 def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: list[sts.GameAction]) -> Optional[Choice]:
     """Construct a Choice object from the current game state and available actions."""

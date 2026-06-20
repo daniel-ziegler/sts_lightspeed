@@ -28,7 +28,7 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo, CHOICE_PATHS_OFFSET
-from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, flatten_dict
+from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, take_free_rewards, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
     PPOAlgorithm,
@@ -475,10 +475,17 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                     break
                     
             else:
+                # Auto-collect gold/relics before deciding: they aren't in the net's choice space,
+                # and a reward-screen SKIP is regainControl() (abandons the whole screen), so the
+                # net would otherwise forfeit them. Sweeping up front makes SKIP cost only the card.
+                for _fa in take_free_rewards(gc):
+                    if _rec is not None:
+                        _rec.append(int(_fa.bits))
+
                 # Use neural network for non-battle decisions
                 obs = sts.getNNRepresentation(gc)
                 actions = sts.GameAction.getAllActionsInState(gc)
-                
+
                 choice = construct_choice(gc, obs, actions)
                 
                 if choice is not None:

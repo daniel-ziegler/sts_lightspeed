@@ -811,6 +811,14 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_property_readonly("rarity", &Card::getRarity)
         .def_property_readonly("type", &Card::getType);
 
+    // Battle outcome enum (BattleContext::Outcome); named BattleOutcome to avoid clashing with
+    // the overworld GameOutcome enum. Lets python drive a battle action-by-action and detect when
+    // it ends (e.g. the watch-mode game viewer).
+    pybind11::enum_<Outcome>(m, "BattleOutcome")
+        .value("UNDECIDED", Outcome::UNDECIDED)
+        .value("PLAYER_VICTORY", Outcome::PLAYER_VICTORY)
+        .value("PLAYER_LOSS", Outcome::PLAYER_LOSS);
+
     // Battle Context bindings
     pybind11::class_<BattleContext> battleContext(m, "BattleContext");
     battleContext.def_readwrite("turn", &BattleContext::turn)
@@ -849,6 +857,7 @@ PYBIND11_MODULE(slaythespire, m) {
 
     def_value(battleContext, "input_state", &BattleContext::inputState);
     def_value(battleContext, "encounter", &BattleContext::encounter);
+    def_value(battleContext, "outcome", &BattleContext::outcome);
 
     // Player bindings
     pybind11::class_<Player> player(m, "Player");
