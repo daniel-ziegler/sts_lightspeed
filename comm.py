@@ -2824,19 +2824,36 @@ class STSLightspeedAgent:
         return action
 
     def _collect_combat_reward(self):
-        """Take the post-combat rewards. Gold/relic/potion/keys are free and always taken (the same
-        the engine's own pick does); a CARD reward opens the CARD_REWARD screen where heart1 chooses
-        the card. skipped_cards (set when heart1 skipped the card) stops us re-opening it.
+        """Take the post-combat rewards. Gold (always) and potions (when the belt has room) are
+        free, no-decision pickups, as are relics UNLESS a key shares the screen. A sapphire key and
+        the relic are mutually exclusive (taking the relic clears the key, executeRewardsAction in
+        GameAction.cpp), so when both are present the relic-vs-key choice is a real value decision --
+        heart1 makes it (relic identity visible via construct_choice), the same as run_episode.
 
-        Keys are taken BEFORE relics: at a sapphire-key chest the key and the relic are mutually
-        exclusive (engine: taking the relic clears the key, executeRewardsAction in GameAction.cpp),
-        and heart1 routes for all three keys -- a plain first-reward grab could take the relic and
-        forfeit heart access. Taking the key first is correct for a heart agent and harmless when
-        they don't conflict (emerald key: the relic is still taken on a later call)."""
+        A CARD reward opens the separate CARD_REWARD screen where heart1 chooses the card (its
+        identities are opaque here), so on this screen the net decides relic-vs-key WITHOUT the card
+        in view -- an unavoidable live-play split run_episode doesn't have. skipped_cards (set when
+        heart1 skipped the card) stops us re-opening it."""
         rewards = self.game.screen.rewards
+        has_key = any(r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)
+                      for r in rewards)
+
+        # Free pickups, one per call (the screen re-opens for the next).
         for reward_item in rewards:
-            if reward_item.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY):
+            if reward_item.reward_type in (RewardType.GOLD, RewardType.STOLEN_GOLD):
                 return CombatRewardAction(reward_item)
+            if reward_item.reward_type == RewardType.POTION and not self.game.are_potions_full():
+                return CombatRewardAction(reward_item)
+            if reward_item.reward_type == RewardType.RELIC and not has_key:
+                return CombatRewardAction(reward_item)
+
+        # Relic and key both on the screen: heart1 decides which to take.
+        if has_key:
+            decided = self._net_relic_or_key_action(rewards)
+            if decided is not None:
+                return decided
+
+        # Only the card reward (and/or skip) remains.
         for reward_item in rewards:
             if reward_item.reward_type == RewardType.POTION and self.game.are_potions_full():
                 continue
@@ -2845,6 +2862,30 @@ class STSLightspeedAgent:
             return CombatRewardAction(reward_item)
         self.skipped_cards = False
         return ProceedAction()
+
+    def _net_relic_or_key_action(self, rewards):
+        """heart1's relic-vs-key pick when a chest/elite offers both (mutually exclusive for a
+        sapphire key). The reconstructed gc is on the REWARDS screen with the relic and key injected,
+        so net_pick_action -> construct_choice exposes the relic alongside TAKE_KEY. Returns a
+        CombatRewardAction or None to fall through. Defaults to the KEY on any ambiguity (net chose
+        skip / an unrepresentable action / reconstruction diverged) -- a heart agent never forfeits a
+        free key, so this can't regress heart access even if the net pick is off."""
+        key_item = next((r for r in rewards
+                         if r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)), None)
+        relic_items = [r for r in rewards if r.reward_type == RewardType.RELIC]
+        gc = spirecomm_to_gamecontext(self.game)
+        if gc.screen_state == sts.ScreenState.REWARDS:
+            action = self.net_pick_action(gc)
+            if action is not None and action.rewards_action_type == sts.RewardsActionType.RELIC:
+                idx = action.idx1
+                if 0 <= idx < len(relic_items):
+                    print(f"[net] reward relic-vs-key -> relic {relic_items[idx].relic.name}",
+                          file=sys.stderr)
+                    return CombatRewardAction(relic_items[idx])
+        if key_item is not None:
+            print("[net] reward relic-vs-key -> key", file=sys.stderr)
+            return CombatRewardAction(key_item)
+        return None
 
 
 DEFAULT_CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "heart1.pt.iter_1295")
