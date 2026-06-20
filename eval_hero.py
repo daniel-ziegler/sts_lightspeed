@@ -117,13 +117,13 @@ def main():
     if os.path.exists(args.out_csv):
         with open(args.out_csv, newline='') as fin:
             for r in csv.DictReader(fin):
-                rows.append((int(r['seed']), int(r['won']), int(r['floor'])))
+                rows.append((int(r['seed']), int(r['won']), int(r['floor']), int(r.get('keys', -1))))
                 done.add(int(r['seed']))
     todo = [s for s in seeds if s not in done]
     fout = open(args.out_csv, 'a', newline='')
     writer = csv.writer(fout)
     if not done:
-        writer.writerow(['seed', 'won', 'floor']); fout.flush()
+        writer.writerow(['seed', 'won', 'floor', 'keys']); fout.flush()
 
     # Boss encounter ids (MonsterEncounter enum order; see constants/MonsterEncounters.h)
     BOSS_ENCOUNTERS = {18, 19, 20, 37, 38, 39, 52, 53, 54, 56}
@@ -153,11 +153,12 @@ def main():
                     traj = f.result()
                     won = int(traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY)
                     floor = int(traj.final_metrics.floor_num)
+                    keys = int(traj.final_metrics.num_keys)
                 except Exception as e:
                     print(f"  seed {s}: FAILED {e}", flush=True)
-                    won, floor = -1, -1
-                rows.append((s, won, floor))
-                writer.writerow((s, won, floor)); fout.flush()
+                    won, floor, keys = -1, -1, -1
+                rows.append((s, won, floor, keys))
+                writer.writerow((s, won, floor, keys)); fout.flush()
                 if bwriter is not None and won != -1:
                     for i, snap in enumerate(traj.battle_log):
                         bwriter.writerow((s, i, snap.floor, snap.act,
@@ -165,11 +166,12 @@ def main():
                                           snap.cur_hp, snap.potion_count, won, floor))
                     bfout.flush()
                 n = len(rows)
-                wn = sum(1 for _, w, _ in rows if w == 1)
-                err = sum(1 for _, w, _ in rows if w == -1)
-                print(f"  {n:4d}/{len(seeds)}  seed={s} won={won} floor={floor} "
-                      f"running_win={wn/max(1,n-err):.3f} ({wn}/{n-err})  "
-                      f"elapsed={time.time()-t0:.0f}s",
+                wn = sum(1 for _, w, _, _ in rows if w == 1)
+                hk = sum(1 for _, w, _, k in rows if w == 1 and k == 3)
+                err = sum(1 for _, w, _, _ in rows if w == -1)
+                print(f"  {n:4d}/{len(seeds)}  seed={s} won={won} floor={floor} keys={keys} "
+                      f"running_win={wn/max(1,n-err):.3f} heart_kill={hk/max(1,n-err):.3f} "
+                      f"({hk}/{n-err})  elapsed={time.time()-t0:.0f}s",
                       flush=True)
     fout.close()
     if bfout is not None:
@@ -179,16 +181,20 @@ def main():
     n = len(rows_clean)
     wins = sum(r[1] for r in rows_clean)
     win_rate = wins / max(1, n)
+    heart_kills = sum(1 for r in rows_clean if r[1] == 1 and r[3] == 3)
+    heart_kill_rate = heart_kills / max(1, n)
     floors = [r[2] for r in rows_clean]
     mean_floor = sum(floors) / max(1, n)
     # Wilson-ish std for a binary proportion
     import math
     sd = math.sqrt(win_rate * (1 - win_rate) / max(1, n))
+    hk_sd = math.sqrt(heart_kill_rate * (1 - heart_kill_rate) / max(1, n))
     print()
     print(f"=== EVAL RESULT ===")
-    print(f"  games:     {n} (failed: {len(rows)-n})")
-    print(f"  win_rate:  {win_rate:.4f} ± {sd:.4f}  ({wins}/{n})")
-    print(f"  avg_floor: {mean_floor:.2f}")
+    print(f"  games:      {n} (failed: {len(rows)-n})")
+    print(f"  win_rate:   {win_rate:.4f} ± {sd:.4f}  ({wins}/{n})")
+    print(f"  heart_kill: {heart_kill_rate:.4f} ± {hk_sd:.4f}  ({heart_kills}/{n})  [won AND keys==3]")
+    print(f"  avg_floor:  {mean_floor:.2f}")
     print(f"  out_csv:   {args.out_csv}")
     print(f"  total:     {time.time()-t0:.0f}s")
 
