@@ -707,6 +707,47 @@ def pick_card_with_net(service: NNService, choice: Choice, actions: list[sts.Gam
     action, action_desc = path_to_action_and_desc(choice, path)
     return action, path
 
+def choose_overworld_action(service, choice: Choice, gc: sts.GameContext, rng,
+                            temperature: float = 1.0, randomize_path_choices: bool = False):
+    """Pick one overworld GameAction from the network for a (>1-option) choice screen.
+
+    The single decision core shared by rl_train.run_episode (training/eval) and comm.py (live
+    play), so the policy makes the same choice deployed as it did in training. Returns
+    (action, action_desc, path, chosen_idx, log_prob, value).
+
+    temperature == 1.0 is plain softmax sampling (the training default); >0 and !=1 tempers the
+    logits before sampling; <= 0 picks greedily (argmax, comm.py's default for deployment).
+    randomize_path_choices is run_episode's eval intervention: replace pure path-choice screens
+    with a uniform-random pick (everything else stays policy-driven)."""
+    from network import CHOICE_PATHS_OFFSET
+    batch_tensors, output = service.get_logits(choice)
+    if isinstance(output, tuple):
+        logits, value_output = output
+        value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
+    else:
+        logits = output
+        value = 0.0
+    logits_tensor = torch.tensor(logits)
+    if temperature > 0 and temperature != 1.0:
+        logits_tensor = logits_tensor / temperature
+    log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
+    probs = np.exp(log_probs)
+
+    pure_path = bool(choice.paths_offered) and not (
+        choice.cards_offered or choice.relics_offered or choice.potions_offered
+        or choice.fixed_actions)
+    if randomize_path_choices and pure_path:
+        chosen_idx = CHOICE_PATHS_OFFSET + rng.randrange(len(choice.paths_offered))
+    elif temperature <= 0:
+        chosen_idx = int(np.argmax(probs))
+    else:
+        chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
+
+    log_prob = float(log_probs[chosen_idx])
+    path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
+    action, action_desc = path_to_action_and_desc(choice, path, gc)
+    return action, action_desc, path, chosen_idx, log_prob, value
+
 def path_to_action_and_desc(choice: Choice, path: list, gc: Optional[sts.GameContext] = None) -> tuple[sts.GameAction, str]:
     """Convert a path to the corresponding action and description string.
     

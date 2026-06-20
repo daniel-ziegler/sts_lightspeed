@@ -28,7 +28,7 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from network import NN, ModelHP, move_to_device, process_batch, choice_space, collate_fn, load_network_backward_compatible, SeparateValuePolicy, EventFixedInfo, CHOICE_PATHS_OFFSET
-from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, take_free_rewards, flatten_dict
+from playouts import run_game, NNService, Choice, Decision, ActionType, ChoiceStats, path_to_action_and_desc, construct_choice, take_free_rewards, choose_overworld_action, flatten_dict
 from algorithms import (
     policy_log_probs, importance_ratio, approx_kl, clip_fraction, clipped_surrogate, masked_entropy,
     PPOAlgorithm,
@@ -495,48 +495,16 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
                                    len(choice.potions_offered) + len(choice.fixed_actions) + len(choice.paths_offered))
                     
                     if total_choices > 1:
-                        # Get network predictions
-                        batch_tensors, output = service.get_logits(choice)
-                        
-                        # Handle value head output
-                        if isinstance(output, tuple):
-                            logits, value_output = output
-                            value = float(value_output) if np.isscalar(value_output) else float(value_output[0])
-                        else:
-                            logits = output
-                            # No separate value service needed with combined wrapper
-                            value = 0.0
-                        
-                        # Convert to probabilities and sample action. sampling_temperature>1
-                        # widens the distribution (more diverse trajectories); the stored
-                        # log_prob is of the tempered behavior policy actually sampled from.
-                        # Default 1.0 is a no-op.
-                        logits_tensor = torch.tensor(logits)
-                        if config.sampling_temperature != 1.0:
-                            logits_tensor = logits_tensor / config.sampling_temperature
-                        log_probs = F.log_softmax(logits_tensor, dim=0).numpy()
-                        probs = np.exp(log_probs)
-
-                        # Intervention eval: replace the policy with uniform-random on pure
-                        # path-choice screens (everything else stays policy-driven), to price
-                        # the routing policy's win-rate contribution.
-                        if (config.randomize_path_choices and choice.paths_offered
-                                and not (choice.cards_offered or choice.relics_offered
-                                         or choice.potions_offered or choice.fixed_actions)):
-                            chosen_idx = CHOICE_PATHS_OFFSET + rng.randrange(len(choice.paths_offered))
-                        else:
-                            chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
-                        log_prob = log_probs[chosen_idx]
-                        
-                        # No perfected strike tracking needed
-                        
-                        # Convert back to game action
-                        path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
+                        # Shared decision core (comm.py live play uses the same call), so the policy
+                        # acts identically deployed as in training. sampling_temperature widens the
+                        # behavior policy (>1); the stored log_prob is of the tempered policy actually
+                        # sampled from. randomize_path_choices is the routing-intervention eval.
+                        action, action_desc, path, chosen_idx, log_prob, value = choose_overworld_action(
+                            service, choice, gc, rng,
+                            temperature=config.sampling_temperature,
+                            randomize_path_choices=config.randomize_path_choices)
                         choice_type = _PATH_TO_ACTIONTYPE[path[0]]
 
-                        # Generate clean action description based on path
-                        action, action_desc = path_to_action_and_desc(choice, path, gc)
-                        
                         # Extract metrics from game state BEFORE action execution
                         perfected_strike_count = sum(1 for card in gc.deck if card.id == sts.CardId.PERFECTED_STRIKE)
                         metrics = GameMetrics(

@@ -2526,27 +2526,20 @@ class STSLightspeedAgent:
     def net_pick_action(self, gc):
         """Run heart1 on gc's current choice screen and return the chosen sts.GameAction (in
         GameContext space), or None if construct_choice can't represent this screen (so the
-        caller fails loud). Real errors propagate -- we don't play on a guessed state."""
-        from playouts import construct_choice, pick_card_with_net, get_card_probs, path_to_action_and_desc
-        from network import choice_space
-        import numpy as np
+        caller fails loud). Real errors propagate -- we don't play on a guessed state.
+
+        Uses playouts.choose_overworld_action -- the SAME decision core rl_train.run_episode uses
+        for training/eval -- so heart1 makes the same choice live as it did in training. temperature
+        <= 0 (the deploy default) picks greedily; > 0 samples with net_rng."""
+        from playouts import construct_choice, choose_overworld_action
 
         obs = sts.getNNRepresentation(gc)
         actions = sts.GameAction.getAllActionsInState(gc)
         choice = construct_choice(gc, obs, actions)
         if choice is None:
             return None
-        if self.temperature and self.temperature > 0:
-            action, _path = pick_card_with_net(self.net, choice, actions,
-                                               temperature=self.temperature, rng=self.net_rng)
-            return action
-        # Greedy: pick_card_with_net's Boltzmann path divides by temperature, so argmax directly.
-        collated_input, output = self.net.get_logits(choice)
-        logits = output[0] if isinstance(output, tuple) else output
-        probs = get_card_probs(logits)
-        idx = int(np.argmax(probs))
-        path = choice_space.ix_to_path(collated_input["choices"], idx)
-        action, _desc = path_to_action_and_desc(choice, path)
+        action, _desc, _path, _idx, _logp, _val = choose_overworld_action(
+            self.net, choice, gc, self.net_rng, temperature=self.temperature)
         return action
 
     def net_card_reward_action(self):
