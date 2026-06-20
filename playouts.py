@@ -805,6 +805,13 @@ def construct_choice(gc: sts.GameContext, obs: sts.NNRepresentation, actions: li
             elif action.rewards_action_type == sts.RewardsActionType.POTION:
                 potions_offered.append(gc.screen_state_info.rewards_container.potions[action.idx1])
                 potion_actions.append(action)
+            elif action.rewards_action_type == sts.RewardsActionType.RELIC:
+                # Combat/chest reward relics. take_free_rewards auto-takes these when no key is on
+                # the screen (free, always good), so a RELIC action only survives to here in the
+                # key-present case (e.g. a sapphire-key chest) -- exactly the relic-vs-key tradeoff
+                # we want the policy to be able to express instead of being forced onto TAKE_KEY.
+                relics_offered.append(gc.screen_state_info.rewards_container.relics[action.idx1])
+                relic_actions.append(action)
             elif action.rewards_action_type == sts.RewardsActionType.SKIP:
                 fixed_actions.append({'action': FixedAction.SKIP})
                 fixed_actions_list.append(action)
