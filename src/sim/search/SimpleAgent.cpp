@@ -120,6 +120,25 @@ int getLowHpMonster(const BattleContext &bc, bool randomize, std::default_random
     return lowIdxs.empty() ? -1 : lowIdxs[0];
 }
 
+// Feed only grants its permanent max-HP on a kill, so the greedy rollout should play it only when it
+// would be lethal -- otherwise it's just a weak 1-cost attack that wastes the card. Tests the lowest-HP
+// targetable monster (the default attack target); cheap -- one scan + one damage calc.
+bool feedWouldKill(const BattleContext &bc, const CardInstance &feed) {
+    int lowHp = 10000, tgt = -1;
+    for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+        const auto &m = bc.monsters.arr[i];
+        if (m.isTargetable() && m.curHp < lowHp) {
+            lowHp = m.curHp;
+            tgt = i;
+        }
+    }
+    if (tgt < 0) {
+        return false;
+    }
+    const int dmg = bc.calculateCardDamage(feed, tgt, feed.isUpgraded() ? 12 : 10);
+    return dmg >= bc.monsters.arr[tgt].curHp + bc.monsters.arr[tgt].block;
+}
+
 int getBestCardToPlay(const BattleContext &bc, fixed_list<int,10> handIdxs, bool randomize, std::default_random_engine &rng) {
     int bestPriority = 10000;
     fixed_list<int,10> bestHandIdxs;
@@ -224,9 +243,11 @@ int search::SimpleAgent::getIncomingDamage(const BattleContext &bc) const {
         }
 
         DamageInfo dInfo;
-        // Hidden intents (Runic Dome): the current move may be a stale pre-roll placeholder,
-        // so estimate incoming damage flat instead of reading it.
-        if (bc.intentsHidden) {
+        // Only fall back to a flat estimate while the move is genuinely unresolved (a deferred Runic
+        // Dome roll not yet materialized). The rollout materializes pending moves before deciding, so
+        // we normally read the real move here; keying on the per-monster pending state (not the
+        // global intentsHidden flag) lets a sampled/materialized intent be read for real.
+        if (m.pendingMoveRolls > 0) {
             dInfo = {5*bc.gameContext->act, 1};
 
         } else {
@@ -367,7 +388,13 @@ bool search::SimpleAgent::playPotion(BattleContext &bc) {
     for (; i < bc.potionCapacity; ++i) {
         auto p = bc.potions[i];
 
-        bool canDrink = !(p == sts::Potion::FAIRY_POTION || p == sts::Potion::EMPTY_POTION_SLOT);
+        // Smoke Bomb is an invalid action when you can't flee (boss, or Surrounded by the act-4 Spire
+        // elite); offering it here would trip the isValidAction assert in Action::execute. Mirrors the
+        // gate in chooseDumpPotionAction / isValidPotionAction.
+        bool canDrink = !(p == sts::Potion::FAIRY_POTION || p == sts::Potion::EMPTY_POTION_SLOT
+                          || (p == sts::Potion::SMOKE_BOMB
+                              && (isBossEncounter(bc.encounter)
+                                  || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED))));
 
         if (canDrink) {
             int target = 0;
@@ -393,7 +420,11 @@ static bool chooseDumpPotionAction(const BattleContext &bc, bool randomize,
                                    std::default_random_engine &rng, search::Action &outAction) {
     for (int i = 0; i < bc.potionCapacity; ++i) {
         const Potion p = bc.potions[i];
-        if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID) {
+        if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID
+                || (p == Potion::SMOKE_BOMB
+                    && (isBossEncounter(bc.encounter) || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED)))) {
+            // Smoke Bomb escapes combat -- forbidden when you can't flee (boss, or Surrounded by the
+            // act-4 Spire elite); a rollout drinking it would falsely score the escape as a survival.
             continue;
         }
         int target = 0;
@@ -558,6 +589,12 @@ sts::search::Action search::SimpleAgent::chooseBattleCardPlay(BattleContext &bc)
             continue;
         }
         playableCardsIdxs.push_back(i);
+        // Greedy policy plays Feed only when it's lethal; exploration (randomize / the random policy)
+        // is exempt -- it still reaches Feed via playableCardsIdxs. Leaving Feed out of the candidate
+        // lists below means a non-lethal Feed is never the greedy pick (and won't block END_TURN).
+        if (c.getId() == CardId::FEED && !randomize && !feedWouldKill(bc, c)) {
+            continue;
+        }
         if (isAoeCard.test(static_cast<int>(c.getId()))) {
             aoeCards.push_back(i);
         }

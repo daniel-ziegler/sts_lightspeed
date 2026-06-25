@@ -1444,7 +1444,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
         // ************ DARKLING ************
 
         case MMID::DARKLING_CHOMP:
-            attackPlayerHelper(bc, asc2 ? 9 : 8);
+            attackPlayerHelper(bc, asc2 ? 9 : 8, 2);  // Java CHOMP_AMT=2 hits
             bc.addToBot( Actions::RollMove(idx) );
             break;
 
@@ -2912,8 +2912,14 @@ MMID Monster::getMoveForRoll(BattleContext &bc, const MonsterRollInputs &in, int
             // 4 mega debuff
             // 5 spawn
 
-            // first turn always spawn
-            if (firstTurn()) {
+            // Turn 1 spawns the torch heads (the real game gates this on its firstMove flag). Key on
+            // the turn number, NOT firstTurn(): firstTurn() means "moveHistory[0] is unset", which is
+            // wrongly true for a live-bridge reconstruction whose current move is hidden (Runic Dome
+            // defers the roll). Also require free slots: the real game never spawns/revives into a
+            // full field, and the search re-queries this move within a turn (bc.turn still 0) after a
+            // spawn has already filled the slots -- without the room check that re-query asserts in
+            // SpawnTorchHeads. monsterTurnNumber comes from the (now reconstructed) bc.turn.
+            if (in.monsterTurnNumber == 1 && in.monstersAlive < 3) {
                 return (MMID::THE_COLLECTOR_SPAWN);
                 break;
             }

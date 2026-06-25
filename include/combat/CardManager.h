@@ -56,6 +56,10 @@ namespace sts {
         void createTempCardInHand(CardInstance c);
 
         void removeFromDrawPileAtIdx(int idx);
+        // Remove the first draw-pile card matching `match` by id + upgrade count, returning it (or an
+        // INVALID CardInstance if none matched). Encapsulates the pile index -- callers reconstructing
+        // an observed outcome (e.g. forcing Havoc's drawn card) shouldn't depend on the unknown order.
+        CardInstance removeFromDrawPile(const CardInstance &match);
         CardInstance popFromDrawPile(Random &rng);
 
         void removeFromHandAtIdx(int idx); // this method is dangerous if used in the wrong place.

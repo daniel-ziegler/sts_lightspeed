@@ -87,6 +87,13 @@ bool isValidPotionAction(const BattleContext &bc, const search::Action &a) {
             return false;
         }
 
+        // Smoke Bomb can't be used when you can't flee: a boss, or while Surrounded by the act-4
+        // Spire elite (drops once either of Shield/Spear dies). Only its discard is valid.
+        if (p == sts::Potion::SMOKE_BOMB
+                && (isBossEncounter(bc.encounter) || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED))) {
+            return false;
+        }
+
         if (!potionRequiresTarget(p)) {
             return true;
         }

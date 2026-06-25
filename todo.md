@@ -10,7 +10,7 @@
 - [x] map repr: less crazy version
 - [x] reenable path choices
 - [x] share embeds between identical IntSpaces (key it) and EnumSpaces. (maybe even FixedVecSpace proj params for gold?)
-- [ ] map repr: mark reachable nodes from each choice
+- [x] map repr: mark reachable nodes from each choice
 - [ ] eliminate redundancy when showing card choices from deck and in map choices
 - [ ] shop prices
 - [ ] relics repr: add counters
@@ -28,10 +28,7 @@
 - [ ] LR decay
 
 ## RL
-- [ ] exploration: make more-random states and start from them
-
-## debugging
-- [ ] sensitivity.py to analyze behavior and make sure inputs work
+- [ ] exploration: per-run random card preference rewards
 
 # throughput
 - [ ] multiprocessing
@@ -39,10 +36,16 @@
 
 # battle search
 ## randomness
-record and replay randomness
+- [x] record and replay randomness
 
 ## randomness in search
-correlated randomness in parallel nodes
+- [x] correlated randomness in parallel nodes
 
-## graph search?
-implement hashing
+## graph search
+- [x] implement hashing
+
+# cleanups
+- [ ] refactor comm.py
+    - share engine logic instead of reconstructing a bunch of it for the shadow
+    - split into multiple components, e.g. shadow state class that's fresh for each battle
+

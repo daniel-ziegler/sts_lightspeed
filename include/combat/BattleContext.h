@@ -203,6 +203,15 @@ namespace sts {
         void debuffEnemy(MonsterStatus s, int idx, int amount, bool isSourceMonster=true);
 
         [[nodiscard]] int calculateCardDamage(const CardInstance &card, int targetIdx, int baseDamage) const;
+        // Base attack damage for a card (before strength/vulnerable/etc.), accounting for the
+        // combat-state-dependent cards whose base isn't the printed constant (Perfect Strike's
+        // strikeCount bonus, Body Slam's block). Returns -1 for non-attack cards. Mirrors the live
+        // game's AbstractCard.baseDamage so a reconstruction can be checked against the displayed card.
+        [[nodiscard]] int getCardBaseDamage(const CardInstance &card) const;
+        // The card's damage as the live game displays it in hand: base through the player-side
+        // modifiers (strength/vigor/weak/stance/relics), NO target (no vulnerable). Mirrors live
+        // AbstractCard.damage; -1 for non-attacks. Used to verify a reconstruction.
+        [[nodiscard]] int getCardDamageDisplay(const CardInstance &card) const;
         [[nodiscard]] int calculateCardBlock(int baseBlock) const;
 
         void queuePurgeCard(const CardInstance &c, int target);

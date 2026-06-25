@@ -60,7 +60,7 @@ DamageInfo Monster::getMoveBaseDamage(const BattleContext &bc) const {
         case MonsterMoveId::DAGGER_EXPLODE:                 return {25};
 
         case MonsterMoveId::DARKLING_NIP:                   return {miscInfo + (asc2 ? 2 : 0)};
-        case MonsterMoveId::DARKLING_CHOMP:                 return {asc2 ? 9 : 8};
+        case MonsterMoveId::DARKLING_CHOMP:                 return {asc2 ? 9 : 8, 2};  // Java CHOMP_AMT=2 hits
 
         case MonsterMoveId::DECA_BEAM:                      return {asc4 ? 12 : 10, 2};
         case MonsterMoveId::DONU_BEAM:                      return {asc4 ? 12 : 10, 2};
@@ -197,6 +197,7 @@ DamageInfo Monster::getMoveBaseDamage(const BattleContext &bc) const {
         case MonsterMoveId::WRITHING_MASS_FLAIL:            return {asc2 ? 16 : 15};
         case MonsterMoveId::WRITHING_MASS_MULTI_STRIKE:     return {asc2 ? 9 : 7, 3};
         case MonsterMoveId::WRITHING_MASS_STRONG_STRIKE:    return {asc2 ? 38 : 32};
+        case MonsterMoveId::WRITHING_MASS_WITHER:           return {asc2 ? 12 : 10};  // ATTACK_DEBUFF: 10 damage + weak + vulnerable
 
         default:
             return {0,0};

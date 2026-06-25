@@ -853,7 +853,26 @@ PYBIND11_MODULE(slaythespire, m) {
             bc.openDiscoveryScreen(arr, copyCount, setCostToZero);
         }, "cards"_a, "copy_count"_a = 1, "set_cost_to_zero"_a = true,
             "put the bc into a DISCOVERY card-select over the given generated cards (Discovery / "
-            "Attack-Skill-Power Potion / etc.), so the search picks which to add to hand");
+            "Attack-Skill-Power Potion / etc.), so the search picks which to add to hand")
+        .def("get_card_base_damage", &BattleContext::getCardBaseDamage, "card"_a,
+            "engine's base attack damage for a card in this state (Perfect Strike strikeCount bonus, "
+            "Body Slam block, etc.); -1 for non-attacks. Compare to the live card's base_damage.")
+        .def("get_card_damage_display", &BattleContext::getCardDamageDisplay, "card"_a,
+            "engine's in-hand displayed damage for a card (base + player-side modifiers, no target "
+            "vulnerable); -1 for non-attacks. Compare to the live card's damage field.")
+        .def("open_codex_select", [](BattleContext &bc, std::vector<CardId> cards) {
+            // Nilry's Codex: choose 1 of 3 offered cards. Distinct task from DISCOVERY (no
+            // cost-to-zero; shuffled into the draw pile, not made free this turn). Inject the live
+            // offered cards so the search picks among the real options.
+            bc.inputState = InputState::CARD_SELECT;
+            bc.cardSelectInfo.cardSelectTask = CardSelectTask::CODEX;
+            std::array<CardId, 3> arr { CardId::INVALID, CardId::INVALID, CardId::INVALID };
+            for (size_t i = 0; i < cards.size() && i < 3; ++i) {
+                arr[i] = cards[i];
+            }
+            bc.cardSelectInfo.codexCards() = arr;
+        }, "cards"_a,
+            "put the bc into a CODEX (Nilry's Codex) card-select over the given offered cards");
 
     def_value(battleContext, "input_state", &BattleContext::inputState);
     def_value(battleContext, "encounter", &BattleContext::encounter);
@@ -907,6 +926,19 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("hasRelic", [](const Player &p, RelicId r) -> bool {
             return p.hasRelicRuntime(r);
         })
+        .def("setHasRelic", [](Player &p, RelicId r, bool value) {
+            // Runtime mirror of Player::setHasRelic<r> (compile-time template) -- flips the combat
+            // relic bit. Reconstruction uses this to clear a spent one-shot relic (Lizard Tail used,
+            // Omamori out of charges) that register_relics_from would otherwise leave marked present.
+            const int idx = static_cast<int>(r);
+            if (value) {
+                if (idx < 64) p.relicBits0 |= 1ULL << idx;
+                else          p.relicBits1 |= 1ULL << (idx - 64);
+            } else {
+                if (idx < 64) p.relicBits0 &= ~(1ULL << idx);
+                else          p.relicBits1 &= ~(1ULL << (idx - 64));
+            }
+        }, "relic"_a, "value"_a)
         .def("gainBlock", [](Player &p, BattleContext &bc, int amount) {
             p.gainBlock(bc, amount);
         })
@@ -939,7 +971,23 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("regen", &Monster::regen)
         .def_readwrite("metallicize", &Monster::metallicize)
         .def_readwrite("platedArmor", &Monster::platedArmor)
+        // Hidden move-state the live game can't observe but the search's takeTurn rollouts read.
+        // miscInfo holds move-specific data the engine rolls at battle start / sets mid-move (e.g.
+        // Louse bite damage, Orb Walker laser, Hexaghost Divider per-hit damage, Darkling Nip
+        // damage); left at 0 by a mid-fight reconstruction, attacks that read it simulate as 0
+        // damage so the search never blocks them. uniquePower0/1 are per-monster counters
+        // (Hexaghost Sear cycle, Awakened One phase, etc.).
+        .def_readwrite("miscInfo", &Monster::miscInfo)
+        .def_readwrite("uniquePower0", &Monster::uniquePower0)
+        .def_readwrite("uniquePower1", &Monster::uniquePower1)
         .def("getName", &Monster::getName)
+        .def("get_move_base_damage", [](const Monster &m, const BattleContext &bc) {
+            // (per-hit base damage, hit count) the engine predicts for this monster's current move,
+            // before strength/vulnerable. attackCount 0 => the move is not an attack. Used to
+            // sanity-check a reconstruction against the live game's displayed intent damage.
+            auto d = m.getMoveBaseDamage(bc);
+            return std::make_pair(d.damage, d.attackCount);
+        }, "bc"_a)
         .def("hasStatus", [](const Monster &m, MonsterStatus s) -> bool {
             return m.hasStatusInternal(s);
         })
@@ -961,7 +1009,15 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("rollMove", &Monster::rollMove, "bc"_a,
             "roll this monster's next move via its own AI (keys on moveHistory). Used to reconstruct "
             "an intent the live game hasn't committed yet -- e.g. a flying Byrd between turns whose "
-            "intent CommunicationMod reports as NONE with no move_id.");
+            "intent CommunicationMod reports as NONE with no move_id.")
+        .def("setMove", [](Monster &m, int moveId) {
+            m.setMove(static_cast<MonsterMoveId>(moveId));
+        }, "moveId"_a,
+            "Force this monster's current move, shifting moveHistory (history[1]=history[0]; "
+            "history[0]=moveId). The observed-move primitive for the persistent-bc bridge: keeps "
+            "moveHistory-driven selection correct for the 61/65 monsters that don't read selection-time "
+            "miscInfo. The 4 that do (Champ/Darkling/Book of Stabbing/Gremlin Wizard) need miscInfo "
+            "reconciled separately -- see PERSISTENT_BC_PLAN.md.");
 
     def_value(monster, "id", &Monster::id);
 
@@ -1043,6 +1099,8 @@ PYBIND11_MODULE(slaythespire, m) {
     // CardManager bindings
     pybind11::class_<CardManager> cardManager(m, "CardManager");
     cardManager.def_readwrite("cardsInHand", &CardManager::cardsInHand)
+        .def_readwrite("strikeCount", &CardManager::strikeCount,
+            "count of in-combat Strike-named cards (hand+draw+discard); Perfect Strike's bonus reads it")
         .def_readwrite("next_unique_card_id", &CardManager::nextUniqueCardId,
             "the counter the engine assigns to each new in-battle card; reconstructing a state must "
             "give every card a distinct id (cards are tracked through hand/queue/piles by uniqueId) "
@@ -1059,11 +1117,24 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_property_readonly("exhaustPile", [](CardManager &cm) {
             return std::vector<CardInstance>(cm.exhaustPile.begin(), cm.exhaustPile.end());
         })
+        .def("notify_add_card_to_combat", &CardManager::notifyAddCardToCombat,
+            "register a card as having entered combat (maintains strikeCount for Perfect Strike). "
+            "Native deck-load calls this for every card; a reconstruction must too, or strikeCount "
+            "stays 0 (and goes negative as strikes are moved to exhaust) so Perfect Strike loses its "
+            "per-Strike bonus damage")
         .def("moveToHand", &CardManager::moveToHand)
         .def("moveToDiscardPile", &CardManager::moveToDiscardPile)
         .def("moveToExhaustPile", &CardManager::moveToExhaustPile)
         .def("moveToDrawPileTop", &CardManager::moveToDrawPileTop)
         .def("moveToDrawPileUnknown", &CardManager::moveToDrawPileUnknown)
+        .def("removeFromDrawPile", &CardManager::removeFromDrawPile, "match"_a,
+             "remove the first draw-pile card matching by id + upgrade; returns it (INVALID if none)")
+        .def("set_stasis_card", [](CardManager &cm, int slot, const CardInstance &c) {
+                cm.stasisCards[slot] = c;
+            }, "slot"_a, "card"_a,
+            "store a Bronze Orb's in-stasis card (slot = min(orbMonsterIdx, 1)). A reconstructed "
+            "Bronze Automaton fight whose orbs already used Stasis must set this, or the engine's "
+            "returnStasisCard asserts on the orb's death (the stolen card is missing from every pile)")
         .def("removeFromHandAtIdx", &CardManager::removeFromHandAtIdx)
         .def("draw", &CardManager::draw)
         .def("clear", &CardManager::clear);
@@ -2117,9 +2188,17 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("LOCK_ON", MonsterStatus::LOCK_ON)
         .value("MARK", MonsterStatus::MARK)
         .value("METALLICIZE", MonsterStatus::METALLICIZE)
+        .value("MINION", MonsterStatus::MINION)
+        .value("MINION_LEADER", MonsterStatus::MINION_LEADER)
+        .value("PAINFUL_STABS", MonsterStatus::PAINFUL_STABS)
         .value("PLATED_ARMOR", MonsterStatus::PLATED_ARMOR)
         .value("POISON", MonsterStatus::POISON)
         .value("REGEN", MonsterStatus::REGEN)
+        .value("REGROW", MonsterStatus::REGROW)
+        .value("SHIFTING", MonsterStatus::SHIFTING)
+        .value("STASIS", MonsterStatus::STASIS)
+        .value("ASLEEP", MonsterStatus::ASLEEP)
+        .value("BARRICADE", MonsterStatus::BARRICADE)
         .value("SHACKLED", MonsterStatus::SHACKLED)
         .value("STRENGTH", MonsterStatus::STRENGTH)
         .value("VULNERABLE", MonsterStatus::VULNERABLE)

@@ -181,7 +181,17 @@ class Coordinator:
                     elif self.in_game:
                         if len(self.action_queue) == 0 and perform_callbacks:
                             new_action = self.state_change_callback(self.last_game_state)
-                            self.add_action_to_queue(new_action)
+                            # The agent returns None for transient/unactionable states (e.g. the
+                            # animation frame right after an in-combat Discovery select, which only
+                            # offers key/click/wait). Enqueuing None crashes execute_next_action_if_ready
+                            # on `.can_be_executed`; instead skip it and re-poll on the next state. The
+                            # agent raises on genuinely-unhandled actionable screens, so a None here is
+                            # always a wait, never a swallowed decision.
+                            if new_action is not None:
+                                self.add_action_to_queue(new_action)
+                            else:
+                                print("[coordinator] agent returned None (transient state); waiting "
+                                      "for next state", file=sys.stderr)
                     elif self.stop_after_run:
                         self.clear_actions()
                     else:

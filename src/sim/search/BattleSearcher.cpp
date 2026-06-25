@@ -530,6 +530,18 @@ void search::BattleSearcher::rolloutToEnd(BattleContext &bc, std::vector<Action>
         Action action;
         switch (bc.inputState) {
             case InputState::PLAYER_NORMAL:
+                // Resolve any hidden (Runic Dome) intent with a sample roll before the rollout agent
+                // decides, so it sees the real incoming damage and blocks sensibly. Each rollout's
+                // rng samples a different move, so leaf values average to the true EV -- far better
+                // than the flat 5*act guess, which made the agent under-block and die, leaving
+                // card-play nodes underestimated and unexplored. Isolated to this rollout's scratch
+                // bc; the tree still models the hidden intent honestly via its END_TURN chance node.
+                for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                    auto &m = bc.monsters.arr[i];
+                    if (m.pendingMoveRolls > 0 && !m.isDeadOrEscaped()) {
+                        m.materializePendingMove(bc);
+                    }
+                }
                 // Rollout potion policy (STS_ROLLOUT_POTION_MODE) gets first refusal; default
                 // mode never drinks, leaving potion plays to the search tree.
                 if (!rolloutAgent.choosePotionAction(bc, action)) {
@@ -725,6 +737,15 @@ void search::BattleSearcher::enumeratePotionActions(search::BattleSearcher::Node
             continue;
         }
 
+        // Smoke Bomb escapes combat, forbidden whenever you can't flee: a boss, or while Surrounded
+        // by the act-4 Spire Shield+Spear (drops once either dies). The search otherwise over-picks
+        // the high-value escape and the live game rejects the "use" command. Offer only its discard.
+        if (p == Potion::SMOKE_BOMB
+                && (isBossEncounter(bc.encounter) || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED))) {
+            node.edges.push_back({Action(ActionType::POTION, pIdx, -1)});
+            continue;
+        }
+
         if (!potionRequiresTarget(p)) {
             node.edges.push_back({Action(ActionType::POTION, pIdx)});
             continue;
@@ -865,11 +886,17 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
 
 double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     const double potionScore = bc.potionCount * evalWeights.potionWeight;
+    // An unused Lizard Tail is worth ~50% max HP -- its one-time "heal to 50% when you'd die".
+    // Without crediting the held relic, the search prefers TRIGGERING it (revive to 50%, then win at
+    // 50% HP) over ending the fight at low HP, intentionally taking lethal damage to burn this
+    // run-saving relic for a marginal heal. Valuing the unused relic makes keeping it >= using it.
+    // Scaled at HP's ~1:1 weight (matches postBattleHealedHp / the loss-branch hp ratio).
+    const double lizardTailValue = bc.player.hasRelic<RelicId::LIZARD_TAIL>() ? 0.5 * bc.player.maxHp : 0.0;
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
         // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
         // search doesn't value preserving HP that the game is about to restore anyway.
-        double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty);
+        double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty) + lizardTailValue;
         if (evalWeights.goldLossWeight != 0 && bc.requiresStolenGoldCheck()) {
             // Gold held by an escaped thief is permanently lost; kills refund it at exitBattle,
             // so only the escaped case is penalized (steal-then-kill nets the same as no steal).
@@ -905,7 +932,7 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
         const double drawBonus = bc.cardsDrawn * evalWeights.drawWeight;
         const double aliveScore = bc.monsters.monstersAlive * -evalWeights.aliveWeight;
 
-        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight);
+        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + lizardTailValue;
     }
 }
 

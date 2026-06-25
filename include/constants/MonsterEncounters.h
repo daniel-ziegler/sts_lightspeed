@@ -200,6 +200,27 @@ namespace sts {
                e == sts::MonsterEncounter::THE_HEART;
     }
 
+    // Mirrors the game's AbstractRoom.eliteTrigger: true for every map elite (MonsterRoomElite) plus
+    // the two event fights that set eliteTrigger -- the Dead Adventurer elite (LAGAVULIN_EVENT, and the
+    // shared GREMLIN_NOB/THREE_SENTRIES) and the second Colosseum fight (COLOSSEUM_EVENT_NOBS). None of
+    // these encounters ever appear as a non-elite fight, so keying on the encounter is exact. Drives
+    // the elite-gated atBattleStart relics (Preserved Insect, Sling of Courage, Slaver's Collar), which
+    // would otherwise miss event elites because their room is EVENT, not MonsterRoomElite.
+    static constexpr bool isEliteEncounter(MonsterEncounter e) {
+        return e == sts::MonsterEncounter::GREMLIN_NOB ||
+               e == sts::MonsterEncounter::LAGAVULIN ||
+               e == sts::MonsterEncounter::THREE_SENTRIES ||
+               e == sts::MonsterEncounter::GREMLIN_LEADER ||
+               e == sts::MonsterEncounter::SLAVERS ||
+               e == sts::MonsterEncounter::BOOK_OF_STABBING ||
+               e == sts::MonsterEncounter::GIANT_HEAD ||
+               e == sts::MonsterEncounter::NEMESIS ||
+               e == sts::MonsterEncounter::REPTOMANCER ||
+               e == sts::MonsterEncounter::SHIELD_AND_SPEAR ||
+               e == sts::MonsterEncounter::LAGAVULIN_EVENT ||
+               e == sts::MonsterEncounter::COLOSSEUM_EVENT_NOBS;
+    }
+
 
 
 

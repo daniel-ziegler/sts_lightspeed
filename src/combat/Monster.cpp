@@ -442,6 +442,13 @@ void Monster::die(BattleContext &bc) {
         returnStasisCard(bc);
     }
 
+    // Spire Shield + Spire Spear surround the player together; killing EITHER drops Surrounded (you
+    // can now face the survivor). That both stops the back-attack 1.5x (calculateDamageToPlayer) and
+    // re-enables escape, so Smoke Bomb becomes usable -- matching the live game.
+    if (id == MonsterId::SPIRE_SHIELD || id == MonsterId::SPIRE_SPEAR) {
+        bc.player.removeStatus<PS::SURROUNDED>();
+    }
+
     if (hasStatus<MS::CORPSE_EXPLOSION>()) {
         int damage = maxHp * getStatus<MS::CORPSE_EXPLOSION>();
         bc.addToBot( Actions::DamageAllEnemy(damage) );

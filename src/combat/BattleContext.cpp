@@ -100,8 +100,6 @@ void BattleContext::initRelics(const GameContext &gc) {
     fixed_list<RelicId, 8> atBattleStart;
     fixed_list<RelicId, 2> atTurnStartPostDraw;
 
-    auto room = gc.curRoom;
-
     auto &p = player;
 
     for (const auto &r : gc.relics.relics) {
@@ -323,13 +321,15 @@ void BattleContext::initRelics(const GameContext &gc) {
                 break;
 
             case R::PANTOGRAPH:
-                if (room == Room::BOSS) {
+                // Java: heals iff any monster.type == BOSS -- so an event boss (Mind Bloom spawns The
+                // Guardian in an EventRoom, room != BOSS) still heals. Key on the encounter, not room.
+                if (isBossEncounter(encounter)) {
                     p.heal(25);
                 }
                 break;
 
             case R::PRESERVED_INSECT:
-                if (room == Room::ELITE) {
+                if (isEliteEncounter(encounter)) {
                     for (int i = 0; i < monsters.monsterCount; ++i) {
                         Monster &m = monsters.arr[i];
                         m.curHp = static_cast<int>(m.maxHp * .75);
@@ -347,13 +347,15 @@ void BattleContext::initRelics(const GameContext &gc) {
                 break;
 
             case R::SLAVERS_COLLAR:
-                if (room == Room::ELITE || room == Room::BOSS) { // todo this needs to be set by eliteTrigger maybe?
+                // Java: eliteTrigger || any monster.type == BOSS. Event boss/elite fights (Mind Bloom,
+                // Colosseum Nobs, Dead Adventurer) have room == EVENT, so key on the encounter.
+                if (isEliteEncounter(encounter) || isBossEncounter(encounter)) {
                     p.energyPerTurn++;
                 }
                 break;
 
             case R::SLING_OF_COURAGE:
-                if (room == Room::ELITE) {
+                if (isEliteEncounter(encounter)) {
                     p.buff<PS::STRENGTH>(2);
                 }
                 break;
@@ -1101,7 +1103,7 @@ void BattleContext::useAttackCard() {
         }
 
         case CardId::IRON_WAVE: {
-            addToBot( Actions::GainBlock(calculateCardBlock(calculateCardBlock(up  ? 7 : 5))) );
+            addToBot( Actions::GainBlock(calculateCardBlock(up  ? 7 : 5)) );
             addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, up ? 7 : 5)) );
             break;
         }
@@ -2424,7 +2426,11 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::SMOKE_BOMB:
-            if (gameContext->curRoom != Room::BOSS) {
+            // Java SmokeBomb.canUse(): blocked if any monster.type == BOSS or any monster has
+            // BackAttack. Keying on curRoom != BOSS lets you escape an EVENT boss (Mind Bloom's
+            // Guardian, room == EVENT) and ignores the act-4 SURROUNDED back-attack. Match the search
+            // gating: escape only when not a boss encounter and not surrounded.
+            if (!isBossEncounter(encounter) && !player.hasStatus<PS::SURROUNDED>()) {
                 smokeBombUsed = true;
                 outcome = Outcome::PLAYER_VICTORY;
             }
@@ -2698,6 +2704,43 @@ void BattleContext::triggerOnOtherCardPlayed(const CardInstance &usedCard) {
     if (thousandCuts) {
         addToBot(Actions::DamageAllEnemy(thousandCuts));
     }
+}
+
+int BattleContext::getCardBaseDamage(const CardInstance &card) const {
+    const bool up = card.isUpgraded();
+    switch (card.getId()) {
+        // Combat-state-dependent bases (the play switch computes these inline; mirror them here).
+        case CardId::PERFECTED_STRIKE:
+            return 6 + cards.strikeCount * (up ? 3 : 2);
+        case CardId::BODY_SLAM:
+            return player.block;
+        default:
+            // Printed base from the card table; -1 for non-attacks. Permanently-buffed bases
+            // (Searing Blow / Rampage / Genetic Algorithm) live in the instance's specialData.
+            return sts::getBaseDamage(card.getId(), up);
+    }
+}
+
+int BattleContext::getCardDamageDisplay(const CardInstance &card) const {
+    // The card's damage as the live game shows it in hand: base (incl. combat-state bonuses) run
+    // through the PLAYER-side modifiers only, with no target (so no vulnerable/slow). Mirrors the
+    // player-side block of calculateCardDamage below; used to check a reconstruction against the
+    // live AbstractCard.damage field. Returns -1 for non-attacks.
+    const int base = getCardBaseDamage(card);
+    if (base < 0) {
+        return -1;
+    }
+    float damage = static_cast<float>(base);
+    if (player.hasRelic<R::STRIKE_DUMMY>() && card.isStrikeCard()) damage += 3;
+    if (player.hasRelic<R::WRIST_BLADE>() && card.costForTurn == 0) damage += 4;
+    damage += static_cast<float>(player.getStatus<PS::STRENGTH>());
+    if (player.hasStatus<PS::VIGOR>()) damage += static_cast<float>(player.getStatus<PS::VIGOR>());
+    if (player.hasStatus<PS::DOUBLE_DAMAGE>()) damage *= 2;
+    if (player.hasStatus<PS::PEN_NIB>()) damage *= 2;
+    if (player.hasStatus<PS::WEAK>()) damage *= .75f;
+    if (player.stance == Stance::WRATH) damage *= 2;
+    else if (player.stance == Stance::DIVINITY) damage *= 3;
+    return damage < 0 ? 0 : static_cast<int>(damage);
 }
 
 int BattleContext::calculateCardDamage(const CardInstance &card, int targetIdx, int baseDamage) const {

@@ -147,6 +147,19 @@ void CardManager::removeFromDrawPileAtIdx(int idx) {
     drawPile.removeAt(idx);
 }
 
+CardInstance CardManager::removeFromDrawPile(const CardInstance &match) {
+    for (int i = 0; i < drawPile.size(); ++i) {
+        const CardInstance &c = drawPile[i];
+        if (c.getId() == match.getId() && c.getUpgradeCount() == match.getUpgradeCount()) {
+            CardInstance removed = c;
+            notifyRemoveFromDrawPile(removed);
+            drawPile.removeAt(i);   // removeAt fixes knownTop/knownBottom accounting
+            return removed;
+        }
+    }
+    return CardInstance();   // INVALID -> no match
+}
+
 CardInstance CardManager::popFromDrawPile(Random &rng) {
     auto c = drawPile.drawTop(rng);
     notifyRemoveFromDrawPile(c);
