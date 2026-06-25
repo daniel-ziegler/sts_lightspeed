@@ -776,6 +776,27 @@ _MISCINFO_HITS_MOVE_INTS = frozenset(int(m) for m in (
     sts.MonsterMoveId.BOOK_OF_STABBING_MULTI_STAB,
 ))
 
+# Under Runic Dome the intent is hidden, so move_base_damage/move_hits aren't reported and the
+# per-hit damage / stab count these monsters read from their hidden `miscInfo` stays 0 -> the search
+# predicts 0 incoming damage and NEVER BLOCKS -> compounding chip death (observed: the agent walked
+# into Book of Stabbing at 8 HP thinking its multi-stab did 0). Estimate miscInfo from the monster
+# (and turn for the escalating ones) so the deferred move roll produces a realistic attack. Fixed
+# values are the asc0 means of Monster::construct's rolls (the deployed run is asc0); slightly
+# approximate, but vastly better than 0. Hexaghost Divider (curHp/12) and Gremlin Wizard (charge)
+# are dynamic/rare under RD and left as-is.
+_RD_HIDDEN_MISCINFO_FIXED = {
+    sts.MonsterId.GREEN_LOUSE: 6,   # bite damage, mean of rng(5,7)
+    sts.MonsterId.RED_LOUSE: 6,     # bite damage, mean of rng(5,7)
+    sts.MonsterId.DARKLING: 9,      # nip damage, mean of rng(7,11)
+}
+
+
+def _estimate_hidden_miscinfo(monster_id, turn0):
+    """A reasonable miscInfo when Runic Dome hides the real value (turn0 = bc.turn, 0-based)."""
+    if monster_id == sts.MonsterId.BOOK_OF_STABBING:
+        return max(1, turn0 + 1)    # stab count: 1 at battle start (++miscInfo), grows ~1/turn
+    return _RD_HIDDEN_MISCINFO_FIXED.get(monster_id)
+
 
 def assert_intent_damage_matches(bc, spire_game, slot_to_spire) -> None:
     """Fail loud if the engine's predicted attack damage for any monster disagrees with the live
@@ -887,6 +908,13 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
         if default_move is not None:
             sts_monster.moveHistory = [int(default_move), sts_monster.moveHistory[1]]
         else:
+            # Runic Dome hides this monster's miscInfo too (the per-hit damage / stab count), leaving it
+            # 0 so the deferred roll would predict a 0-damage attack. Seed a realistic estimate first so
+            # the search blocks. Only when unset (a restored value from move_hits wins).
+            if sts_monster.miscInfo == 0:
+                est = _estimate_hidden_miscinfo(sts_monster.id, bc.turn)
+                if est is not None:
+                    sts_monster.miscInfo = est
             sts_monster.rollMove(bc)
             if sts_monster.isAlive() and sts_monster.moveHistory[0] == invalid \
                     and sts_monster.pending_move_rolls == 0:
