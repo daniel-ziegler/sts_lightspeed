@@ -66,6 +66,24 @@ residual diff can't be attributed to a real mis-sim vs Mayhem's draw uncertainty
 `[shadow unverifiable] (ET) ... Mayhem`. Offline over the v15 capture: of ~65 Mayhem end-turn pairs,
 forcing verified 17 outright (up from 14 unforced); the rest are unverifiable.
 
+## 1c. Relic onEquip HP/gold double-count — FIXED (was the dominant ET class)
+`spirecomm_to_gamecontext` set `gc.max_hp` from the live snapshot (which already includes Pear's +10
+maxHP pickup), then `gc.obtain_relic(Pear)` re-fired the +10 -> 100 vs live 90. The search played the
+whole game with ~10 phantom HP (under-valued defense). Surfaced as `php pred consistently +10 vs live`
+(55/101 ET divergences in one 20-game run). Fixed by overwriting cur_hp/max_hp/gold with live truth
+AFTER the obtain_relic loop. Verified offline: the entire +10 class disappears.
+
+## 1d. Runic Dome hidden monster moves — OBSERVE-THEN-FORCE (like Havoc/Mayhem)
+Runic Dome hides the upcoming intent, so the reconstruction defers the move (`rollMove` ->
+`pending_move_rolls`) and END_TURN rolls a guess from `bc.rng` != live's actual hidden move. But
+CommunicationMod still reports `last_move_id`, so the move a monster MADE this turn is its last move at
+the next decision (already in `truth_bc.monsters[slot].moveHistory[1]`).
+`_force_observed_monster_moves` commits that onto prev_bc before advancing (new `commit_observed_move`
+binding = setMove + cancelPendingMove). A still-divergent forced end-turn is a REAL signal (move was
+right); an unobserved move stays unverifiable. Offline on the RD game: 124 end-turns -> ok, 21 real
+signal (mostly the 4 miscInfo monsters Champ/Darkling/Book of Stabbing/Gremlin Wizard whose hidden
+per-hit damage can't be recovered under RD), 3 unverifiable.
+
 ## 2. End-turn (ET) divergences — OPEN (the hard core)
 By far the largest class. Executing `END_TURN` runs the real monster moves, so a post-monster-turn
 mismatch is a genuine monster-turn fidelity gap (the boss concern). Sub-patterns observed:
