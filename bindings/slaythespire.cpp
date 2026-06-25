@@ -1017,7 +1017,15 @@ PYBIND11_MODULE(slaythespire, m) {
             "history[0]=moveId). The observed-move primitive for the persistent-bc bridge: keeps "
             "moveHistory-driven selection correct for the 61/65 monsters that don't read selection-time "
             "miscInfo. The 4 that do (Champ/Darkling/Book of Stabbing/Gremlin Wizard) need miscInfo "
-            "reconciled separately -- see PERSISTENT_BC_PLAN.md.");
+            "reconciled separately -- see PERSISTENT_BC_PLAN.md.")
+        .def("commit_observed_move", [](Monster &m, int moveId) {
+            m.setMove(static_cast<MonsterMoveId>(moveId));
+            m.cancelPendingMove();
+        }, "moveId"_a,
+            "setMove + cancelPendingMove: force the current move to an OBSERVED value AND discard any "
+            "deferred (Runic Dome) roll, so END_TURN replays the real move instead of re-rolling a "
+            "hidden guess from bc.rng. Used by the ET shadow to inject each monster's actual move "
+            "(from the next turn's last_move_id) before advancing the prediction.");
 
     def_value(monster, "id", &Monster::id);
 

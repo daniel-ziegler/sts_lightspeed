@@ -2587,6 +2587,32 @@ class STSLightspeedAgent:
             return "forced"
         return "remove-failed"
 
+    def _force_observed_monster_moves(self, prev_bc, truth_bc):
+        """ET shadow: before advancing prev_bc by END_TURN, inject each monster's ACTUAL move so the
+        engine replays it instead of rolling a (hidden) guess. A monster's move is only hidden when the
+        live game defers its intent (Runic Dome -> rollMove leaves it INVALID with pending_move_rolls>0);
+        the move it then makes this turn is its last_move at the NEXT decision, which the reconstruction
+        already mapped into truth_bc.monsters[slot].moveHistory[1]. Commit that (setMove + drop the
+        deferred roll) so the prediction uses the real move, not bc.rng. Only touches hidden-move
+        monsters (a visible intent is already committed correctly). Returns (hidden, forced): how many
+        monsters had a deferred/unset move, and how many of those we could fill from the observed last
+        move. A still-divergent end-turn with hidden==forced is then a REAL signal (the move was right);
+        hidden>forced stays unverifiable (the move itself was never observed)."""
+        invalid = int(sts.MonsterMoveId.INVALID)
+        n = prev_bc.monsters.monsterCount
+        if n != truth_bc.monsters.monsterCount:
+            return 0, 0   # layout changed (a monster died/spawned): slots may not align
+        hidden = forced = 0
+        for slot in range(n):
+            pm = prev_bc.monsters[slot]
+            if pm.pending_move_rolls > 0 or int(pm.moveHistory[0]) == invalid:
+                hidden += 1
+                observed = int(truth_bc.monsters[slot].moveHistory[1])
+                if observed != invalid:
+                    pm.commit_observed_move(observed)
+                    forced += 1
+        return hidden, forced
+
     def _shadow_card_play_check(self, truth_bc):
         """Phase-1 persistent-bc shadow (logging only, never affects live play). When the bot's last
         decision was a CARD play, advance the PRIOR reconstructed bc by that card via the engine
@@ -2631,6 +2657,7 @@ class STSLightspeedAgent:
             pre_ctx = None
             mayhem = 0
             force_status = None
+            mon_hidden = mon_forced = 0
             if is_card:
                 p = prev_bc.player
                 pre_ctx = (f"dex={p.dexterity} str={p.strength} "
@@ -2656,6 +2683,12 @@ class STSLightspeedAgent:
                 if mayhem > 0:
                     force_status = self._force_observed_draw(prev_bc, prev_draw_top)
                     pre_ctx += f" force={force_status}"
+                # Inject each monster's actual move (observed via the next turn's last_move) so the
+                # engine replays it instead of rolling a hidden Runic Dome guess. No-op for a normal
+                # visible-intent fight (nothing is hidden). See _force_observed_monster_moves.
+                mon_hidden, mon_forced = self._force_observed_monster_moves(prev_bc, truth_bc)
+                if mon_hidden:
+                    pre_ctx += f" rdmoves={mon_forced}/{mon_hidden}"
             prev_action.execute(prev_bc)          # advance the prediction (one card, or the monster turn)
             pred = self._bc_observe(prev_bc)
             truth = self._bc_observe(truth_bc)
@@ -2691,7 +2724,16 @@ class STSLightspeedAgent:
                     # attributed to a real engine mis-sim vs Mayhem's draw uncertainty, so don't count it.
                     print(f"[shadow unverifiable] (ET) after {desc} (Mayhem plays the draw-pile top at "
                           f"turn start -- live draw order): " + "; ".join(diffs) + ctx, file=sys.stderr)
+                elif is_end_turn and mon_hidden > mon_forced:
+                    # A monster's move was hidden (Runic Dome) and we couldn't recover it from the next
+                    # turn's last_move (e.g. the monster died, or its own last move was also unobserved),
+                    # so the engine had to roll it -- the divergence is move uncertainty, not a mis-sim.
+                    print(f"[shadow unverifiable] (ET) after {desc} (Runic Dome -- "
+                          f"{mon_hidden - mon_forced} hidden move(s) unobserved): "
+                          + "; ".join(diffs) + ctx, file=sys.stderr)
                 else:
+                    # For a Runic Dome end-turn where every hidden move WAS forced from the observed
+                    # last_move, this is now a real signal (the move was right), not move uncertainty.
                     print(f"[shadow DIVERGE] ({tag}) after {desc}: " + "; ".join(diffs) + ctx,
                           file=sys.stderr)
             else:
