@@ -211,6 +211,23 @@ class Coordinator:
                 raise
         return False
 
+    def _state_signature(self):
+        """A cheap fingerprint of the current game state that changes whenever the game
+        meaningfully advances. Used by the progress watchdog to distinguish a live no-progress
+        loop (e.g. an unregistered shop buy) from genuine forward motion.
+        """
+        raw = self.last_raw_communication_state or {}
+        gs = raw.get("game_state") or {}
+        cs = gs.get("combat_state") or {}
+        return (
+            gs.get("floor"), gs.get("act"), gs.get("screen_type"),
+            gs.get("gold"), gs.get("current_hp"),
+            tuple(gs.get("choice_list") or ()),
+            cs.get("turn"),
+            len(cs.get("hand", [])),
+            tuple((m.get("current_hp"), m.get("block")) for m in cs.get("monsters", [])),
+        )
+
     def run(self):
         """Start executing actions forever
 
@@ -239,19 +256,28 @@ class Coordinator:
             StartGameAction(player_class, ascension_level, seed).execute(self)
             self.receive_game_state_update(block=True)
         # Drive the game until it ends. Block (with a timeout) on each state instead of busy-polling --
-        # a busy poll burns 100% CPU and, worse, hides a hang forever (e.g. CommunicationMod not
-        # re-emitting after a shop buy). When the game goes silent, nudge it with `state` (forces a
-        # fresh emit past any stuck "ready" flag); if it stays silent far longer than any real
-        # animation/load, abort the game so the run doesn't burn hours.
+        # a busy poll burns 100% CPU and, worse, hides a hang forever. When the game goes silent,
+        # nudge it with `state` (forces a fresh emit past any stuck "ready" flag).
+        #
+        # Abort on lack of PROGRESS, not lack of messages: a wedged shop buy that never registers is
+        # a *live* loop (the game keeps re-emitting the same screen and we keep re-issuing the same
+        # action), so silence stays at 0 and a silence timer never fires. Track a fingerprint of the
+        # game state and abort if it hasn't changed for far longer than any real animation/load.
         silence = 0.0
         poll = 2.0
         nudged = False
+        last_sig = self._state_signature()
+        last_progress_t = time.monotonic()
         while self.in_game:
             self.execute_next_action_if_ready()
             try:
                 self.receive_game_state_update(block=True, timeout=poll)
                 silence = 0.0
                 nudged = False
+                sig = self._state_signature()
+                if sig != last_sig:
+                    last_sig = sig
+                    last_progress_t = time.monotonic()
             except queue.Empty:
                 silence += poll
                 if silence >= 30.0 and not nudged:
@@ -259,10 +285,11 @@ class Coordinator:
                           file=sys.stderr)
                     self.send_message("state")
                     nudged = True
-                elif silence >= 150.0:
-                    screen = getattr(self.last_game_state, "screen_type", "?")
-                    raise RuntimeError(f"CommunicationMod sent no state for {int(silence)}s; game "
-                                       f"appears hung (last screen: {screen}).")
+            # Progress watchdog -- covers both true silence and live no-progress loops.
+            if time.monotonic() - last_progress_t >= 150.0:
+                screen = getattr(self.last_game_state, "screen_type", "?")
+                raise RuntimeError(f"No game-state progress for 150s; game appears hung "
+                                   f"(last screen: {screen}).")
         assert self.last_game_state is not None
         if self.last_game_state.screen_type == ScreenType.GAME_OVER:
             return self.last_game_state.screen.victory
