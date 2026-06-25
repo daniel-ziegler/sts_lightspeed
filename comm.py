@@ -2098,6 +2098,14 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
         # Add each relic to the GameContext
         for sts_relic in sts_relics:
             gc.obtain_relic(sts_relic.id)
+        # obtain_relic re-fires one-time onEquip effects that the LIVE snapshot ALREADY reflects --
+        # Pear/Strawberry/Mango/Lee's Waffle (+maxHP), Blood Vial (+curHP), Maw Bank/Old Coin (gold).
+        # Re-applying them double-counts: Pear adds +10 maxHP on top of the live 90 -> 100, so the
+        # search plays the whole game with phantom HP and under-estimates danger (was the dominant ET
+        # shadow divergence: php pred consistently +10 vs live). Overwrite HP/gold with live truth.
+        gc.cur_hp = spire_game.current_hp
+        gc.max_hp = spire_game.max_hp
+        gc.gold = spire_game.gold
         # Sync the stored value of relics whose value GATES AN OUT-OF-COMBAT OPTION the net could
         # pick -- otherwise the engine offers a choice the live game no longer does and the net may
         # pick it (fail-loud). Both mirror the game's own counter, so the live counter maps straight
