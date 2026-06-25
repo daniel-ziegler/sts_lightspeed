@@ -3141,6 +3141,30 @@ class STSLightspeedAgent:
         print(f"[net] rest pick {desc!r} not an available option; failing loud", file=sys.stderr)
         return None
 
+    def _shop_choice_index(self, rtype, idx1):
+        """Position of the chosen shop item in CommunicationMod's choice_list -- which is exactly
+        getAvailableShopItems order: 'purge' (if available & affordable), then the AFFORDABLE cards,
+        relics, potions in screen order. Buying by this index ('choose <N>') is unambiguous when two
+        items share a name (two Strength Potions both resolve to the FIRST via the by-name path's
+        validChoices.indexOf, so the net could never pick the second, and the duplicate has been the
+        act-4 shop-hang trigger). Returns the int index, or None if not found (caller falls back to the
+        by-name buy action)."""
+        scr = self.game.screen
+        gold = self.game.gold
+        flat = []
+        if getattr(scr, "purge_available", False) and gold >= getattr(scr, "purge_cost", 1 << 30):
+            flat.append((sts.RewardsActionType.CARD_REMOVE, 0))
+        for pool, t in ((scr.cards, sts.RewardsActionType.CARD),
+                        (scr.relics, sts.RewardsActionType.RELIC),
+                        (scr.potions, sts.RewardsActionType.POTION)):
+            for i, item in enumerate(pool):
+                if item.price <= gold:
+                    flat.append((t, i))
+        try:
+            return flat.index((rtype, idx1))
+        except ValueError:
+            return None
+
     def net_shop_action(self):
         """heart1's shop decision: buy a card/relic/potion, start a card removal, or leave. The
         engine Shop (injected with live prices) makes getAllActionsInState offer exactly the
@@ -3158,21 +3182,28 @@ class STSLightspeedAgent:
             return None
         rtype = action.rewards_action_type
         shop = self.game.screen
+        # Buy by the choice-list INDEX, not the item name: the by-name path resolves a duplicate name
+        # to the FIRST match (so the net can't pick the second of two same-named items), and that
+        # duplicate is the act-4 shop-hang trigger. Fall back to the by-name action if the index can't
+        # be computed.
         if rtype == sts.RewardsActionType.CARD:
             chosen = shop.cards[action.idx1]
-            print(f"[net] shop -> buy card {chosen.card_id} ({chosen.price}g)", file=sys.stderr)
-            return BuyCardAction(chosen)
+            ci = self._shop_choice_index(rtype, action.idx1)
+            print(f"[net] shop -> buy card {chosen.card_id} ({chosen.price}g) [choice {ci}]", file=sys.stderr)
+            return ChooseAction(choice_index=ci) if ci is not None else BuyCardAction(chosen)
         if rtype == sts.RewardsActionType.RELIC:
             chosen = shop.relics[action.idx1]
-            print(f"[net] shop -> buy relic {chosen.name} ({chosen.price}g)", file=sys.stderr)
-            return BuyRelicAction(chosen)
+            ci = self._shop_choice_index(rtype, action.idx1)
+            print(f"[net] shop -> buy relic {chosen.name} ({chosen.price}g) [choice {ci}]", file=sys.stderr)
+            return ChooseAction(choice_index=ci) if ci is not None else BuyRelicAction(chosen)
         if rtype == sts.RewardsActionType.POTION:
             # Potion buys are masked out above when the belt is full, so reaching here means a slot
             # is free; assert to catch any masking regression before BuyPotionAction can raise.
             assert not belt_full, "potion buy reached net_shop_action despite full belt"
             chosen = shop.potions[action.idx1]
-            print(f"[net] shop -> buy potion {chosen.potion_id} ({chosen.price}g)", file=sys.stderr)
-            return BuyPotionAction(chosen)
+            ci = self._shop_choice_index(rtype, action.idx1)
+            print(f"[net] shop -> buy potion {chosen.potion_id} ({chosen.price}g) [choice {ci}]", file=sys.stderr)
+            return ChooseAction(choice_index=ci) if ci is not None else BuyPotionAction(chosen)
         if rtype == sts.RewardsActionType.CARD_REMOVE:
             # Initiate the purge; the card to remove is chosen on the following card-select screen.
             print("[net] shop -> card removal", file=sys.stderr)

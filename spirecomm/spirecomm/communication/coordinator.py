@@ -1,4 +1,5 @@
 import sys
+import time
 import queue
 import threading
 import json
@@ -142,27 +143,34 @@ class Coordinator:
         """
         self.out_of_game_callback = new_callback
 
-    def get_next_raw_message(self, block=False):
+    def get_next_raw_message(self, block=False, timeout=None):
         """Get the next message from Communication Mod as a string
 
         :param block: set to True to wait for the next message
         :type block: bool
+        :param timeout: when blocking, max seconds to wait; raises queue.Empty if it elapses (None
+            blocks forever). Lets the caller bound the wait so a hung game can't spin/stall forever.
+        :type timeout: float
         :return: the message from Communication Mod
         :rtype: str
         """
-        if block or not self.input_queue.empty():
+        if block:
+            return self.input_queue.get(timeout=timeout)   # raises queue.Empty after `timeout` s
+        if not self.input_queue.empty():
             return self.input_queue.get()
 
-    def receive_game_state_update(self, block=False, perform_callbacks=True):
+    def receive_game_state_update(self, block=False, perform_callbacks=True, timeout=None):
         """Using the next message from Communication Mod, update the stored game state
 
         :param block: set to True to wait for the next message
         :type block: bool
         :param perform_callbacks: set to True to perform callbacks based on the new game state
         :type perform_callbacks: bool
+        :param timeout: when blocking, max seconds to wait (queue.Empty propagates on elapse)
+        :type timeout: float
         :return: whether a message was received
         """
-        message = self.get_next_raw_message(block)
+        message = self.get_next_raw_message(block, timeout)
         if message is not None:
             try:
                 communication_state = json.loads(message)
@@ -230,9 +238,31 @@ class Coordinator:
         if not self.in_game:
             StartGameAction(player_class, ascension_level, seed).execute(self)
             self.receive_game_state_update(block=True)
+        # Drive the game until it ends. Block (with a timeout) on each state instead of busy-polling --
+        # a busy poll burns 100% CPU and, worse, hides a hang forever (e.g. CommunicationMod not
+        # re-emitting after a shop buy). When the game goes silent, nudge it with `state` (forces a
+        # fresh emit past any stuck "ready" flag); if it stays silent far longer than any real
+        # animation/load, abort the game so the run doesn't burn hours.
+        silence = 0.0
+        poll = 2.0
+        nudged = False
         while self.in_game:
             self.execute_next_action_if_ready()
-            self.receive_game_state_update()
+            try:
+                self.receive_game_state_update(block=True, timeout=poll)
+                silence = 0.0
+                nudged = False
+            except queue.Empty:
+                silence += poll
+                if silence >= 30.0 and not nudged:
+                    print("[coordinator] no game state for 30s; sending 'state' to nudge the game",
+                          file=sys.stderr)
+                    self.send_message("state")
+                    nudged = True
+                elif silence >= 150.0:
+                    screen = getattr(self.last_game_state, "screen_type", "?")
+                    raise RuntimeError(f"CommunicationMod sent no state for {int(silence)}s; game "
+                                       f"appears hung (last screen: {screen}).")
         assert self.last_game_state is not None
         if self.last_game_state.screen_type == ScreenType.GAME_OVER:
             return self.last_game_state.screen.victory
