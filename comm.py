@@ -2557,12 +2557,9 @@ class STSLightspeedAgent:
              "hand": getattr(bc.cards, "cardsInHand", None),
              "turn": getattr(bc, "turn", None),
              "mon": []}
-        try:
-            for i in range(bc.monsters.monsterCount):
-                m = bc.monsters.arr[i]
-                o["mon"].append((getattr(m, "curHp", None), getattr(m, "block", None)))
-        except Exception:
-            pass
+        for i in range(bc.monsters.monsterCount):
+            m = bc.monsters[i]
+            o["mon"].append((m.curHp, m.block))
         return o
 
     def _force_observed_draw(self, prev_bc, want):
