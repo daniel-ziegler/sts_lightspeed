@@ -3092,11 +3092,12 @@ class STSLightspeedAgent:
 
     def net_card_select_action(self):
         """heart1's pick on an out-of-combat grid select (transform/upgrade/remove/obtain -- shop card
-        removal, rest-site smith, event transforms, and multi-card picks like Astrolabe's transform-3).
-        A fixed-count multi-select is driven one card per call exactly as the engine does it: the net
-        picks one of the still-unselected cards, the live screen re-opens with it selected, and we pick
-        the next, until num_cards are chosen (the live game then auto-confirms). Returns None (-> fail
-        loud) for in-combat selects (the combat MCTS's job) and 'choose any number' selects."""
+        removal, rest-site smith, event transforms, and fixed-count multi-card picks like Astrolabe's
+        transform-3). For a fixed-count grid spirecomm's CardSelectAction requires ALL still-needed
+        cards in one call (a partial selection raises), so pick num_remaining distinct cards here:
+        query the net once per card, excluding the indices already picked, then submit them together
+        (CardSelectAction clicks each and confirms). Returns None (-> fail loud) for in-combat selects
+        (the combat MCTS's job) and 'choose any number' selects."""
         scr = self.game.screen
         if self.game.in_combat:
             return None
@@ -3106,19 +3107,27 @@ class STSLightspeedAgent:
         # the net maps to a card not yet chosen -- re-choosing a selected card would toggle it off.
         selected_uuids = {c.uuid for c in scr.selected_cards}
         selectable = [c for c in scr.cards if c.uuid not in selected_uuids]
-        if not selectable:
+        num_remaining = scr.num_cards - len(scr.selected_cards)
+        if not selectable or num_remaining <= 0:
             return None
         gc = spirecomm_to_gamecontext(self.game)
-        action = self.net_pick_action(gc)
-        if action is None:
+        chosen = []
+        chosen_idxs = set()
+        while len(chosen) < num_remaining:
+            action = self.net_pick_action(
+                gc, action_filter=lambda a: a.idx1 not in chosen_idxs)
+            if action is None:
+                break
+            idx = action.idx1
+            if not (0 <= idx < len(selectable)) or idx in chosen_idxs:
+                break
+            chosen_idxs.add(idx)
+            chosen.append(selectable[idx])
+        if len(chosen) != num_remaining:
             return None
-        idx = action.idx1
-        if not (0 <= idx < len(selectable)):
-            return None
-        chosen = selectable[idx]
-        print(f"[net] grid select -> {chosen.card_id} (idx {idx}, "
-              f"{len(scr.selected_cards) + 1}/{scr.num_cards})", file=sys.stderr)
-        return CardSelectAction([chosen])
+        print(f"[net] grid select -> {[c.card_id for c in chosen]} "
+              f"({num_remaining} of {scr.num_cards})", file=sys.stderr)
+        return CardSelectAction(chosen)
 
     def net_rest_action(self):
         """heart1's campfire choice (rest / smith / and any relic options like dig/lift/recall).
