@@ -3174,9 +3174,14 @@ class STSLightspeedAgent:
         # A full belt makes BuyPotionAction raise (kills the run), and the engine sim can still
         # offer potion buys, so mask them out of the choice set rather than failing loud later.
         # TODO: instead of masking, offer a potion-discard-then-buy option.
-        belt_full = self.game.are_potions_full()
+        # Sozu blocks ALL potion obtaining, so the live game silently rejects a shop potion buy
+        # (purchasePotion -> obtainPotion returns false) and the net would re-pick it forever -- mask
+        # potion buys just like a full belt. (getAllActionsInState ignores belt capacity, so this
+        # decision-time mask is the only gate.)
+        has_sozu = any(map_relic_id(r.name) == sts.RelicId.SOZU for r in (self.game.relics or []))
+        mask_potions = self.game.are_potions_full() or has_sozu
         pot_filter = ((lambda a: a.rewards_action_type != sts.RewardsActionType.POTION)
-                      if belt_full else None)
+                      if mask_potions else None)
         action = self.net_pick_action(gc, action_filter=pot_filter)
         if action is None:
             return None
@@ -3197,9 +3202,10 @@ class STSLightspeedAgent:
             print(f"[net] shop -> buy relic {chosen.name} ({chosen.price}g) [choice {ci}]", file=sys.stderr)
             return ChooseAction(choice_index=ci) if ci is not None else BuyRelicAction(chosen)
         if rtype == sts.RewardsActionType.POTION:
-            # Potion buys are masked out above when the belt is full, so reaching here means a slot
-            # is free; assert to catch any masking regression before BuyPotionAction can raise.
-            assert not belt_full, "potion buy reached net_shop_action despite full belt"
+            # Potion buys are masked out above when the belt is full or Sozu blocks obtaining, so
+            # reaching here means the buy is actually possible; assert to catch any masking
+            # regression before BuyPotionAction can raise / the live buy silently no-ops.
+            assert not mask_potions, "potion buy reached net_shop_action despite mask"
             chosen = shop.potions[action.idx1]
             ci = self._shop_choice_index(rtype, action.idx1)
             print(f"[net] shop -> buy potion {chosen.potion_id} ({chosen.price}g) [choice {ci}]", file=sys.stderr)
