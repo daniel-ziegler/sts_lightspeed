@@ -250,6 +250,9 @@ class GameMetrics:
     outcome: sts.GameOutcome
     act: int = 1       # current act; distinguishes a heart win (act 4) from an act-3-only win
     num_keys: int = 0  # act-4 keys held (ruby + emerald + sapphire), for reward shaping
+    red_key: bool = False    # ruby key (rest-site Recall); individual keys for eval breakdowns
+    green_key: bool = False  # emerald key (burning elite)
+    blue_key: bool = False   # sapphire key (chest)
     num_starters: int = 0  # Strikes + Defends in deck (any upgrade), for thinning shaping
     # MonsterEncounter id of the most recent battle (INVALID=0 before the first one). In episode
     # dumps this enables per-encounter battle-outcome stats: the HP change across the rows where
@@ -585,6 +588,7 @@ def run_episode(seed: int, service: NNService, reward_fn, battle_executor, confi
         outcome=gc.outcome,
         act=gc.act,
         num_keys=int(gc.red_key) + int(gc.green_key) + int(gc.blue_key),
+        red_key=bool(gc.red_key), green_key=bool(gc.green_key), blue_key=bool(gc.blue_key),
         num_starters=sum(1 for card in gc.deck
                          if card.id in (sts.CardId.STRIKE_RED, sts.CardId.DEFEND_RED)),
         encounter=int(gc.encounter),

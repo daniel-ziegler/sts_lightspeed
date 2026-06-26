@@ -5,7 +5,7 @@ Shaping coefs are zeroed (don't matter for outcome). Defaults match the user's s
 seeds 1_000_000..1_000_099 (well outside any training seed range), mcts_simulations=10000,
 4 collect workers.
 """
-import argparse, csv, os, time
+import argparse, csv, json, os, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 # Must precede `import torch`: disables TorchInductor's compile-worker subprocess pool whose
 # pipe-reader thread races with torch teardown and intermittently segfaults (rl_train sets this
@@ -30,6 +30,11 @@ def main():
     ap.add_argument('--battle-timeout', type=float, default=300.0,
                     help='per-battle MCTS wall-clock budget (s); raise for high sim counts')
     ap.add_argument('--out-csv', default='runs/eval_hero.csv')
+    ap.add_argument('--out', default=None,
+                    help='write rich per-game JSONL here (scalars + individual keys + final deck + '
+                         'relics) instead of the flat CSV; crash-resumable by seed')
+    ap.add_argument('--temperature', type=float, default=1.0,
+                    help='NN overworld-pick softmax temperature; <=0 is greedy/argmax')
     ap.add_argument('--boss-widening', choices=['on', 'off'], default='on',
                     help="off forces boss fights to the general widening (A/B control arm)")
     ap.add_argument('--boss-widening-c', type=float, default=None,
@@ -100,6 +105,7 @@ def main():
         num_workers=args.num_workers,
         num_games_per_step=args.n_games,
         battle_timeout=args.battle_timeout,
+        sampling_temperature=args.temperature,
     )
     service = NNService(net, batch_size=config.inf_batch_size,
                         batch_size_factor=config.inf_batch_size_factor,
@@ -109,21 +115,40 @@ def main():
 
     seeds = list(range(args.seed_start, args.seed_start + args.n_games))
 
-    # Crash-resumable: results are appended to the CSV one row per completed game and flushed
-    # immediately, so a crash only loses in-flight games. On restart we skip seeds already present.
-    os.makedirs(os.path.dirname(args.out_csv) or '.', exist_ok=True)
-    rows = []
+    # Output format: rich JSONL (--out) carries individual keys + final deck + relics per game;
+    # the flat CSV (--out-csv) is the scalar fallback. Both are crash-resumable: one record per
+    # completed game, flushed immediately, and on restart we skip seeds already present.
+    use_jsonl = args.out is not None
+    out_path = args.out if use_jsonl else args.out_csv
+    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
+    rows = []          # (seed, won, floor, keys) for the running summary, both formats
     done = set()
-    if os.path.exists(args.out_csv):
-        with open(args.out_csv, newline='') as fin:
-            for r in csv.DictReader(fin):
-                rows.append((int(r['seed']), int(r['won']), int(r['floor']), int(r.get('keys', -1))))
-                done.add(int(r['seed']))
+    if os.path.exists(out_path):
+        with open(out_path, newline='') as fin:
+            if use_jsonl:
+                for line in fin:
+                    if line.strip():
+                        d = json.loads(line)
+                        rows.append((d['seed'], d['won'], d['floor'], d.get('keys', -1)))
+                        done.add(d['seed'])
+            else:
+                for r in csv.DictReader(fin):
+                    rows.append((int(r['seed']), int(r['won']), int(r['floor']), int(r.get('keys', -1))))
+                    done.add(int(r['seed']))
     todo = [s for s in seeds if s not in done]
-    fout = open(args.out_csv, 'a', newline='')
-    writer = csv.writer(fout)
-    if not done:
-        writer.writerow(['seed', 'won', 'floor', 'keys']); fout.flush()
+    fout = open(out_path, 'a', newline='')
+    writer = None
+    if not use_jsonl:
+        writer = csv.writer(fout)
+        if not done:
+            writer.writerow(['seed', 'won', 'floor', 'keys']); fout.flush()
+
+    def card_rec(c):
+        return {'id': int(c.id), 'name': str(c.id).split('.')[-1], 'upgraded': bool(c.upgraded)}
+
+    def relic_rec(r):
+        # traj.final_relics holds Relic objects (with .id RelicId and .data counter), not RelicIds.
+        return {'id': int(r.id), 'name': str(r.id).split('.')[-1], 'data': int(r.data)}
 
     # Boss encounter ids (MonsterEncounter enum order; see constants/MonsterEncounters.h)
     BOSS_ENCOUNTERS = {18, 19, 20, 37, 38, 39, 52, 53, 54, 56}
@@ -149,16 +174,33 @@ def main():
             }
             for f in as_completed(futs):
                 s = futs[f]
+                rec = None
                 try:
                     traj = f.result()
-                    won = int(traj.final_metrics.outcome == sts.GameOutcome.PLAYER_VICTORY)
-                    floor = int(traj.final_metrics.floor_num)
-                    keys = int(traj.final_metrics.num_keys)
+                    m = traj.final_metrics
+                    won = int(m.outcome == sts.GameOutcome.PLAYER_VICTORY)
+                    floor = int(m.floor_num)
+                    keys = int(m.num_keys)
+                    if use_jsonl:
+                        rec = {
+                            'seed': s, 'won': won, 'floor': floor, 'act': int(m.act), 'keys': keys,
+                            'red_key': bool(m.red_key), 'green_key': bool(m.green_key),
+                            'blue_key': bool(m.blue_key),
+                            'deck': [card_rec(c) for c in traj.final_deck],
+                            'relics': [relic_rec(r) for r in traj.final_relics],
+                        }
                 except Exception as e:
                     print(f"  seed {s}: FAILED {e}", flush=True)
                     won, floor, keys = -1, -1, -1
+                    if use_jsonl:
+                        rec = {'seed': s, 'won': -1, 'floor': -1, 'act': -1, 'keys': -1,
+                               'red_key': False, 'green_key': False, 'blue_key': False,
+                               'deck': [], 'relics': []}
                 rows.append((s, won, floor, keys))
-                writer.writerow((s, won, floor, keys)); fout.flush()
+                if use_jsonl:
+                    fout.write(json.dumps(rec) + '\n'); fout.flush()
+                else:
+                    writer.writerow((s, won, floor, keys)); fout.flush()
                 if bwriter is not None and won != -1:
                     for i, snap in enumerate(traj.battle_log):
                         bwriter.writerow((s, i, snap.floor, snap.act,
@@ -195,7 +237,7 @@ def main():
     print(f"  win_rate:   {win_rate:.4f} ± {sd:.4f}  ({wins}/{n})")
     print(f"  heart_kill: {heart_kill_rate:.4f} ± {hk_sd:.4f}  ({heart_kills}/{n})  [won AND keys==3]")
     print(f"  avg_floor:  {mean_floor:.2f}")
-    print(f"  out_csv:   {args.out_csv}")
+    print(f"  out:       {out_path}")
     print(f"  total:     {time.time()-t0:.0f}s")
 
 
