@@ -44,7 +44,9 @@ namespace sts {
     };
 
     struct CardQueue {
-        static constexpr int capacity = 10;
+        // Headroom for deep search lines that queue many card-plays before they execute (mirrors
+        // ActionQueue<64>). At 10 a rare high-sim line overflows and the pushFront assert aborts.
+        static constexpr int capacity = 64;
         int size = 0;
         int backIdx = 0;
         int frontIdx = 0;
