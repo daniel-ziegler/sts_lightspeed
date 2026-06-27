@@ -2771,6 +2771,50 @@ class STSLightspeedAgent:
         except Exception as e:
             print(f"[shadow ERR] {type(e).__name__}: {e}", file=sys.stderr)
 
+    def _check_attack_intent_target(self, first_action, spirecomm_action, slot_to_spire):
+        """Catch a mis-targeted Spot Weakness (the live game rejects it unless the target intends to
+        attack). Non-fatal: if the resolved live target isn't an attacking monster, dump the search
+        target slot, the slot->spire mapping, and EVERY monster's live intent to stderr +
+        runs/spot_weakness_mistarget.jsonl so the exact reconstruction/targeting fault is visible."""
+        try:
+            if not isinstance(spirecomm_action, PlayCardAction):
+                return
+            ci = spirecomm_action.card_index
+            ti = spirecomm_action.target_index
+            if ti is None or not (0 <= ci < len(self.game.hand)):
+                return
+            if self.game.hand[ci].card_id != "Spot Weakness":
+                return
+            mons = self.game.monsters
+            tgt = mons[ti] if 0 <= ti < len(mons) else None
+            attacking = (tgt is not None and not tgt.is_gone
+                         and tgt.move_base_damage is not None and tgt.move_base_damage >= 0)
+            if attacking:
+                return
+            sim_target = first_action.get_target_idx()
+            info = {
+                "card_index": ci, "target_index": ti,
+                "sim_target_slot": sim_target,
+                "slot_to_spire": {int(k): int(v) for k, v in slot_to_spire.items()},
+                "resolved_target": (None if tgt is None else
+                                    {"name": tgt.name, "id": tgt.monster_id, "is_gone": tgt.is_gone,
+                                     "intent": str(getattr(tgt, "intent", None)),
+                                     "move_id": tgt.move_id, "move_base_damage": tgt.move_base_damage}),
+                "all_monsters": [{"idx": i, "name": m.name, "is_gone": m.is_gone,
+                                  "intent": str(getattr(m, "intent", None)), "move_id": m.move_id,
+                                  "move_base_damage": m.move_base_damage} for i, m in enumerate(mons)],
+                "floor": self.game.floor,
+            }
+            print(f"[spot-weakness MISTARGET] target idx {ti} is not attacking: {info['resolved_target']}; "
+                  f"all intents: {[(m['idx'], m['name'], m['intent']) for m in info['all_monsters']]}",
+                  file=sys.stderr)
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs",
+                                "spot_weakness_mistarget.jsonl")
+            with open(path, "a") as f:
+                f.write(json.dumps(info) + "\n")
+        except Exception as e:
+            print(f"[spot-weakness check error] {e}", file=sys.stderr)
+
     def handle_combat(self):
         self.capture_battle_state()
         # Step marker (see handle_screen): pinpoints a hang inside convert_combat_state / the search,
@@ -2832,6 +2876,11 @@ class STSLightspeedAgent:
         spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game, slot_to_spire)
 
         print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
+
+        # Diagnostic: Spot Weakness is rejected live if its target doesn't intend to attack. If the
+        # search aimed it at a monster the live game shows as non-attacking (or gone / out of range),
+        # the play wastes the card -- capture the full target picture (non-fatal) to root-cause it.
+        self._check_attack_intent_target(first_action, spirecomm_action, slot_to_spire)
 
         # Print top 5 moves and their visit counts
         edges = searcher.get_root_edges()
