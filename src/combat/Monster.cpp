@@ -122,8 +122,11 @@ void Monster::construct(BattleContext &bc, MonsterId monsterId, int monsterIdx) 
             break;
 
         case MonsterId::DARKLING:
+            // miscInfo holds the full nip per-hit damage, read directly by DARKLING_NIP; the asc>=2
+            // +2 is folded in here so takeTurn / getMoveBaseDamage need no ascension branch (and a
+            // mid-fight reconstruction can restore miscInfo straight from the live intent damage).
             if (bc.ascension >= 2) {
-                miscInfo = bc.rng.random(9, 13);
+                miscInfo = bc.rng.random(9, 13) + 2;
             } else {
                 miscInfo = bc.rng.random(7, 11);
             }

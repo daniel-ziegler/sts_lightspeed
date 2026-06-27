@@ -1457,8 +1457,8 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
             break;
 
         case MMID::DARKLING_NIP: {
-            const auto damage = miscInfo + (asc2 ? 2 : 0); // todo maybe make d part of the miscInfo at prebattle
-            attackPlayerHelper(bc, damage);
+            // miscInfo holds the full per-hit damage (asc>=2 +2 baked in at construct).
+            attackPlayerHelper(bc, miscInfo);
             bc.addToBot( Actions::RollMove(idx) );
             break;
         }
