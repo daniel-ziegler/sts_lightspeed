@@ -3541,7 +3541,13 @@ void Monster::returnStasisCard(BattleContext &bc) {
     stasisCard = {CardId::INVALID};
 }
 
-void reptoSummonHelper(const BattleContext &bc, int daggerIdxs[2], int daggerCount) {
+// Fills daggerIdxs with up to daggerCount empty dagger slots and returns how many were found.
+// In live play the caller's canSpawn guard (monstersAlive < 4) guarantees daggerCount slots
+// exist, so this returns daggerCount. A reconstructed combat can present a fuller field than
+// the live AI would allow (observed-intent binding / firstTurn forcing a summon), so the count
+// may come back short -- summon only into the slots we actually found, matching real StS, which
+// never over-summons past the open slots.
+int reptoSummonHelper(const BattleContext &bc, int daggerIdxs[2], int daggerCount) {
     constexpr int searchOrder[4] = {4, 1, 3, 0};
 
     int openSlotsFound = 0;
@@ -3554,20 +3560,18 @@ void reptoSummonHelper(const BattleContext &bc, int daggerIdxs[2], int daggerCou
         }
 
         if (openSlotsFound == daggerCount) {
-            return;
+            break;
         }
     }
 
-#ifdef sts_asserts
-    assert(false); // should always return first
-#endif
+    return openSlotsFound;
 }
 
 void Monster::reptomancerSummon(BattleContext &bc, int daggerCount) {
     int daggerIdxs[2];
-    reptoSummonHelper(bc, daggerIdxs, daggerCount);
+    const int summonCount = reptoSummonHelper(bc, daggerIdxs, daggerCount);
 
-    for (int i = 0; i < daggerCount; ++i) {
+    for (int i = 0; i < summonCount; ++i) {
         const auto daggerIdx = daggerIdxs[i];
         auto &dagger = bc.monsters.arr[daggerIdx];
         dagger = Monster();
