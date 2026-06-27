@@ -2491,12 +2491,14 @@ _CARD_SELECT_POOL_BY_TASK = {
 class STSLightspeedAgent:
 
     def __init__(self, chosen_class=PlayerClass.THE_SILENT, net=None, temperature=0.0, net_seed=0,
-                 start_seed=None):
+                 start_seed=None, ascension=0, sims=1000):
         self.game = Game()
         self.errors = 0
         # When set (a base-35 StS seed string, e.g. "54FYPZX13RLTT"), new runs start on this exact
         # seed -- used to replay a specific game (e.g. the captured slime-boss crash seed).
         self.start_seed = start_seed
+        # Ascension level new runs start on (passed to StartGameAction).
+        self.ascension = ascension
         # Set when heart1 skips the combat card reward, so _collect_combat_reward doesn't re-open it.
         self.skipped_cards = False
         # Toggles the two-step SHOP_ROOM transition (approach merchant, then leave).
@@ -2519,10 +2521,10 @@ class STSLightspeedAgent:
         self.temperature = temperature
         self.net_rng = random.Random(net_seed)
         # Reference SearchAgent whose tuned knobs configure each per-decision BattleSearcher.
-        # simulation_count_base=1000 matches training/eval (run_game / --mcts-simulations 1000);
+        # simulation_count_base defaults to 1000 (matches training/eval --mcts-simulations 1000);
         # the agent's defaults supply the jointly-tuned exploration/widening/eval weights.
         self.search_agent = sts.Agent()
-        self.search_agent.simulation_count_base = 1000
+        self.search_agent.simulation_count_base = sims
         # Live-sweepable override for the victory turn penalty (per-turn score cost of a win). The
         # compiled default already finishes winnable fights promptly; set STS_VICTORY_TURN_PENALTY
         # to retune without a C++ rebuild. Read-modify-write the whole EvalWeights struct so the
@@ -2572,7 +2574,7 @@ class STSLightspeedAgent:
             return CancelAction()
 
     def get_next_action_out_of_game(self):
-        return StartGameAction(self.chosen_class, seed=self.start_seed)
+        return StartGameAction(self.chosen_class, ascension_level=self.ascension, seed=self.start_seed)
 
     def _bc_observe(self, bc):
         """Deterministic observable scalars of a bc, for the persistent-bc shadow check. Excludes
@@ -3513,11 +3515,19 @@ def run_agent_cli():
                        help="Run conversion tests instead of playing")
     parser.add_argument("--ckpt", default=DEFAULT_CKPT,
                        help="heart1 policy checkpoint for out-of-combat decisions")
-    parser.add_argument("--temperature", type=float, default=0.0,
+    # Each knob defaults from an env var when present. ModTheSpire/CommunicationMod re-normalizes
+    # config.properties at startup and drops appended CLI flags, but preserves env vars set via the
+    # command's `/usr/bin/env VAR=val ...` prefix (like STS_COMM_CAPTURE) -- so run_live.sh passes
+    # these as env vars, and explicit CLI flags still override for manual invocations.
+    parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS_TEMPERATURE", 0.0)),
                        help="Network action-sampling temperature (0 = greedy/argmax)")
-    parser.add_argument("--seed", default=None,
+    parser.add_argument("--seed", default=os.environ.get("STS_START_SEED") or None,
                        help="Start runs on this exact base-35 StS seed string (e.g. 54FYPZX13RLTT) "
                             "to replay a specific game")
+    parser.add_argument("--ascension", type=int, default=int(os.environ.get("STS_ASCENSION", 0)),
+                       help="Ascension level to start new runs on (0-20)")
+    parser.add_argument("--sims", type=int, default=int(os.environ.get("STS_SIMS", 1000)),
+                       help="Combat MCTS simulations per decision (simulation_count_base)")
 
     args = parser.parse_args()
     
@@ -3540,7 +3550,7 @@ def run_agent_cli():
 
     # Create agent and coordinator
     agent = STSLightspeedAgent(chosen_class, net=net, temperature=args.temperature,
-                               start_seed=args.seed)
+                               start_seed=args.seed, ascension=args.ascension, sims=args.sims)
     coordinator = Coordinator()
     agent.coordinator = coordinator  # lets the agent capture raw decision states for replay
 
@@ -3566,9 +3576,16 @@ def run_agent_cli():
             # Pass --seed through so play_one_game's StartGameAction uses it (it defaults to a random
             # seed otherwise). With a seed set, every game replays the same run -- intended for
             # deterministic crash repro (--seed <s> --games 1).
-            result = coordinator.play_one_game(current_class, seed=args.seed)
+            result = coordinator.play_one_game(current_class, ascension_level=args.ascension,
+                                               seed=args.seed)
             games_played += 1
-            print(f"Game {games_played} completed with result: {result}", file=sys.stderr)
+            # Split a victory into a heart kill (reached act 4) vs an act-3-only win -- a heart-run
+            # agent's act-3 wins mean it failed to collect the keys, so they are NOT heart wins.
+            max_act = getattr(coordinator, "last_game_max_act", 0)
+            max_floor = getattr(coordinator, "last_game_max_floor", 0)
+            kind = "heart" if (result and max_act >= 4) else "act3" if result else "loss"
+            print(f"Game {games_played} completed with result: {result} "
+                  f"(max_act={max_act} max_floor={max_floor} kind={kind})", file=sys.stderr)
         except KeyboardInterrupt:
             print("Interrupted by user", file=sys.stderr)
             break

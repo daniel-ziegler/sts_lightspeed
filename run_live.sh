@@ -12,6 +12,12 @@
 set +e
 RUN="${1:?usage: ./run_live.sh <run_name> [games]}"
 GAMES="${2:-20}"
+# Optional run knobs via env vars (default to comm.py's own defaults when unset):
+#   SEED=<base35>  fixed StS seed (replays the same game each iteration)
+#   ASC=<0-20>     ascension level
+#   SIMS=<n>       combat MCTS simulations per decision
+#   TEMP=<f>       net action-sampling temperature
+SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
 CFG="/mnt/c/Users/zieDa/AppData/Local/ModTheSpire/CommunicationMod/config.properties"
@@ -24,11 +30,22 @@ pkill -9 -f comm.py 2>/dev/null || true
 sleep 3
 echo "procs after kill (want java=0 comm.py=0): java=$(tasklist.exe 2>/dev/null | grep -ic java) comm.py=$(ps aux | grep -c '[c]omm.py')"
 
-# Point the mod config at this run's capture name + game count; strip any leftover fixed --seed.
+# Point the mod config at this run's capture name + game count. Run knobs go in as ENV vars in the
+# command's `/usr/bin/env ...` prefix, NOT as appended CLI flags: ModTheSpire re-normalizes
+# config.properties at startup and strips trailing CLI flags, but preserves these env assignments
+# (the same way STS_COMM_CAPTURE survives). comm.py reads STS_START_SEED/STS_ASCENSION/STS_SIMS/
+# STS_TEMPERATURE as the defaults for its matching flags.
 sed -i "s/comm_capture_[A-Za-z0-9_]*/${CAP}/" "$CFG"
-sed -i 's/ --seed [0-9A-Za-z]*//g' "$CFG"
+sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g' "$CFG"
 sed -i "s/--games [0-9]*/--games ${GAMES}/" "$CFG"
-echo "config: $(grep -o "${CAP}[^ ]*\|--games [0-9]*\|--seed [0-9A-Za-z]*\|iter_[0-9]*" "$CFG" | tr '\n' ' ')"
+ENVV=""
+[ -n "$SEED" ] && ENVV="$ENVV STS_START_SEED\\=$SEED"
+[ -n "$ASC" ]  && ENVV="$ENVV STS_ASCENSION\\=$ASC"
+[ -n "$SIMS" ] && ENVV="$ENVV STS_SIMS\\=$SIMS"
+[ -n "$TEMP" ] && ENVV="$ENVV STS_TEMPERATURE\\=$TEMP"
+# Insert the env assignments right after the existing STS_COMM_CAPTURE\=... token.
+[ -n "$ENVV" ] && sed -i "s#\(STS_COMM_CAPTURE\\\\=[^ ]*\)#\1${ENVV}#" "$CFG"
+echo "config: $(grep -o "${CAP}[^ ]*\|--games [0-9]*\|STS_START_SEED..[0-9A-Za-z]*\|STS_ASCENSION..[0-9]*\|STS_SIMS..[0-9]*\|STS_TEMPERATURE..[0-9.]*\|iter_[0-9]*" "$CFG" | tr '\n' ' ')"
 
 : > "$SAVE" 2>/dev/null
 rm -f "$SAVE" "$SAVE.backUp" 2>/dev/null
