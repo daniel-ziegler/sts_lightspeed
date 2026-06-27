@@ -886,17 +886,31 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
 
 double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     const double potionScore = bc.potionCount * evalWeights.potionWeight;
-    // An unused Lizard Tail is worth ~50% max HP -- its one-time "heal to 50% when you'd die".
-    // Without crediting the held relic, the search prefers TRIGGERING it (revive to 50%, then win at
-    // 50% HP) over ending the fight at low HP, intentionally taking lethal damage to burn this
-    // run-saving relic for a marginal heal. Valuing the unused relic makes keeping it >= using it.
+    // Credit held "cheat death" effects at the HP they would actually restore, so the search keeps
+    // them rather than playing into lethal to burn them for a marginal heal (the search otherwise
+    // prefers TRIGGERING the save -- revive, then win at low HP -- over ending the fight intact).
+    // Mirror Player::wouldDie exactly: Fairy in a Bottle fires first and heals 30% max HP (60% with
+    // Sacred Bark); Lizard Tail fires next and heals to 50% max HP; Mark of the Bloom disables all
+    // healing so neither saves you. Holding both is two independent lives, so the values add.
     // Scaled at HP's ~1:1 weight (matches postBattleHealedHp / the loss-branch hp ratio).
-    const double lizardTailValue = bc.player.hasRelic<RelicId::LIZARD_TAIL>() ? 0.5 * bc.player.maxHp : 0.0;
+    double deathSaveValue = 0.0;
+    if (!bc.player.hasRelic<RelicId::MARK_OF_THE_BLOOM>()) {
+        bool hasFairy = false;
+        for (int i = 0; i < bc.potionCapacity; ++i) {
+            if (bc.potions[i] == Potion::FAIRY_POTION) { hasFairy = true; break; }
+        }
+        if (hasFairy) {
+            deathSaveValue += bc.player.maxHp * (bc.player.hasRelic<RelicId::SACRED_BARK>() ? 0.6 : 0.3);
+        }
+        if (bc.player.hasRelic<RelicId::LIZARD_TAIL>()) {
+            deathSaveValue += 0.5 * bc.player.maxHp;
+        }
+    }
 
     if (bc.outcome == Outcome::PLAYER_VICTORY) {
         // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
         // search doesn't value preserving HP that the game is about to restore anyway.
-        double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty) + lizardTailValue;
+        double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty) + deathSaveValue;
         if (evalWeights.goldLossWeight != 0 && bc.requiresStolenGoldCheck()) {
             // Gold held by an escaped thief is permanently lost; kills refund it at exitBattle,
             // so only the escaped case is penalized (steal-then-kill nets the same as no steal).
@@ -932,7 +946,7 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
         const double drawBonus = bc.cardsDrawn * evalWeights.drawWeight;
         const double aliveScore = bc.monsters.monstersAlive * -evalWeights.aliveWeight;
 
-        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + lizardTailValue;
+        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + deathSaveValue;
     }
 }
 
