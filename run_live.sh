@@ -36,9 +36,11 @@ echo "procs after kill (want java=0 comm.py=0): java=$(tasklist.exe 2>/dev/null 
 # (the same way STS_COMM_CAPTURE survives). comm.py reads STS_START_SEED/STS_ASCENSION/STS_SIMS/
 # STS_TEMPERATURE as the defaults for its matching flags.
 sed -i "s/comm_capture_[A-Za-z0-9_]*/${CAP}/" "$CFG"
-sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g' "$CFG"
+sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
 sed -i "s/--games [0-9]*/--games ${GAMES}/" "$CFG"
-ENVV=""
+# PYTHONHASHSEED must be in the launch env (read at interpreter startup); pins Python dict/set
+# iteration order so the reconstruction is reproducible. Always present, independent of run knobs.
+ENVV=" PYTHONHASHSEED\\=0"
 [ -n "$SEED" ] && ENVV="$ENVV STS_START_SEED\\=$SEED"
 [ -n "$ASC" ]  && ENVV="$ENVV STS_ASCENSION\\=$ASC"
 [ -n "$SIMS" ] && ENVV="$ENVV STS_SIMS\\=$SIMS"
