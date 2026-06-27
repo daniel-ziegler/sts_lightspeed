@@ -3555,7 +3555,7 @@ class STSLightspeedAgent:
         return None
 
 
-DEFAULT_CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "heart1.pt.iter_1295")
+DEFAULT_CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "heart1.pt.iter_2575")
 
 
 def load_policy_service(ckpt_path, device=None):
