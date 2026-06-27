@@ -1753,9 +1753,15 @@ void BattleContext::onUseAttackCard() {
 
     // todo Choke Power
 
-    auto &m = monsters.arr[0];
-    if (m.hasStatus<MS::SHARP_HIDE>()) {
-        addToBot( Actions::DamagePlayer(m.getStatus<MS::SHARP_HIDE>()));
+    // Sharp Hide (Spiker's spike, Guardian's defensive mode): every LIVING monster that has it reflects
+    // its amount to the player on each attack card played. Iterate all slots -- a Spiker in a group
+    // (Three/Four Shapes) can sit in any slot, and a search that only checked slot 0 would walk the
+    // player into the un-modeled spikes of the others (suicide-by-attack into off-slot Spikers).
+    for (int i = 0; i < monsters.monsterCount; ++i) {
+        auto &m = monsters.arr[i];
+        if (m.isAlive() && m.hasStatus<MS::SHARP_HIDE>()) {
+            addToBot( Actions::DamagePlayer(m.getStatus<MS::SHARP_HIDE>()));
+        }
     }
 
 }
