@@ -3148,6 +3148,12 @@ class STSLightspeedAgent:
             return
         if hover_idx is not None and self.coordinator is not None:
             self.coordinator.send_message(f"hover {hover_idx}")
+            # `hover` is a fire-and-forget on-screen signal: it sets the hover highlight but does NOT
+            # consume the game's command-readiness (the choice screen is still waiting for the real
+            # pick) and the mod replies with no state. send_message just cleared game_is_ready, so
+            # restore it -- otherwise the real pick can't execute and the run stalls until the 30s
+            # silence-nudge fires. The 1s sleep below lets the mod render the hover before we commit.
+            self.coordinator.game_is_ready = True
         print(f"[watch] {desc}{'' if hover_idx is None else f' [hover {hover_idx}]'} -- holding "
               f"{self.watch_ms}ms", file=sys.stderr)
         time.sleep(self.watch_ms / 1000.0)
