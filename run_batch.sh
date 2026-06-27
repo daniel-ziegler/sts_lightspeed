@@ -10,17 +10,18 @@ set +e
 RUN="${1:?usage: ./run_batch.sh <run_name> [games] [per_game_timeout_min]}"
 N="${2:-30}"
 TMO_MIN="${3:-75}"
+SIMS="${SIMS:-10000}"   # combat MCTS sims per decision; override via env (e.g. SIMS=5000)
 REPO=/home/dmz/osrc/sts_lightspeed
 ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
 RESULTS="$REPO/runs/batch_${RUN}_results.txt"
 : > "$RESULTS"
 TICKS=$(( TMO_MIN * 4 ))   # 15s ticks
 
-echo "batch ${RUN}: ${N} games, A20 / 10k sims / temp 0 / random seed, ${TMO_MIN}min/game cap" | tee -a "$RESULTS"
+echo "batch ${RUN}: ${N} games, A20 / ${SIMS} sims / temp 0 / random seed, ${TMO_MIN}min/game cap" | tee -a "$RESULTS"
 
 for i in $(seq 1 "$N"); do
   # Launch one game (no SEED => random). run_live handles kill/config/autosave/errlog/launch.
-  ASC=20 SIMS=10000 TEMP=0 "$REPO/run_live.sh" "${RUN}_g${i}" 1 >/dev/null 2>&1
+  ASC=20 SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}_g${i}" 1 >/dev/null 2>&1
 
   # Wait for THIS game's comm.py to exit (completion or crash), up to the per-game cap.
   exited=0
