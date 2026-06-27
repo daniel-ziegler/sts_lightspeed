@@ -2491,9 +2491,12 @@ _CARD_SELECT_POOL_BY_TASK = {
 class STSLightspeedAgent:
 
     def __init__(self, chosen_class=PlayerClass.THE_SILENT, net=None, temperature=0.0, net_seed=0,
-                 start_seed=None, ascension=0, sims=1000):
+                 start_seed=None, ascension=0, sims=1000, watch_ms=0):
         self.game = Game()
         self.errors = 0
+        # Watch mode: when > 0, each decision hovers its intended move (to signal it on-screen),
+        # waits this many ms, then executes -- so a human can follow the bot's play. 0 = full speed.
+        self.watch_ms = watch_ms
         # When set (a base-35 StS seed string, e.g. "54FYPZX13RLTT"), new runs start on this exact
         # seed -- used to replay a specific game (e.g. the captured slime-boss crash seed).
         self.start_seed = start_seed
@@ -3028,6 +3031,14 @@ class STSLightspeedAgent:
         with open(path + ".battle.jsonl", "a") as f:
             f.write(json.dumps(record) + "\n")
 
+    def _watch_pause(self, desc):
+        """Watch mode: pause `watch_ms` so a human can follow this net decision, after the game has
+        been told (by the mod) to hover the intended choice. No-op at full speed (watch_ms <= 0)."""
+        if self.watch_ms <= 0:
+            return
+        print(f"[watch] {desc} -- holding {self.watch_ms}ms", file=sys.stderr)
+        time.sleep(self.watch_ms / 1000.0)
+
     def net_pick_action(self, gc, action_filter=None):
         """Run heart1 on gc's current choice screen and return the chosen sts.GameAction (in
         GameContext space), or None if construct_choice can't represent this screen (so the
@@ -3051,8 +3062,9 @@ class STSLightspeedAgent:
         choice = construct_choice(gc, obs, actions)
         if choice is None:
             return None
-        action, _desc, _path, _idx, _logp, _val = choose_overworld_action(
+        action, desc, _path, _idx, _logp, _val = choose_overworld_action(
             self.net, choice, gc, self.net_rng, temperature=self.temperature)
+        self._watch_pause(desc or str(action))
         return action
 
     def net_card_reward_action(self):
@@ -3543,6 +3555,9 @@ def run_agent_cli():
                        help="Ascension level to start new runs on (0-20)")
     parser.add_argument("--sims", type=int, default=int(os.environ.get("STS_SIMS", 1000)),
                        help="Combat MCTS simulations per decision (simulation_count_base)")
+    parser.add_argument("--watch-ms", type=int, default=int(os.environ.get("STS_WATCH_MS", 0)),
+                       help="Watch mode: at each decision, hover the intended move to signal it, wait "
+                            "this many milliseconds, then execute it. 0 disables (full-speed play).")
 
     args = parser.parse_args()
     
@@ -3565,7 +3580,8 @@ def run_agent_cli():
 
     # Create agent and coordinator
     agent = STSLightspeedAgent(chosen_class, net=net, temperature=args.temperature,
-                               start_seed=args.seed, ascension=args.ascension, sims=args.sims)
+                               start_seed=args.seed, ascension=args.ascension, sims=args.sims,
+                               watch_ms=args.watch_ms)
     coordinator = Coordinator()
     agent.coordinator = coordinator  # lets the agent capture raw decision states for replay
 

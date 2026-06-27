@@ -17,7 +17,8 @@ GAMES="${2:-20}"
 #   ASC=<0-20>     ascension level
 #   SIMS=<n>       combat MCTS simulations per decision
 #   TEMP=<f>       net action-sampling temperature
-SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
+#   WATCH=<ms>     watch mode: pause this many ms at each net decision (0/unset = full speed)
+SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"; WATCH="${WATCH:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
 CFG="/mnt/c/Users/zieDa/AppData/Local/ModTheSpire/CommunicationMod/config.properties"
@@ -36,7 +37,7 @@ echo "procs after kill (want java=0 comm.py=0): java=$(tasklist.exe 2>/dev/null 
 # (the same way STS_COMM_CAPTURE survives). comm.py reads STS_START_SEED/STS_ASCENSION/STS_SIMS/
 # STS_TEMPERATURE as the defaults for its matching flags.
 sed -i "s/comm_capture_[A-Za-z0-9_]*/${CAP}/" "$CFG"
-sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
+sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ STS_WATCH_MS\\=[0-9]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
 sed -i "s/--games [0-9]*/--games ${GAMES}/" "$CFG"
 # PYTHONHASHSEED must be in the launch env (read at interpreter startup); pins Python dict/set
 # iteration order so the reconstruction is reproducible. Always present, independent of run knobs.
@@ -45,6 +46,7 @@ ENVV=" PYTHONHASHSEED\\=0"
 [ -n "$ASC" ]  && ENVV="$ENVV STS_ASCENSION\\=$ASC"
 [ -n "$SIMS" ] && ENVV="$ENVV STS_SIMS\\=$SIMS"
 [ -n "$TEMP" ] && ENVV="$ENVV STS_TEMPERATURE\\=$TEMP"
+[ -n "$WATCH" ] && ENVV="$ENVV STS_WATCH_MS\\=$WATCH"
 # Insert the env assignments right after the existing STS_COMM_CAPTURE\=... token.
 [ -n "$ENVV" ] && sed -i "s#\(STS_COMM_CAPTURE\\\\=[^ ]*\)#\1${ENVV}#" "$CFG"
 echo "config: $(grep -o "${CAP}[^ ]*\|--games [0-9]*\|STS_START_SEED..[0-9A-Za-z]*\|STS_ASCENSION..[0-9]*\|STS_SIMS..[0-9]*\|STS_TEMPERATURE..[0-9.]*\|iter_[0-9]*" "$CFG" | tr '\n' ' ')"

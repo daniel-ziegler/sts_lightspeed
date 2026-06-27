@@ -264,16 +264,30 @@ class Coordinator:
         # action), so silence stays at 0 and a silence timer never fires. Track a fingerprint of the
         # game state and abort if it hasn't changed for far longer than any real animation/load.
         silence = 0.0
-        poll = 2.0
+        # Block-with-timeout granularity. A queued action that isn't can_be_executed yet (the game is
+        # mid-animation / not ready_for_command) is only retried at the TOP of the next loop iteration,
+        # so this also bounds the worst-case latency between "action becomes executable" and "action
+        # sent". Keep it small (50ms) so moves fire promptly; the wait still blocks (no busy-spin) and
+        # silence/nudge/watchdog accounting below is in real seconds regardless of the granularity.
+        poll = 0.05
         nudged = False
         last_sig = self._state_signature()
         last_progress_t = time.monotonic()
+        # Track the deepest act/floor reached so a victory can be split into a heart kill (act 4)
+        # vs an act-3-only win -- the meaningful distinction for a heart-run agent. (Mirrors the
+        # offline eval's heart_win_rate / act3_win_rate.)
+        self.last_game_max_act = 0
+        self.last_game_max_floor = 0
         while self.in_game:
             self.execute_next_action_if_ready()
             try:
                 self.receive_game_state_update(block=True, timeout=poll)
                 silence = 0.0
                 nudged = False
+                self.last_game_max_act = max(self.last_game_max_act,
+                                             getattr(self.last_game_state, "act", 0) or 0)
+                self.last_game_max_floor = max(self.last_game_max_floor,
+                                               getattr(self.last_game_state, "floor", 0) or 0)
                 sig = self._state_signature()
                 if sig != last_sig:
                     last_sig = sig
