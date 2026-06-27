@@ -3031,12 +3031,34 @@ class STSLightspeedAgent:
         with open(path + ".battle.jsonl", "a") as f:
             f.write(json.dumps(record) + "\n")
 
-    def _watch_pause(self, desc):
-        """Watch mode: pause `watch_ms` so a human can follow this net decision, after the game has
-        been told (by the mod) to hover the intended choice. No-op at full speed (watch_ms <= 0)."""
+    def _watch_hover_index(self, action):
+        """Live choice index (matching CommunicationMod's choice list) to hover for this net pick on a
+        hover-capable screen -- card reward, boss relic, or a shop CARD buy -- else None. Shop
+        relic/potion buys and every other screen return None (delay only; no hover patch there)."""
+        st = getattr(self.game, "screen_type", None)
+        rt = getattr(action, "rewards_action_type", None)
+        try:
+            if st == ScreenType.CARD_REWARD and rt == sts.RewardsActionType.CARD:
+                if 0 <= action.idx2 < len(getattr(self.game.screen, "cards", []) or []):
+                    return action.idx2
+            elif st == ScreenType.BOSS_REWARD and rt == sts.RewardsActionType.RELIC:
+                if 0 <= action.idx1 < len(getattr(self.game.screen, "relics", []) or []):
+                    return action.idx1
+            elif st == ScreenType.SHOP_SCREEN and rt == sts.RewardsActionType.CARD:
+                return self._shop_choice_index(rt, action.idx1)
+        except Exception:
+            pass
+        return None
+
+    def _watch_pause(self, desc, hover_idx=None):
+        """Watch mode: signal the intended net choice (hover it on-screen, where supported) then pause
+        `watch_ms` so a human can follow the play before it commits. No-op at full speed (<= 0)."""
         if self.watch_ms <= 0:
             return
-        print(f"[watch] {desc} -- holding {self.watch_ms}ms", file=sys.stderr)
+        if hover_idx is not None and self.coordinator is not None:
+            self.coordinator.send_message(f"hover {hover_idx}")
+        print(f"[watch] {desc}{'' if hover_idx is None else f' [hover {hover_idx}]'} -- holding "
+              f"{self.watch_ms}ms", file=sys.stderr)
         time.sleep(self.watch_ms / 1000.0)
 
     def net_pick_action(self, gc, action_filter=None):
@@ -3064,7 +3086,7 @@ class STSLightspeedAgent:
             return None
         action, desc, _path, _idx, _logp, _val = choose_overworld_action(
             self.net, choice, gc, self.net_rng, temperature=self.temperature)
-        self._watch_pause(desc or str(action))
+        self._watch_pause(desc or str(action), self._watch_hover_index(action))
         return action
 
     def net_card_reward_action(self):
