@@ -73,7 +73,9 @@ DamageInfo Monster::getMoveBaseDamage(const BattleContext &bc) const {
 
         case MonsterMoveId::GIANT_HEAD_COUNT:               return {13};
         case MonsterMoveId::GIANT_HEAD_IT_IS_TIME: {
-            const auto t = std::min(bc.getMonsterTurnNumber()-5, 6) * 5;
+            // It Is Time first fires at monsterTurnNumber 4 for base damage, then +5 every turn
+            // after, capped at +30 (so 40..70 at asc>=3). The max(0,...) guards the base turn.
+            const auto t = std::max(0, std::min(bc.getMonsterTurnNumber()-4, 6)) * 5;
             const auto damage = (asc3 ? 40 : 30) + t;
             return {damage};
         }
