@@ -2513,6 +2513,13 @@ class STSLightspeedAgent:
         self._shadow_prev_action = None
         self._shadow_prev_draw_top = None
         self._shadow_prev_floor = None
+        # Combat-decision signature of the state we last issued an action for. CommunicationMod can
+        # emit a transient combat_state mid-resolution (e.g. the *_played_this_turn counters reset
+        # while hand/energy/monsters still show the pre-play values) with ready_for_command=true; the
+        # bridge would otherwise re-decide on it and fire a second command into the still-busy game
+        # ("Invalid command: play, ready_for_command:false" -> fatal). We skip a decision whose sig
+        # matches the last action's, waiting for the state to actually change.
+        self._last_acted_combat_sig = None
         self.chosen_class = chosen_class
         self.change_class(chosen_class)
         self.choice_count = 0
@@ -2570,6 +2577,9 @@ class STSLightspeedAgent:
             return ProceedAction()
         if self.game.play_available:
             return self.handle_combat()
+        # Not a card-play decision point -> clear the combat dedup baseline so a fresh fight's first
+        # decision is never mistaken for a duplicate of the previous fight's last action.
+        self._last_acted_combat_sig = None
         if self.game.end_available:
             # time.sleep(4)
             return EndTurnAction()
@@ -2815,12 +2825,44 @@ class STSLightspeedAgent:
         except Exception as e:
             print(f"[spot-weakness check error] {e}", file=sys.stderr)
 
+    def _combat_decision_sig(self):
+        """A fingerprint of the live combat position that changes on any real player progress but NOT
+        on a transient mid-resolution re-emit. Deliberately excludes the *_played_this_turn counters
+        (the only fields the glitch transient disturbs -- they reset mid-resolution and every turn).
+        Every action the combat search can issue through handle_combat moves at least one field here:
+          - play a card  -> the card leaves the hand (hand ids); also energy/block/powers/monsters
+          - drink a potion -> the slot empties (potions), so even a pure-stat buff potion (Strength,
+            Dexterity, Regen, Ancient, Cultist...) that touches nothing else is still caught
+          - a buff card/potion with no hand/energy footprint -> player powers
+          - end the turn -> turn
+        so a genuine new decision point always differs from the one before it, while the duplicate
+        emit (identical everywhere except the excluded counters) matches and is skipped."""
+        g = self.game
+        p = getattr(g, "player", None)
+        hand = tuple((c.card_id, c.upgrades) for c in (g.hand or []))
+        mons = tuple((m.current_hp, m.block, str(m.intent), m.is_gone) for m in (g.monsters or []))
+        potions = tuple(pot.potion_id for pot in (getattr(g, "potions", None) or []))
+        powers = tuple(sorted((pw.power_id, pw.amount) for pw in (getattr(p, "powers", None) or [])))
+        return (getattr(g, "turn", None),
+                getattr(p, "energy", None), getattr(p, "block", None),
+                hand, mons, potions, powers)
+
     def handle_combat(self):
         self.capture_battle_state()
         # Step marker (see handle_screen): pinpoints a hang inside convert_combat_state / the search,
         # which otherwise leaves no clue (the "Running N simulations" log comes only after conversion).
         print(f"[step] handle_combat floor={self.game.floor} act={self.game.act} "
               f"turn={getattr(self.game, 'combat_round', '?')}", file=sys.stderr)
+        # Drop a transient/duplicate emit: if the position hasn't changed since our last action, that
+        # action is still resolving in the live game. Re-deciding now would send a second command into
+        # a busy game (ready_for_command=false) and get a fatal "Invalid command". Return None so the
+        # coordinator waits for the next state instead. Real progress changes the sig and we act again.
+        sig = self._combat_decision_sig()
+        if sig == self._last_acted_combat_sig:
+            print("[combat] position unchanged since last action (transient/duplicate emit); "
+                  "waiting for the prior action to resolve", file=sys.stderr)
+            return None
+        self._last_acted_combat_sig = sig
         # Convert spirecomm game state to our internal format
         gc = spirecomm_to_gamecontext(self.game)
         bc, slot_to_spire = convert_combat_state(self.game, gc)
