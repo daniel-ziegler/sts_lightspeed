@@ -2566,6 +2566,16 @@ class STSLightspeedAgent:
         self.choice_count += 1
         self.game = game_state
         self._log_seed_once()
+        # Persist the raw incoming state BEFORE we touch it, so a silent C++ segfault during
+        # processing (no Python traceback) still leaves the triggering state on disk for offline
+        # repro. Overwrites each decision; the file is the last state we started to handle.
+        try:
+            if self.coordinator is not None and self.coordinator.last_raw_communication_state is not None:
+                path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "last_instate.json")
+                with open(path, "w") as f:
+                    json.dump(self.coordinator.last_raw_communication_state, f)
+        except Exception:
+            pass
         if self.game.choice_available:
             # nchoice = min(4, len(self.game.choice_list))
             # if self.choice_count < 6:
