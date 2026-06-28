@@ -771,6 +771,10 @@ _MISCINFO_DAMAGE_MOVE_INTS = frozenset(int(m) for m in (
     sts.MonsterMoveId.ORB_WALKER_LASER,
     sts.MonsterMoveId.HEXAGHOST_DIVIDER,
     sts.MonsterMoveId.DARKLING_NIP,
+    # Giant Head's It Is Time escalates +5 per cast (40..70). The engine reads miscInfo as the
+    # current slam damage; the live turn can't recover the cast count (it desyncs from the player
+    # turn -- two turn-5 states can be the 1st vs 2nd slam), so restore the damage from the intent.
+    sts.MonsterMoveId.GIANT_HEAD_IT_IS_TIME,
 ))
 _MISCINFO_HITS_MOVE_INTS = frozenset(int(m) for m in (
     sts.MonsterMoveId.BOOK_OF_STABBING_MULTI_STAB,

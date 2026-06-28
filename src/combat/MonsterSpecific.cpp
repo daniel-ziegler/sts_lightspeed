@@ -1562,12 +1562,14 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
             break;
 
         case MMID::GIANT_HEAD_IT_IS_TIME: { // 2
-            // It Is Time first fires on the Giant Head's 5th move (count counts 5->0) for base
-            // damage, then +5 each move after, capped at +30 (so 40..70 at asc>=3). max(0,...)
-            // guards the base move.
-            const auto t = std::max(0, std::min(bc.getMonsterTurnNumber()-5, 6)) * 5;
-            const auto damage = (asc3 ? 40 : 30) + t;
+            // It Is Time escalates +5 per cast, capped at +30 (40..70 at asc>=3). miscInfo holds the
+            // current slam damage -- 0 before the first cast (use base), restored from the live
+            // intent on mid-fight reconstruction -- then advanced here for the next cast. Driven by
+            // cast count (miscInfo), not the turn: the live turn can desync from the cast count.
+            const int base = asc3 ? 40 : 30;
+            const int damage = miscInfo > 0 ? miscInfo : base;
             attackPlayerHelper(bc, damage);
+            miscInfo = std::min(damage + 5, base + 30);
             bc.noOpRollMove();
             break;
         }
@@ -3187,8 +3189,8 @@ MMID Monster::getMoveForRoll(BattleContext &bc, const MonsterRollInputs &in, int
             // 3 count
             // The count field starts at 5 and drops each move; It Is Time begins on the 5th move
             // onward (Glare/Count fill moves 1-4). monsterTurnNumber is the 0-indexed per-monster
-            // field, so the 5th move is >= 4 (the damage formula below uses getMonsterTurnNumber(),
-            // which is 1-indexed -- turn+1 -- hence its matching threshold is 5).
+            // field, so the 5th move is >= 4. (Its escalating damage is tracked in miscInfo, not
+            // here -- see getMoveBaseDamage / takeTurn.)
             if (in.monsterTurnNumber >= 4) {
                 return MMID::GIANT_HEAD_IT_IS_TIME;
             }

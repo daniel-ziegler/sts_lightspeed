@@ -72,14 +72,11 @@ DamageInfo Monster::getMoveBaseDamage(const BattleContext &bc) const {
         case MonsterMoveId::FUNGI_BEAST_BITE:               return {6};
 
         case MonsterMoveId::GIANT_HEAD_COUNT:               return {13};
-        case MonsterMoveId::GIANT_HEAD_IT_IS_TIME: {
-            // It Is Time first fires on the Giant Head's 5th move (count counts 5->0) for base
-            // damage, then +5 each move after, capped at +30 (so 40..70 at asc>=3). max(0,...)
-            // guards the base move.
-            const auto t = std::max(0, std::min(bc.getMonsterTurnNumber()-5, 6)) * 5;
-            const auto damage = (asc3 ? 40 : 30) + t;
-            return {damage};
-        }
+        case MonsterMoveId::GIANT_HEAD_IT_IS_TIME:
+            // miscInfo holds the current It Is Time slam damage: 0 before the first cast (use base),
+            // restored from the live intent on reconstruction, advanced +5 per cast in takeTurn
+            // (40..70 at asc>=3). Driven by cast count, not the turn -- the live turn desyncs from it.
+            return {miscInfo > 0 ? miscInfo : (asc3 ? 40 : 30)};
 
         case MonsterMoveId::GREEN_LOUSE_BITE:               return {miscInfo};
 
