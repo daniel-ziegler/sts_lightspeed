@@ -2071,8 +2071,16 @@ MMID Monster::getMoveForRoll(BattleContext &bc, const MonsterRollInputs &in, int
         }
 
         case MonsterId::BRONZE_AUTOMATON: {
-            return (MMID::BRONZE_AUTOMATON_SPAWN_ORBS);
-            break;
+            // Spawn Orbs is the first-turn move only; afterwards the move chain self-drives via
+            // setMove (Flail -> Boost -> Flail/Hyperbeam) and never spawns again. A reconstructed
+            // mid-fight has hidden intents (NONE), so the engine rolls a move here -- return
+            // SPAWN_ORBS only if it hasn't moved yet, else Flail (what takeTurn sets right after a
+            // spawn). Returning SPAWN_ORBS again would re-spawn into the occupied orb slots and
+            // desync monstersAlive (-> getRandomMonsterIdx walks off the array).
+            if (firstTurn()) {
+                return (MMID::BRONZE_AUTOMATON_SPAWN_ORBS);
+            }
+            return (MMID::BRONZE_AUTOMATON_FLAIL);
         }
 
         case MonsterId::BRONZE_ORB: { // todo bug with discarded cards - blind card not showing in discard pile
@@ -3422,6 +3430,11 @@ void Monster::spawnBronzeOrbs(BattleContext &bc) {
     auto &orb1 = bc.monsters.arr[0];
     auto &orb2 = bc.monsters.arr[2];
 
+    // Count only slots that weren't already alive: a fresh fight has empty buffers here (+2), but a
+    // reconstructed mid-fight (or a re-rolled spawn) may already hold live orbs -- recounting them
+    // would push monstersAlive past monsterCount and walk getRandomMonsterIdx off the array.
+    const int newlyAlive = (orb1.isAlive() ? 0 : 1) + (orb2.isAlive() ? 0 : 1);
+
     orb1.construct(bc, MonsterId::BRONZE_ORB, 0);
     orb2.construct(bc, MonsterId::BRONZE_ORB, 2);
 
@@ -3436,7 +3449,7 @@ void Monster::spawnBronzeOrbs(BattleContext &bc) {
     orb1.rollMove(bc);
     orb2.rollMove(bc);
 
-    bc.monsters.monstersAlive += 2;
+    bc.monsters.monstersAlive += newlyAlive;
     ++bc.monsterTurnIdx;
 }
 
