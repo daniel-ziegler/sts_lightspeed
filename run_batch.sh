@@ -11,17 +11,20 @@ RUN="${1:?usage: ./run_batch.sh <run_name> [games] [per_game_timeout_min]}"
 N="${2:-30}"
 TMO_MIN="${3:-75}"
 SIMS="${SIMS:-10000}"   # combat MCTS sims per decision; override via env (e.g. SIMS=5000)
+ASC="${ASC:-20}"        # ascension level; set ASC=rand for a random 0-20 per game
 REPO=/home/dmz/osrc/sts_lightspeed
 ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
 RESULTS="$REPO/runs/batch_${RUN}_results.txt"
 : > "$RESULTS"
 TICKS=$(( TMO_MIN * 4 ))   # 15s ticks
 
-echo "batch ${RUN}: ${N} games, A20 / ${SIMS} sims / temp 0 / random seed, ${TMO_MIN}min/game cap" | tee -a "$RESULTS"
+echo "batch ${RUN}: ${N} games, A${ASC} / ${SIMS} sims / temp 0 / random seed, ${TMO_MIN}min/game cap" | tee -a "$RESULTS"
 
 for i in $(seq 1 "$N"); do
+  # Per-game ascension: a fixed level, or a random 0-20 when ASC=rand.
+  if [ "$ASC" = "rand" ]; then GAME_ASC=$(( RANDOM % 21 )); else GAME_ASC="$ASC"; fi
   # Launch one game (no SEED => random). run_live handles kill/config/autosave/errlog/launch.
-  ASC=20 SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}_g${i}" 1 >/dev/null 2>&1
+  ASC="$GAME_ASC" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}_g${i}" 1 >/dev/null 2>&1
 
   # Wait for THIS game's comm.py to exit (completion or crash), up to the per-game cap.
   exited=0
@@ -37,12 +40,12 @@ for i in $(seq 1 "$N"); do
   if [ -n "$line" ]; then
     kind=$(echo "$line" | grep -oE 'kind=[a-z]+' | cut -d= -f2)
     floor=$(echo "$line" | grep -oE 'max_floor=[0-9]+' | cut -d= -f2)
-    echo "game $i seed=$seed kind=$kind max_floor=$floor" | tee -a "$RESULTS"
+    echo "game $i asc=$GAME_ASC seed=$seed kind=$kind max_floor=$floor" | tee -a "$RESULTS"
   elif [ "$exited" -eq 1 ]; then
     cr=$(grep -aoE "intent-damage mismatch for [A-Za-z]+|Unmapped [a-z]+ (power|move)[^\"]*|unmapped current move for [A-Za-z]+|Wrong number of cards|Too many cards" "$ERRLOG" | tail -1)
-    echo "game $i seed=$seed kind=CRASH detail=[${cr:-unknown}]" | tee -a "$RESULTS"
+    echo "game $i asc=$GAME_ASC seed=$seed kind=CRASH detail=[${cr:-unknown}]" | tee -a "$RESULTS"
   else
-    echo "game $i seed=$seed kind=TIMEOUT (>${TMO_MIN}min, killed)" | tee -a "$RESULTS"
+    echo "game $i asc=$GAME_ASC seed=$seed kind=TIMEOUT (>${TMO_MIN}min, killed)" | tee -a "$RESULTS"
   fi
 done
 
