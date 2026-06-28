@@ -2491,13 +2491,13 @@ _CARD_SELECT_POOL_BY_TASK = {
 class STSLightspeedAgent:
 
     def __init__(self, chosen_class=PlayerClass.THE_SILENT, net=None, temperature=0.0, net_seed=0,
-                 start_seed=None, ascension=0, sims=1000, watch_ms=0, watch_pre_ms=1000, watch_post_ms=500):
+                 start_seed=None, ascension=0, sims=1000, watch=False, watch_pre_ms=1000, watch_post_ms=500):
         self.game = Game()
         self.errors = 0
-        # Watch mode (enabled when watch_ms > 0): each net decision pauses watch_pre_ms, moves the
-        # cursor onto its intended pick (hovering it where supported), pauses watch_post_ms, then
-        # commits -- so a human can follow the play. 0 = full speed.
-        self.watch_ms = watch_ms
+        # Watch mode: when enabled, each net decision pauses watch_pre_ms, moves the cursor onto its
+        # intended pick (hovering it where supported), pauses watch_post_ms, then commits -- so a
+        # human can follow the play. Disabled = full speed.
+        self.watch = watch
         self.watch_pre_ms = watch_pre_ms
         self.watch_post_ms = watch_post_ms
         # When set (a base-35 StS seed string, e.g. "54FYPZX13RLTT"), new runs start on this exact
@@ -3165,8 +3165,8 @@ class STSLightspeedAgent:
     def _watch_pause(self, desc, hover_idx=None):
         """Watch mode: pause `watch_pre_ms`, move the cursor onto the intended net choice (hover it,
         where the screen supports it), pause `watch_post_ms`, then return so the caller commits -- so
-        a human can follow the play. No-op at full speed (watch_ms <= 0)."""
-        if self.watch_ms <= 0:
+        a human can follow the play. No-op at full speed (watch disabled)."""
+        if not self.watch:
             return
         # Pause BEFORE the cursor moves -- the screen sits a beat before the cursor travels to the pick.
         if self.watch_pre_ms > 0:
@@ -3700,9 +3700,11 @@ def run_agent_cli():
                        help="Ascension level to start new runs on (0-20)")
     parser.add_argument("--sims", type=int, default=int(os.environ.get("STS_SIMS", 1000)),
                        help="Combat MCTS simulations per decision (simulation_count_base)")
-    parser.add_argument("--watch-ms", type=int, default=int(os.environ.get("STS_WATCH_MS", 0)),
-                       help="Enable watch mode (any value > 0): at each net decision, pause, move the "
-                            "cursor onto the intended pick, pause again, then commit. 0 = full speed.")
+    parser.add_argument("--watch", action="store_true",
+                       default=("STS_WATCH_PRE_MS" in os.environ or "STS_WATCH_POST_MS" in os.environ),
+                       help="Enable watch mode (also auto-enabled by setting either watch delay / its "
+                            "env var): at each net decision pause, move the cursor onto the intended "
+                            "pick, pause, then commit. Off = full speed.")
     parser.add_argument("--watch-pre-ms", type=int, default=int(os.environ.get("STS_WATCH_PRE_MS", 1000)),
                        help="Watch mode: ms to wait BEFORE moving the cursor to the pick (default 1000).")
     parser.add_argument("--watch-post-ms", type=int, default=int(os.environ.get("STS_WATCH_POST_MS", 500)),
@@ -3730,7 +3732,7 @@ def run_agent_cli():
     # Create agent and coordinator
     agent = STSLightspeedAgent(chosen_class, net=net, temperature=args.temperature,
                                start_seed=args.seed, ascension=args.ascension, sims=args.sims,
-                               watch_ms=args.watch_ms, watch_pre_ms=args.watch_pre_ms,
+                               watch=args.watch, watch_pre_ms=args.watch_pre_ms,
                                watch_post_ms=args.watch_post_ms)
     coordinator = Coordinator()
     agent.coordinator = coordinator  # lets the agent capture raw decision states for replay

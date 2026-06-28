@@ -17,10 +17,10 @@ GAMES="${2:-20}"
 #   ASC=<0-20>     ascension level
 #   SIMS=<n>       combat MCTS simulations per decision
 #   TEMP=<f>       net action-sampling temperature
-#   WATCH=<ms>     watch mode: enable (any >0) -- pause, move cursor to the pick, pause, commit
-#   WATCH_PRE=<ms>  watch mode: ms before moving the cursor to the pick (default 1000)
-#   WATCH_POST=<ms> watch mode: ms after moving the cursor, before committing (default 500)
-SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"; WATCH="${WATCH:-}"
+#   WATCH_PRE=<ms>  watch mode (enables it): ms before moving the cursor to the pick (default 1000)
+#   WATCH_POST=<ms> watch mode (enables it): ms after moving the cursor, before committing (default 500)
+#                   -- setting either WATCH_PRE or WATCH_POST turns watch mode on; unset = full speed
+SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
 WATCH_PRE="${WATCH_PRE:-}"; WATCH_POST="${WATCH_POST:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
@@ -49,7 +49,6 @@ ENVV=" PYTHONHASHSEED\\=0"
 [ -n "$ASC" ]  && ENVV="$ENVV STS_ASCENSION\\=$ASC"
 [ -n "$SIMS" ] && ENVV="$ENVV STS_SIMS\\=$SIMS"
 [ -n "$TEMP" ] && ENVV="$ENVV STS_TEMPERATURE\\=$TEMP"
-[ -n "$WATCH" ] && ENVV="$ENVV STS_WATCH_MS\\=$WATCH"
 [ -n "$WATCH_PRE" ] && ENVV="$ENVV STS_WATCH_PRE_MS\\=$WATCH_PRE"
 [ -n "$WATCH_POST" ] && ENVV="$ENVV STS_WATCH_POST_MS\\=$WATCH_POST"
 # Insert the env assignments right after the existing STS_COMM_CAPTURE\=... token.
