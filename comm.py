@@ -3152,6 +3152,8 @@ class STSLightspeedAgent:
                 if 0 <= action.idx1 < len(getattr(self.game.screen, "relics", []) or []):
                     return action.idx1
             elif st == ScreenType.SHOP_SCREEN:
+                if rt == sts.RewardsActionType.SKIP:
+                    return "leave"   # hover the Leave button (CancelAction exits the shop)
                 # _shop_choice_index maps (type, idx) -> position in getAvailableShopItems order
                 # (purge, then affordable cards, relics, potions) -- the mod's shop choice list.
                 return self._shop_choice_index(rt, action.idx1)
@@ -3180,6 +3182,11 @@ class STSLightspeedAgent:
                 xs = sorted(n.x for n in (getattr(self.game.screen, "next_nodes", None) or []))
                 if action.idx1 in xs:
                     return xs.index(action.idx1)
+            elif st == ScreenType.GRID:
+                # Card-select grid (remove/upgrade/transform): idx1 is the card's index in the grid,
+                # which lines up with the mod's getGridScreenCards order.
+                if 0 <= action.idx1 < len(getattr(self.game.screen, "cards", []) or []):
+                    return action.idx1
         except Exception:
             pass
         return None
@@ -3601,14 +3608,19 @@ class STSLightspeedAgent:
         has_key = any(r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)
                       for r in rewards)
 
+        # In watch mode, hover the reward-list item being taken before committing it.
+        def take(i):
+            self._watch_pause(f"reward {rewards[i].reward_type}", i)
+            return CombatRewardAction(rewards[i])
+
         # Free pickups, one per call (the screen re-opens for the next).
-        for reward_item in rewards:
+        for i, reward_item in enumerate(rewards):
             if reward_item.reward_type in (RewardType.GOLD, RewardType.STOLEN_GOLD):
-                return CombatRewardAction(reward_item)
+                return take(i)
             if reward_item.reward_type == RewardType.POTION and not self.game.are_potions_full():
-                return CombatRewardAction(reward_item)
+                return take(i)
             if reward_item.reward_type == RewardType.RELIC and not has_key:
-                return CombatRewardAction(reward_item)
+                return take(i)
 
         # Relic and key both on the screen: heart1 decides which to take.
         if has_key:
@@ -3617,13 +3629,14 @@ class STSLightspeedAgent:
                 return decided
 
         # Only the card reward (and/or skip) remains.
-        for reward_item in rewards:
+        for i, reward_item in enumerate(rewards):
             if reward_item.reward_type == RewardType.POTION and self.game.are_potions_full():
                 continue
             if reward_item.reward_type == RewardType.CARD and self.skipped_cards:
                 continue
-            return CombatRewardAction(reward_item)
+            return take(i)
         self.skipped_cards = False
+        self._watch_pause("proceed", "proceed")   # hover the Proceed button before leaving the screen
         return ProceedAction()
 
     def _net_relic_or_key_action(self, rewards):
