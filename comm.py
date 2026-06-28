@@ -2491,12 +2491,15 @@ _CARD_SELECT_POOL_BY_TASK = {
 class STSLightspeedAgent:
 
     def __init__(self, chosen_class=PlayerClass.THE_SILENT, net=None, temperature=0.0, net_seed=0,
-                 start_seed=None, ascension=0, sims=1000, watch_ms=0):
+                 start_seed=None, ascension=0, sims=1000, watch_ms=0, watch_pre_ms=1000, watch_post_ms=500):
         self.game = Game()
         self.errors = 0
-        # Watch mode: when > 0, each decision hovers its intended move (to signal it on-screen),
-        # waits this many ms, then executes -- so a human can follow the bot's play. 0 = full speed.
+        # Watch mode (enabled when watch_ms > 0): each net decision pauses watch_pre_ms, moves the
+        # cursor onto its intended pick (hovering it where supported), pauses watch_post_ms, then
+        # commits -- so a human can follow the play. 0 = full speed.
         self.watch_ms = watch_ms
+        self.watch_pre_ms = watch_pre_ms
+        self.watch_post_ms = watch_post_ms
         # When set (a base-35 StS seed string, e.g. "54FYPZX13RLTT"), new runs start on this exact
         # seed -- used to replay a specific game (e.g. the captured slime-boss crash seed).
         self.start_seed = start_seed
@@ -3152,21 +3155,26 @@ class STSLightspeedAgent:
         return None
 
     def _watch_pause(self, desc, hover_idx=None):
-        """Watch mode: signal the intended net choice (hover it on-screen, where supported) then pause
-        `watch_ms` so a human can follow the play before it commits. No-op at full speed (<= 0)."""
+        """Watch mode: pause `watch_pre_ms`, move the cursor onto the intended net choice (hover it,
+        where the screen supports it), pause `watch_post_ms`, then return so the caller commits -- so
+        a human can follow the play. No-op at full speed (watch_ms <= 0)."""
         if self.watch_ms <= 0:
             return
+        # Pause BEFORE the cursor moves -- the screen sits a beat before the cursor travels to the pick.
+        if self.watch_pre_ms > 0:
+            time.sleep(self.watch_pre_ms / 1000.0)
         if hover_idx is not None and self.coordinator is not None:
             self.coordinator.send_message(f"hover {hover_idx}")
-            # `hover` is a fire-and-forget on-screen signal: it sets the hover highlight but does NOT
-            # consume the game's command-readiness (the choice screen is still waiting for the real
-            # pick) and the mod replies with no state. send_message just cleared game_is_ready, so
-            # restore it -- otherwise the real pick can't execute and the run stalls until the 30s
-            # silence-nudge fires. The 1s sleep below lets the mod render the hover before we commit.
+            # `hover` is a fire-and-forget on-screen signal: it warps the cursor but does NOT consume
+            # the game's command-readiness (the choice screen is still waiting for the real pick) and
+            # the mod replies with no state. send_message just cleared game_is_ready, so restore it --
+            # otherwise the real pick can't execute and the run stalls until the 30s silence-nudge.
             self.coordinator.game_is_ready = True
-        print(f"[watch] {desc}{'' if hover_idx is None else f' [hover {hover_idx}]'} -- holding "
-              f"{self.watch_ms}ms", file=sys.stderr)
-        time.sleep(self.watch_ms / 1000.0)
+        print(f"[watch] {desc}{'' if hover_idx is None else f' [hover {hover_idx}]'} -- "
+              f"pre {self.watch_pre_ms}ms / post {self.watch_post_ms}ms", file=sys.stderr)
+        # Pause AFTER the cursor moves, before the caller commits the pick.
+        if self.watch_post_ms > 0:
+            time.sleep(self.watch_post_ms / 1000.0)
 
     def net_pick_action(self, gc, action_filter=None):
         """Run heart1 on gc's current choice screen and return the chosen sts.GameAction (in
@@ -3685,8 +3693,12 @@ def run_agent_cli():
     parser.add_argument("--sims", type=int, default=int(os.environ.get("STS_SIMS", 1000)),
                        help="Combat MCTS simulations per decision (simulation_count_base)")
     parser.add_argument("--watch-ms", type=int, default=int(os.environ.get("STS_WATCH_MS", 0)),
-                       help="Watch mode: at each decision, hover the intended move to signal it, wait "
-                            "this many milliseconds, then execute it. 0 disables (full-speed play).")
+                       help="Enable watch mode (any value > 0): at each net decision, pause, move the "
+                            "cursor onto the intended pick, pause again, then commit. 0 = full speed.")
+    parser.add_argument("--watch-pre-ms", type=int, default=int(os.environ.get("STS_WATCH_PRE_MS", 1000)),
+                       help="Watch mode: ms to wait BEFORE moving the cursor to the pick (default 1000).")
+    parser.add_argument("--watch-post-ms", type=int, default=int(os.environ.get("STS_WATCH_POST_MS", 500)),
+                       help="Watch mode: ms to wait AFTER moving the cursor, before committing (default 500).")
 
     args = parser.parse_args()
     
@@ -3710,7 +3722,8 @@ def run_agent_cli():
     # Create agent and coordinator
     agent = STSLightspeedAgent(chosen_class, net=net, temperature=args.temperature,
                                start_seed=args.seed, ascension=args.ascension, sims=args.sims,
-                               watch_ms=args.watch_ms)
+                               watch_ms=args.watch_ms, watch_pre_ms=args.watch_pre_ms,
+                               watch_post_ms=args.watch_post_ms)
     coordinator = Coordinator()
     agent.coordinator = coordinator  # lets the agent capture raw decision states for replay
 

@@ -17,8 +17,11 @@ GAMES="${2:-20}"
 #   ASC=<0-20>     ascension level
 #   SIMS=<n>       combat MCTS simulations per decision
 #   TEMP=<f>       net action-sampling temperature
-#   WATCH=<ms>     watch mode: pause this many ms at each net decision (0/unset = full speed)
+#   WATCH=<ms>     watch mode: enable (any >0) -- pause, move cursor to the pick, pause, commit
+#   WATCH_PRE=<ms>  watch mode: ms before moving the cursor to the pick (default 1000)
+#   WATCH_POST=<ms> watch mode: ms after moving the cursor, before committing (default 500)
 SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"; WATCH="${WATCH:-}"
+WATCH_PRE="${WATCH_PRE:-}"; WATCH_POST="${WATCH_POST:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
 CFG="/mnt/c/Users/zieDa/AppData/Local/ModTheSpire/CommunicationMod/config.properties"
@@ -37,7 +40,7 @@ echo "procs after kill (want java=0 comm.py=0): java=$(tasklist.exe 2>/dev/null 
 # (the same way STS_COMM_CAPTURE survives). comm.py reads STS_START_SEED/STS_ASCENSION/STS_SIMS/
 # STS_TEMPERATURE as the defaults for its matching flags.
 sed -i "s/comm_capture_[A-Za-z0-9_]*/${CAP}/" "$CFG"
-sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ STS_WATCH_MS\\=[0-9]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
+sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ STS_WATCH_MS\\=[0-9]*//g; s/ STS_WATCH_PRE_MS\\=[0-9]*//g; s/ STS_WATCH_POST_MS\\=[0-9]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
 sed -i "s/--games [0-9]*/--games ${GAMES}/" "$CFG"
 # PYTHONHASHSEED must be in the launch env (read at interpreter startup); pins Python dict/set
 # iteration order so the reconstruction is reproducible. Always present, independent of run knobs.
@@ -47,6 +50,8 @@ ENVV=" PYTHONHASHSEED\\=0"
 [ -n "$SIMS" ] && ENVV="$ENVV STS_SIMS\\=$SIMS"
 [ -n "$TEMP" ] && ENVV="$ENVV STS_TEMPERATURE\\=$TEMP"
 [ -n "$WATCH" ] && ENVV="$ENVV STS_WATCH_MS\\=$WATCH"
+[ -n "$WATCH_PRE" ] && ENVV="$ENVV STS_WATCH_PRE_MS\\=$WATCH_PRE"
+[ -n "$WATCH_POST" ] && ENVV="$ENVV STS_WATCH_POST_MS\\=$WATCH_POST"
 # Insert the env assignments right after the existing STS_COMM_CAPTURE\=... token.
 [ -n "$ENVV" ] && sed -i "s#\(STS_COMM_CAPTURE\\\\=[^ ]*\)#\1${ENVV}#" "$CFG"
 echo "config: $(grep -o "${CAP}[^ ]*\|--games [0-9]*\|STS_START_SEED..[0-9A-Za-z]*\|STS_ASCENSION..[0-9]*\|STS_SIMS..[0-9]*\|STS_TEMPERATURE..[0-9.]*\|iter_[0-9]*" "$CFG" | tr '\n' ' ')"
