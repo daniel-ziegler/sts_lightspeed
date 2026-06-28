@@ -1562,9 +1562,10 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
             break;
 
         case MMID::GIANT_HEAD_IT_IS_TIME: { // 2
-            // It Is Time first fires at monsterTurnNumber 4 for base damage, then +5 every turn
-            // after, capped at +30 (so 40..70 at asc>=3). The max(0,...) guards the base turn.
-            const auto t = std::max(0, std::min(bc.getMonsterTurnNumber()-4, 6)) * 5;
+            // It Is Time first fires on the Giant Head's 5th move (count counts 5->0) for base
+            // damage, then +5 each move after, capped at +30 (so 40..70 at asc>=3). max(0,...)
+            // guards the base move.
+            const auto t = std::max(0, std::min(bc.getMonsterTurnNumber()-5, 6)) * 5;
             const auto damage = (asc3 ? 40 : 30) + t;
             attackPlayerHelper(bc, damage);
             bc.noOpRollMove();
@@ -3184,6 +3185,10 @@ MMID Monster::getMoveForRoll(BattleContext &bc, const MonsterRollInputs &in, int
             // 1 glare
             // 2 it is time
             // 3 count
+            // The count field starts at 5 and drops each move; It Is Time begins on the 5th move
+            // onward (Glare/Count fill moves 1-4). monsterTurnNumber is the 0-indexed per-monster
+            // field, so the 5th move is >= 4 (the damage formula below uses getMonsterTurnNumber(),
+            // which is 1-indexed -- turn+1 -- hence its matching threshold is 5).
             if (in.monsterTurnNumber >= 4) {
                 return MMID::GIANT_HEAD_IT_IS_TIME;
             }
