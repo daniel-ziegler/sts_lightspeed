@@ -3135,10 +3135,10 @@ class STSLightspeedAgent:
         with open(path + ".battle.jsonl", "a") as f:
             f.write(json.dumps(record) + "\n")
 
-    def _watch_hover_index(self, action):
+    def _watch_hover_index(self, action, actions=None):
         """Live choice index (matching CommunicationMod's choice list) to hover for this net pick on a
-        hover-capable screen -- card reward, boss relic, or a shop CARD buy -- else None. Shop
-        relic/potion buys and every other screen return None (delay only; no hover patch there)."""
+        hover-capable screen -- card reward, boss relic, any shop buy (card / relic / potion / card
+        removal), or an event option (incl. Neow) -- else None (delay only, no hover there)."""
         st = getattr(self.game, "screen_type", None)
         rt = getattr(action, "rewards_action_type", None)
         try:
@@ -3148,8 +3148,16 @@ class STSLightspeedAgent:
             elif st == ScreenType.BOSS_REWARD and rt == sts.RewardsActionType.RELIC:
                 if 0 <= action.idx1 < len(getattr(self.game.screen, "relics", []) or []):
                     return action.idx1
-            elif st == ScreenType.SHOP_SCREEN and rt == sts.RewardsActionType.CARD:
+            elif st == ScreenType.SHOP_SCREEN:
+                # _shop_choice_index maps (type, idx) -> position in getAvailableShopItems order
+                # (purge, then affordable cards, relics, potions) -- the mod's shop choice list.
                 return self._shop_choice_index(rt, action.idx1)
+            elif st == ScreenType.EVENT and actions:
+                # The engine returns event options in ascending idx1 order, matching the live enabled
+                # options (the mod's getActiveEventButtons order), so the chosen action's rank in the
+                # action list IS the live choice index.
+                if action in actions:
+                    return actions.index(action)
         except Exception:
             pass
         return None
@@ -3201,7 +3209,7 @@ class STSLightspeedAgent:
             return None
         action, desc, _path, _idx, _logp, _val = choose_overworld_action(
             self.net, choice, gc, self.net_rng, temperature=self.temperature)
-        self._watch_pause(desc or str(action), self._watch_hover_index(action))
+        self._watch_pause(desc or str(action), self._watch_hover_index(action, actions))
         return action
 
     def net_card_reward_action(self):
