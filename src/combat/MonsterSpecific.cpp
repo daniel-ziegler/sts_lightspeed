@@ -3542,12 +3542,13 @@ void Monster::stasisAction(BattleContext &bc) {
 void Monster::returnStasisCard(BattleContext &bc) {
     auto &stasisCard = bc.cards.stasisCards[std::min(idx,1)];
 
-#ifdef sts_asserts
+    // The on-death handler (Monster.cpp: hasStatus<STASIS>() -> returnStasisCard) can run more than
+    // once for the same orb -- a multi-hit lethal, or repeated death processing -- and this function
+    // leaves the STASIS status in place, so the second pass would read an already-returned (INVALID)
+    // slot. Return the held card at most once; a no-op second pass is correct (don't double-add it).
     if (stasisCard.id == CardId::INVALID) {
-        std::cerr << bc.seed << " " << bc.loopCount << " stasis card invalid" << idx << "\n" << bc << std::endl;
+        return;
     }
-    assert(stasisCard.id != CardId::INVALID);
-#endif
 
     bc.cards.notifyAddCardToCombat(stasisCard);
     bc.moveToHandHelper(stasisCard);
