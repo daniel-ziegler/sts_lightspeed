@@ -3135,16 +3135,19 @@ class STSLightspeedAgent:
         with open(path + ".battle.jsonl", "a") as f:
             f.write(json.dumps(record) + "\n")
 
-    def _watch_hover_index(self, action, actions=None):
-        """Live choice index (matching CommunicationMod's choice list) to hover for this net pick on a
-        hover-capable screen -- card reward, boss relic, any shop buy (card / relic / potion / card
-        removal), or an event option (incl. Neow) -- else None (delay only, no hover there)."""
+    def _watch_hover_index(self, action, actions=None, gc=None):
+        """Live choice index (matching CommunicationMod's choice list) to hover for this net pick --
+        card reward (take, or -1 = skip button), boss relic, any shop buy (card/relic/potion/removal),
+        an event option (incl. Neow), a campfire option, or a map node -- else None (delay only)."""
         st = getattr(self.game, "screen_type", None)
         rt = getattr(action, "rewards_action_type", None)
         try:
-            if st == ScreenType.CARD_REWARD and rt == sts.RewardsActionType.CARD:
-                if 0 <= action.idx2 < len(getattr(self.game.screen, "cards", []) or []):
-                    return action.idx2
+            if st == ScreenType.CARD_REWARD:
+                if rt == sts.RewardsActionType.CARD:
+                    if 0 <= action.idx2 < len(getattr(self.game.screen, "cards", []) or []):
+                        return action.idx2
+                elif rt == sts.RewardsActionType.SKIP:
+                    return -1   # sentinel: hover the skip button
             elif st == ScreenType.BOSS_REWARD and rt == sts.RewardsActionType.RELIC:
                 if 0 <= action.idx1 < len(getattr(self.game.screen, "relics", []) or []):
                     return action.idx1
@@ -3158,6 +3161,25 @@ class STSLightspeedAgent:
                 # action list IS the live choice index.
                 if action in actions:
                     return actions.index(action)
+            elif st == ScreenType.REST and gc is not None:
+                # Map the chosen rest action (by its description, as net_rest_action does) to its
+                # position in the live rest_options list (the mod's getValidRestRoomButtons order).
+                desc = (action.getDesc(gc) or "").strip().lower()
+                opts = list(getattr(self.game.screen, "rest_options", []) or [])
+                rest_by_key = {"rest": RestOption.REST, "smith": RestOption.SMITH,
+                               "recall": RestOption.RECALL, "dig": RestOption.DIG,
+                               "lift": RestOption.LIFT, "toke": RestOption.TOKE}
+                for key, opt in rest_by_key.items():
+                    if desc.startswith(key) and opt in opts:
+                        return opts.index(opt)
+            elif st == ScreenType.MAP:
+                # Path choice: hover the chosen next node (idx1 == node x). The mod lists next nodes in
+                # x order, so the hover index is the chosen x's rank. No hover for a lone boss choice.
+                if getattr(self.game.screen, "boss_available", False) and not getattr(self.game.screen, "next_nodes", None):
+                    return None
+                xs = sorted(n.x for n in (getattr(self.game.screen, "next_nodes", None) or []))
+                if action.idx1 in xs:
+                    return xs.index(action.idx1)
         except Exception:
             pass
         return None
@@ -3209,7 +3231,7 @@ class STSLightspeedAgent:
             return None
         action, desc, _path, _idx, _logp, _val = choose_overworld_action(
             self.net, choice, gc, self.net_rng, temperature=self.temperature)
-        self._watch_pause(desc or str(action), self._watch_hover_index(action, actions))
+        self._watch_pause(desc or str(action), self._watch_hover_index(action, actions, gc))
         return action
 
     def net_card_reward_action(self):
