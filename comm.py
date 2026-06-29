@@ -2750,6 +2750,12 @@ class STSLightspeedAgent:
                 mon_hidden, mon_forced = self._force_observed_monster_moves(prev_bc, truth_bc)
                 if mon_hidden:
                     pre_ctx += f" rdmoves={mon_forced}/{mon_hidden}"
+            # Per-monster state BEFORE executing the action, to tell a card-execute mis-sim (pred
+            # differs from pre-card) from pre-existing reconstruction drift (already off pre-card),
+            # plus identity/poison to spot the cause of a monster-hp divergence.
+            mon_before = [(prev_bc.monsters[i].curHp, prev_bc.monsters[i].block,
+                           prev_bc.monsters[i].getName(), prev_bc.monsters[i].poison)
+                          for i in range(prev_bc.monsters.monsterCount)]
             prev_action.execute(prev_bc)          # advance the prediction (one card, or the monster turn)
             pred = self._bc_observe(prev_bc)
             truth = self._bc_observe(truth_bc)
@@ -2766,7 +2772,9 @@ class STSLightspeedAgent:
                     diffs.append(f"{k} pred {pred[k]} vs live {truth[k]}")
             for i in range(len(pred["mon"])):
                 if pred["mon"][i] != truth["mon"][i]:
-                    diffs.append(f"mon{i}(hp,blk) pred {pred['mon'][i]} vs live {truth['mon'][i]}")
+                    b = mon_before[i] if i < len(mon_before) else (None, None, "?", 0)
+                    diffs.append(f"mon{i}={b[2]}(hp,blk) pred {pred['mon'][i]} vs live {truth['mon'][i]} "
+                                 f"(pre-card ({b[0]},{b[1]}) poison={b[3]})")
             if diffs:
                 ctx = f" [{pre_ctx}]" if pre_ctx else ""
                 # Havoc on an EMPTY draw pile (force=no-top) reshuffles the discard with the live RNG
