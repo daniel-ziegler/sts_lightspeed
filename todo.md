@@ -19,6 +19,7 @@
 
 ## actions
 - [ ] full potion actions incl discard before gain & drink fruit juice anytime
+- [ ] match and keep
 
 # learning
 
