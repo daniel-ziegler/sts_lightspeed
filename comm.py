@@ -2520,6 +2520,17 @@ class STSLightspeedAgent:
         self._shadow_prev_action = None
         self._shadow_prev_draw_top = None
         self._shadow_prev_floor = None
+        # Persistent-bc bridge (PERSISTENT_BC_PHASE2.md), gated behind STS_PERSISTENT_BC (default OFF).
+        # When on, one engine-advanced BattleContext is carried across a combat's decisions and the
+        # search runs on it (preserving hidden state) instead of a fresh per-decision reconstruction.
+        # M1 is the lifecycle skeleton: seed at combat start, search, execute the chosen action to
+        # carry forward, re-seed on a new fight -- no reconcile yet (drift expected). _pbc is None
+        # whenever we must fall back to per-decision reconstruction.
+        self._persistent_bc_enabled = (
+            os.environ.get("STS_PERSISTENT_BC", "") not in ("", "0", "false", "False", "no"))
+        self._pbc = None
+        self._pbc_slots = None
+        self._pbc_floor = None
         # Combat-decision signature of the state we last issued an action for. CommunicationMod can
         # emit a transient combat_state mid-resolution (e.g. the *_played_this_turn counters reset
         # while hand/energy/monsters still show the pre-play values) with ready_for_command=true; the
@@ -2876,6 +2887,53 @@ class STSLightspeedAgent:
                 getattr(p, "energy", None), getattr(p, "block", None),
                 hand, mons, potions, powers)
 
+    def _pbc_select(self, fresh_bc, fresh_slots):
+        """M1 persistent-bc lifecycle (no reconcile yet). Return (bc, slots, using_pbc): the bc the
+        search should run on and the slot->live-index map to interpret its actions with.
+
+        Seeds `self._pbc` from a COPY of the fresh reconstruction at the first decision of a combat
+        (a clean point: no hidden history), then keeps returning the carried-forward bc for the rest
+        of that fight. A new fight is a new floor (combats are floor-unique), so a floor change means
+        the stored bc is the previous combat's -- drop and re-seed. Any failure drops the pbc and
+        falls back to the fresh reconstruction (never crash live).
+
+        Copying matters: the shadow stores the fresh `bc` and re-executes on it next decision, so the
+        pbc must be a distinct object or `_pbc_advance` would corrupt the shadow's bc."""
+        try:
+            floor = self.game.floor
+            if self._pbc is not None and floor != self._pbc_floor:
+                self._pbc = None
+            if self._pbc is None:
+                self._pbc = fresh_bc.copy()
+                self._pbc_slots = dict(fresh_slots)
+                self._pbc_floor = floor
+                print(f"[pbc] seeded persistent bc at floor {floor}", file=sys.stderr)
+            return self._pbc, self._pbc_slots, True
+        except Exception as e:
+            print(f"[pbc] select failed ({type(e).__name__}: {e}); using reconstruction",
+                  file=sys.stderr)
+            self._pbc = None
+            return fresh_bc, fresh_slots, False
+
+    def _pbc_advance(self, action):
+        """M1: carry the persistent bc forward through the chosen action to the next input point.
+        Drop the pbc (re-seed next decision) when the action leaves the engine awaiting a sub-input
+        (CARD_SELECT, handled by M4) or ends the combat, and on any engine error -- so the next
+        decision falls back cleanly rather than searching a wedged or stale bc."""
+        try:
+            action.execute(self._pbc)
+        except Exception as e:
+            print(f"[pbc] execute failed ({type(e).__name__}: {e}); dropping persistent bc",
+                  file=sys.stderr)
+            self._pbc = None
+            return
+        if (self._pbc.input_state != sts.InputState.PLAYER_NORMAL
+                or self._pbc.outcome != sts.BattleOutcome.UNDECIDED):
+            print(f"[pbc] not at a clean decision after execute "
+                  f"(input_state={self._pbc.input_state}, outcome={self._pbc.outcome}); "
+                  f"re-seeding next decision", file=sys.stderr)
+            self._pbc = None
+
     def handle_combat(self):
         self.capture_battle_state()
         # Step marker (see handle_screen): pinpoints a hang inside convert_combat_state / the search,
@@ -2911,12 +2969,20 @@ class STSLightspeedAgent:
             print(f"[card-damage WARN] {e}", file=sys.stderr)
         print(bc, file=sys.stderr)
 
+        # Persistent-bc bridge (gated): search on one engine-advanced bc carried across the fight,
+        # falling back to the fresh per-decision reconstruction when off or unavailable. search_slots
+        # must match search_bc so map_search_action_to_spirecomm translates the chosen action's slot
+        # targets to the right live monster indices.
+        search_bc, search_slots, using_pbc = bc, slot_to_spire, False
+        if self._persistent_bc_enabled:
+            search_bc, search_slots, using_pbc = self._pbc_select(bc, slot_to_spire)
+
         # Configure the searcher with heart1's exact training/eval battle-search knobs
         # (exploration / chance + end-turn widening / eval weights, boss variants) and matching
         # per-decision sim count, via the shared SearchAgent config -- so live play uses the same
         # search heart1 was tuned around rather than a mistuned standalone BattleSearcher.
-        searcher = sts.BattleSearcher(bc)
-        simulation_count = self.search_agent.configure_searcher(searcher, bc)
+        searcher = sts.BattleSearcher(search_bc)
+        simulation_count = self.search_agent.configure_searcher(searcher, search_bc)
 
         print("=" * 80, file=sys.stderr)
         print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)
@@ -2932,7 +2998,11 @@ class STSLightspeedAgent:
         except Exception as e:
             print(f"!!! BATTLE SEARCH CRASH ({type(e).__name__}: {e}) -- ending turn; state dumped",
                   file=sys.stderr)
-            print(bc, file=sys.stderr)
+            print(search_bc, file=sys.stderr)
+            # A search throw on the persistent bc means it's likely wedged (e.g. a drifted slot
+            # overflowing the group); drop it so the next decision re-seeds from reconstruction.
+            if using_pbc:
+                self._pbc = None
             try:
                 crash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           "runs", "battle_search_crashes.jsonl")
@@ -2943,15 +3013,15 @@ class STSLightspeedAgent:
                 pass
             return EndTurnAction()
 
-        # Map the search action to a spirecomm action
-        spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game, slot_to_spire)
+        # Map the search action to a spirecomm action (interpreted against the bc we searched on)
+        spirecomm_action = map_search_action_to_spirecomm(first_action, search_bc, self.game, search_slots)
 
         print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
 
         # Diagnostic: Spot Weakness is rejected live if its target doesn't intend to attack. If the
         # search aimed it at a monster the live game shows as non-attacking (or gone / out of range),
         # the play wastes the card -- capture the full target picture (non-fatal) to root-cause it.
-        self._check_attack_intent_target(first_action, spirecomm_action, slot_to_spire)
+        self._check_attack_intent_target(first_action, spirecomm_action, search_slots)
 
         # Print top 5 moves and their visit counts
         edges = searcher.get_root_edges()
@@ -2960,7 +3030,7 @@ class STSLightspeedAgent:
             sorted_edges = sorted(edges, key=lambda e: e.node.simulation_count, reverse=True)
             print("Top 5 moves by visit count:", file=sys.stderr)
             for i, edge in enumerate(sorted_edges[:5]):
-                action_desc = edge.action.print_desc(bc)
+                action_desc = edge.action.print_desc(search_bc)
                 visits = edge.node.simulation_count
                 avg_value = edge.node.evaluation_sum / visits if visits > 0 else 0
                 print(f"  {i+1}. {action_desc} - visits: {visits}, avg_value: {avg_value:.2f}", file=sys.stderr)
@@ -2983,6 +3053,12 @@ class STSLightspeedAgent:
             cid = map_card_id(top.card_id)
             if cid != sts.CardId.INVALID:
                 self._shadow_prev_draw_top = (cid, top.upgrades)
+
+        # Persistent-bc: carry the engine-advanced bc forward by the action we just committed live, so
+        # the next decision searches from it. Runs after the shadow bookkeeping above, which reads the
+        # (distinct) reconstruction `bc` -- _pbc is a separate copy, so advancing it can't corrupt it.
+        if using_pbc and self._pbc is search_bc:
+            self._pbc_advance(first_action)
 
         return spirecomm_action
 

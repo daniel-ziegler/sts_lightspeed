@@ -838,6 +838,9 @@ PYBIND11_MODULE(slaythespire, m) {
             oss << bc;
             return oss.str();
         })
+        .def("copy", [](const BattleContext &bc) { return bc; },
+            "deep copy of this BattleContext (value type), so the persistent bc can be advanced "
+            "independently of the reconstruction the shadow keeps")
         .def("register_relics_from", &BattleContext::registerRelicsFrom, "gc"_a,
             "copy the player's relic-ownership bits from a GameContext without firing atBattleStart "
             "effects (for reconstructing a mid-combat state)")
