@@ -894,6 +894,14 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
 
         case MMID::LAGAVULIN_SLEEP:
             if (bc.turn == 2 || !hasStatus<MS::ASLEEP>()) {
+                // Timeout wake (3rd turn): drop the sleep and its Metallicize, exactly like the
+                // damage-triggered wake in Monster::damageUnblockedHelper. Without this a Lagavulin
+                // that wakes on schedule (rather than from a block break) keeps Metallicize 8 and
+                // regains 8 block every turn -- the search then over-estimates its bulk.
+                if (hasStatus<MS::ASLEEP>()) {
+                    setHasStatus<MS::ASLEEP>(false);
+                    decrementStatus<MS::METALLICIZE>(8);
+                }
                 setMove(MMID::LAGAVULIN_ATTACK);
             } else {
                 setMove(MMID::LAGAVULIN_SLEEP);

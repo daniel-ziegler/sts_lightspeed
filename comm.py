@@ -904,6 +904,15 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
     for power in monster.powers:
         apply_monster_power(sts_monster, power.power_id, power.amount)
 
+    # A sleeping Lagavulin reports only its Metallicize power (no "Asleep" status), so without this the
+    # reconstruction is an awake attacker that keeps Metallicize 8 -- and the engine, having no ASLEEP
+    # to remove, regains 8 block every turn forever (the search then badly over-estimates its bulk, and
+    # it "attacks" while it should be sleeping). The engine drops Metallicize only when it wakes FROM
+    # ASLEEP (Monster::damageUnblockedHelper on a block break, or the turn-timeout wake), so seed ASLEEP
+    # from the sleep intent and let the engine model the wake.
+    if move_known and move_history[0] == int(sts.MonsterMoveId.LAGAVULIN_SLEEP):
+        sts_monster.buff(sts.MonsterStatus.ASLEEP, 1)
+
     if not move_known:
         # A summoned minion whose move is set by its summoner (TorchHead via the Collector spawn)
         # has no getMoveForRoll case -- rolling it assert(false)s in the engine (uncatchable). When
@@ -2965,19 +2974,28 @@ class STSLightspeedAgent:
         new = fresh_bc.copy()
         d = []
         op, fp = old.player, fresh_bc.player
-        if op.curHp != fp.curHp: d.append(f"php {op.curHp}->{fp.curHp}")
-        if op.block != fp.block: d.append(f"pblk {op.block}->{fp.block}")
-        if op.energy != fp.energy: d.append(f"energy {op.energy}->{fp.energy}")
+        for f in ("curHp", "block", "energy", "strength", "dexterity", "focus"):
+            ov, nv = getattr(op, f), getattr(fp, f)
+            if ov != nv:
+                d.append(f"p.{f} {ov}->{nv}")
+        # Deterministic monster fields -- a divergence here is a genuine engine mis-simulation (not the
+        # RNG that makes .move diverge): strength/vuln/weak/poison drive incoming damage and ticks.
+        mon_fields = ("curHp", "block", "strength", "vulnerable", "weak", "poison",
+                      "metallicize", "platedArmor", "artifact")
         for s_b, live in fresh_slots.items():
             nm = new.monsters[s_b]
             os_ = old_live_to_slot.get(live)
             if os_ is None:
                 continue                      # split/summon child: no carried hidden state
             om = old.monsters[os_]
-            if om.curHp != nm.curHp: d.append(f"m{live}hp {om.curHp}->{nm.curHp}")
-            if om.block != nm.block: d.append(f"m{live}blk {om.block}->{nm.block}")
+            name = nm.getName()
+            for f in mon_fields:
+                ov, nv = getattr(om, f), getattr(nm, f)
+                if ov != nv:
+                    d.append(f"{name}.{f} {ov}->{nv}")
             omv, nmv = int(om.moveHistory[0]), int(nm.moveHistory[0])
-            if omv != nmv: d.append(f"m{live}move {omv}->{nmv}")
+            if omv != nmv:
+                d.append(f"{name}.move {omv}->{nmv}")     # usually RNG roll divergence; reconcile keeps fresh
             nm.uniquePower0 = om.uniquePower0
             nm.uniquePower1 = om.uniquePower1
             # Keep the reconstruction's miscInfo only when it was restored from an observable intent;

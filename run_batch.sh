@@ -15,7 +15,9 @@ ASC="${ASC:-20}"        # ascension level; set ASC=rand for a random 0-20 per ga
 REPO=/home/dmz/osrc/sts_lightspeed
 ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
 RESULTS="$REPO/runs/batch_${RUN}_results.txt"
+DESYNCS="$REPO/runs/batch_${RUN}_desync.txt"   # persistent-bc fidelity signal, harvested per game
 : > "$RESULTS"
+: > "$DESYNCS"
 TICKS=$(( TMO_MIN * 4 ))   # 15s ticks
 
 echo "batch ${RUN}: ${N} games, A${ASC} / ${SIMS} sims / temp 0 / random seed, ${TMO_MIN}min/game cap" | tee -a "$RESULTS"
@@ -33,6 +35,11 @@ for i in $(seq 1 "$N"); do
     if ! pgrep -f '[c]omm.py --character' >/dev/null; then exited=1; break; fi
   done
   pkill -9 -f comm.py 2>/dev/null
+
+  # Harvest this game's persistent-bc fidelity signal before the next launch truncates the errlog:
+  # any DESYNC, abort/assert, or pbc-guard event, tagged with the game's ascension + seed.
+  grep -aE "\[pbc DESYNC\]|\[pbc\] (carry failed|chosen action invalid)|Assertion|cannot be played with the selected target" "$ERRLOG" \
+    | sed "s/^/g$i a$GAME_ASC: /" >> "$DESYNCS" 2>/dev/null
 
   # Parse this game's result from the (still-untruncated) errlog before the next launch clears it.
   seed=$(grep -aoE "= '[0-9A-Z]+'" "$ERRLOG" | head -1 | tr -d "= '")
