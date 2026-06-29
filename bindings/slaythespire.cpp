@@ -420,7 +420,11 @@ PYBIND11_MODULE(slaythespire, m) {
             action.printDesc(oss, bc);
             return oss.str();
         })
-        .def("execute", &search::Action::execute);
+        .def("execute", &search::Action::execute)
+        .def("is_valid_action", &search::Action::isValidAction, "bc"_a,
+            "whether this action is legal in bc. execute() asserts(false) (uncatchable SIGABRT) on an "
+            "invalid action under sts_asserts, so callers advancing a possibly-stale bc must gate "
+            "execute() on this first.");
 
     // BattleSearcher Node and Edge bindings
     pybind11::class_<search::BattleSearcher::Node>(m, "BattleSearcherNode")

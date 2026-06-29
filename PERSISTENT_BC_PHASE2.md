@@ -125,10 +125,19 @@ everything observable) and remove overlays as the shadow proves each axis clean.
 
 ## Milestones
 
-- **M1 — lifecycle skeleton (no reconcile).** Behind the env flag: init `_pbc` at combat start, search
-  on it, `execute` the chosen action, reset to None on combat end / mid-entry. No overlay yet → expect
-  drift; goal is just the plumbing + fallback paths. Verify it never crashes live (offline replay +
-  one gated live game).
+- **M1 — lifecycle skeleton (no reconcile), carried in PARALLEL.** Behind the env flag: seed `_pbc`
+  from a copy of the reconstruction at combat start, advance it by the action actually committed live,
+  log drift vs the reconstruction, reset to None on combat end / floor change. **Live play is NOT
+  driven by the pbc** — it stays on the fresh-reconstruction search (identical to master). *Revised
+  from the original "search on it + drive live" after the first gated live run:* an un-reconciled pbc
+  drifts (splits/deaths/hp), and its chosen actions are then unsafe to send live — they trip an
+  uncatchable `execute()` `assert(false)` (SIGABRT, not a Python exception) or get rejected live
+  ("cannot be played with the selected target") because the action's slot coordinates no longer match
+  the live monster layout. So M1 proves the carry-forward plumbing and *measures* drift with zero live
+  risk; driving live onto the pbc is deferred to after reconcile (M2/M5). Required engine support
+  added: `Action.is_valid_action(bc)` (gate every `execute` — the only way to avoid the SIGABRT) and
+  `BattleContext.copy()`. Status: **DONE** — gated live run shows 0 aborts/asserts/live-rejects, with
+  `[pbc seeded]` / `[pbc drift]` / advance-invalid (drop+reseed) lifecycle logs.
 - **M2 — full reconcile overlay.** Implement `reconcile()` overlaying every observable field +
   `setMove`. With full overlay, the pbc should track reality as well as today's reconstruction *plus*
   keep hidden state. Run the shadow alongside; `[pbc DESYNC]` count should be ≤ the Phase-1 real

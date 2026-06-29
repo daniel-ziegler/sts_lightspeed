@@ -2767,6 +2767,12 @@ class STSLightspeedAgent:
             mon_before = [(prev_bc.monsters[i].curHp, prev_bc.monsters[i].block,
                            prev_bc.monsters[i].getName(), prev_bc.monsters[i].poison)
                           for i in range(prev_bc.monsters.monsterCount)]
+            # execute() asserts(false) (uncatchable SIGABRT) on an action invalid for prev_bc -- e.g. a
+            # target slot that existed when the action was chosen but not in this prev_bc (a split/death
+            # mismatch). Gate on validity; an invalid shadow replay is unverifiable, never fatal.
+            if not prev_action.is_valid_action(prev_bc):
+                print(f"[shadow unverifiable] {desc}: action invalid on prev_bc", file=sys.stderr)
+                return
             prev_action.execute(prev_bc)          # advance the prediction (one card, or the monster turn)
             pred = self._bc_observe(prev_bc)
             truth = self._bc_observe(truth_bc)
@@ -2887,18 +2893,18 @@ class STSLightspeedAgent:
                 getattr(p, "energy", None), getattr(p, "block", None),
                 hand, mons, potions, powers)
 
-    def _pbc_select(self, fresh_bc, fresh_slots):
-        """M1 persistent-bc lifecycle (no reconcile yet). Return (bc, slots, using_pbc): the bc the
-        search should run on and the slot->live-index map to interpret its actions with.
+    def _pbc_carry(self, fresh_bc, fresh_slots, action):
+        """M1 persistent-bc lifecycle, carried in PARALLEL with live play (never drives the live
+        command). Live decisions run on the fresh per-decision reconstruction exactly as on master;
+        this maintains one engine-advanced bc alongside, to exercise the carry-forward plumbing and
+        measure drift. Driving live from the pbc waits for M2's reconcile -- an un-reconciled pbc
+        drifts (splits/deaths/hp), and its actions then aren't safe to send live (wrong slot
+        coordinates, live-only targeting rules). See PERSISTENT_BC_PHASE2.md.
 
-        Seeds `self._pbc` from a COPY of the fresh reconstruction at the first decision of a combat
-        (a clean point: no hidden history), then keeps returning the carried-forward bc for the rest
-        of that fight. A new fight is a new floor (combats are floor-unique), so a floor change means
-        the stored bc is the previous combat's -- drop and re-seed. Any failure drops the pbc and
-        falls back to the fresh reconstruction (never crash live).
-
-        Copying matters: the shadow stores the fresh `bc` and re-executes on it next decision, so the
-        pbc must be a distinct object or `_pbc_advance` would corrupt the shadow's bc."""
+        Seeds `self._pbc` from a COPY of the reconstruction at the first decision of a combat (a clean
+        point), then each later decision logs drift vs the live reconstruction and advances the pbc by
+        the action we actually committed live. A new fight is a new floor (combats are floor-unique),
+        so a floor change drops the previous combat's bc. Any failure drops the pbc (never crash)."""
         try:
             floor = self.game.floor
             if self._pbc is not None and floor != self._pbc_floor:
@@ -2908,19 +2914,52 @@ class STSLightspeedAgent:
                 self._pbc_slots = dict(fresh_slots)
                 self._pbc_floor = floor
                 print(f"[pbc] seeded persistent bc at floor {floor}", file=sys.stderr)
-            return self._pbc, self._pbc_slots, True
+            else:
+                self._pbc_log_drift(fresh_bc)
+            # Advance by the action actually taken (chosen on fresh_bc; same slot coords as the pbc
+            # while the two are in sync). Guarded -- drift can make it invalid on the pbc.
+            self._pbc_advance(action)
         except Exception as e:
-            print(f"[pbc] select failed ({type(e).__name__}: {e}); using reconstruction",
+            print(f"[pbc] carry failed ({type(e).__name__}: {e}); dropping persistent bc",
                   file=sys.stderr)
             self._pbc = None
-            return fresh_bc, fresh_slots, False
+
+    def _pbc_log_drift(self, fresh_bc):
+        """Log where the carried pbc has diverged from the live reconstruction (player hp, monster
+        count, per-slot monster hp). This is the M1 drift signal -- the quantity M2's reconcile
+        eliminates. Best-effort/observable-only; never raises into the caller."""
+        try:
+            p, f = self._pbc, fresh_bc
+            msgs = []
+            if p.player.curHp != f.player.curHp:
+                msgs.append(f"php {p.player.curHp}vs{f.player.curHp}")
+            pn, fn = p.monsters.monsterCount, f.monsters.monsterCount
+            if pn != fn:
+                msgs.append(f"moncount {pn}vs{fn}")
+            else:
+                for i in range(fn):
+                    if p.monsters[i].curHp != f.monsters[i].curHp:
+                        msgs.append(f"mon{i}hp {p.monsters[i].curHp}vs{f.monsters[i].curHp}")
+            if msgs:
+                print(f"[pbc drift] {', '.join(msgs)}", file=sys.stderr)
+        except Exception:
+            pass
 
     def _pbc_advance(self, action):
-        """M1: carry the persistent bc forward through the chosen action to the next input point.
-        Drop the pbc (re-seed next decision) when the action leaves the engine awaiting a sub-input
-        (CARD_SELECT, handled by M4) or ends the combat, and on any engine error -- so the next
-        decision falls back cleanly rather than searching a wedged or stale bc."""
+        """Carry the persistent bc forward through the action just committed live, to the next input
+        point. Drop the pbc (re-seed next decision) when the action leaves the engine awaiting a
+        sub-input (CARD_SELECT, handled by M4) or ends the combat, and on any engine error.
+
+        execute() asserts(false) -- an uncatchable SIGABRT, not a Python exception -- on an action
+        that isn't valid in the bc, so we MUST gate on is_valid_action first. The action was chosen on
+        the fresh reconstruction, which matches the pbc while in sync; drift can make it invalid, in
+        which case we drop the pbc rather than let execute abort the process."""
         try:
+            if not action.is_valid_action(self._pbc):
+                print("[pbc] chosen action invalid on persistent bc; dropping it (no execute)",
+                      file=sys.stderr)
+                self._pbc = None
+                return
             action.execute(self._pbc)
         except Exception as e:
             print(f"[pbc] execute failed ({type(e).__name__}: {e}); dropping persistent bc",
@@ -2969,20 +3008,14 @@ class STSLightspeedAgent:
             print(f"[card-damage WARN] {e}", file=sys.stderr)
         print(bc, file=sys.stderr)
 
-        # Persistent-bc bridge (gated): search on one engine-advanced bc carried across the fight,
-        # falling back to the fresh per-decision reconstruction when off or unavailable. search_slots
-        # must match search_bc so map_search_action_to_spirecomm translates the chosen action's slot
-        # targets to the right live monster indices.
-        search_bc, search_slots, using_pbc = bc, slot_to_spire, False
-        if self._persistent_bc_enabled:
-            search_bc, search_slots, using_pbc = self._pbc_select(bc, slot_to_spire)
-
         # Configure the searcher with heart1's exact training/eval battle-search knobs
         # (exploration / chance + end-turn widening / eval weights, boss variants) and matching
         # per-decision sim count, via the shared SearchAgent config -- so live play uses the same
         # search heart1 was tuned around rather than a mistuned standalone BattleSearcher.
-        searcher = sts.BattleSearcher(search_bc)
-        simulation_count = self.search_agent.configure_searcher(searcher, search_bc)
+        # Live play always runs on the fresh reconstruction `bc`; the persistent bc (when enabled) is
+        # carried in parallel at the end of this method, not used to drive the live command (M1).
+        searcher = sts.BattleSearcher(bc)
+        simulation_count = self.search_agent.configure_searcher(searcher, bc)
 
         print("=" * 80, file=sys.stderr)
         print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)
@@ -2998,11 +3031,7 @@ class STSLightspeedAgent:
         except Exception as e:
             print(f"!!! BATTLE SEARCH CRASH ({type(e).__name__}: {e}) -- ending turn; state dumped",
                   file=sys.stderr)
-            print(search_bc, file=sys.stderr)
-            # A search throw on the persistent bc means it's likely wedged (e.g. a drifted slot
-            # overflowing the group); drop it so the next decision re-seeds from reconstruction.
-            if using_pbc:
-                self._pbc = None
+            print(bc, file=sys.stderr)
             try:
                 crash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           "runs", "battle_search_crashes.jsonl")
@@ -3013,15 +3042,15 @@ class STSLightspeedAgent:
                 pass
             return EndTurnAction()
 
-        # Map the search action to a spirecomm action (interpreted against the bc we searched on)
-        spirecomm_action = map_search_action_to_spirecomm(first_action, search_bc, self.game, search_slots)
+        # Map the search action to a spirecomm action
+        spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game, slot_to_spire)
 
         print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
 
         # Diagnostic: Spot Weakness is rejected live if its target doesn't intend to attack. If the
         # search aimed it at a monster the live game shows as non-attacking (or gone / out of range),
         # the play wastes the card -- capture the full target picture (non-fatal) to root-cause it.
-        self._check_attack_intent_target(first_action, spirecomm_action, search_slots)
+        self._check_attack_intent_target(first_action, spirecomm_action, slot_to_spire)
 
         # Print top 5 moves and their visit counts
         edges = searcher.get_root_edges()
@@ -3030,14 +3059,15 @@ class STSLightspeedAgent:
             sorted_edges = sorted(edges, key=lambda e: e.node.simulation_count, reverse=True)
             print("Top 5 moves by visit count:", file=sys.stderr)
             for i, edge in enumerate(sorted_edges[:5]):
-                action_desc = edge.action.print_desc(search_bc)
+                action_desc = edge.action.print_desc(bc)
                 visits = edge.node.simulation_count
                 avg_value = edge.node.evaluation_sum / visits if visits > 0 else 0
                 print(f"  {i+1}. {action_desc} - visits: {visits}, avg_value: {avg_value:.2f}", file=sys.stderr)
 
         # Persistent-bc shadow: remember this decision's reconstructed bc + chosen action so the next
         # handle_combat can check whether the engine advances it the same way the real game did. bc is
-        # unmutated here (the searcher works on an internal clone). Logging only.
+        # unmutated here (the searcher works on an internal clone) and first_action was chosen on it,
+        # so it stays valid to replay next decision. Logging only.
         self._shadow_prev_bc = bc
         self._shadow_prev_action = first_action
         self._shadow_prev_floor = self.game.floor
@@ -3054,11 +3084,13 @@ class STSLightspeedAgent:
             if cid != sts.CardId.INVALID:
                 self._shadow_prev_draw_top = (cid, top.upgrades)
 
-        # Persistent-bc: carry the engine-advanced bc forward by the action we just committed live, so
-        # the next decision searches from it. Runs after the shadow bookkeeping above, which reads the
-        # (distinct) reconstruction `bc` -- _pbc is a separate copy, so advancing it can't corrupt it.
-        if using_pbc and self._pbc is search_bc:
-            self._pbc_advance(first_action)
+        # Persistent-bc parallel carry (gated, M1): maintain the engine-advanced pbc alongside live
+        # play -- seed at combat start, log drift vs this reconstruction, advance it by the action we
+        # just committed live. Never affects the live command above; the pbc is a separate copy so
+        # advancing it can't corrupt the shadow's bc. M2 adds reconcile; flipping live onto the pbc
+        # comes after that.
+        if self._persistent_bc_enabled:
+            self._pbc_carry(bc, slot_to_spire, first_action)
 
         return spirecomm_action
 
