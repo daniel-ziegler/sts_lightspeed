@@ -2531,6 +2531,10 @@ class STSLightspeedAgent:
         self._pbc = None
         self._pbc_slots = None
         self._pbc_floor = None
+        # Live turn we last advanced the pbc through via the out-of-handle_combat end-turn path
+        # (get_next_action_in_game), to dedup a repeated end-turn emit (that path has no transient
+        # guard). Reset per combat seed.
+        self._pbc_last_end_turn = None
         # Combat-decision signature of the state we last issued an action for. CommunicationMod can
         # emit a transient combat_state mid-resolution (e.g. the *_played_this_turn counters reset
         # while hand/energy/monsters still show the pre-play values) with ready_for_command=true; the
@@ -2610,6 +2614,17 @@ class STSLightspeedAgent:
         self._last_acted_combat_sig = None
         if self.game.end_available:
             # time.sleep(4)
+            # The bot ends a turn two ways: the search picking END_TURN inside handle_combat, or here
+            # when no card is playable (out of energy / nothing affordable). This path bypasses
+            # handle_combat, so the persistent bc must be advanced through the END_TURN (and its
+            # monster turn) here too -- otherwise it falls a full turn behind reality and its hidden
+            # state never evolves through monster turns. Guarded; drops the pbc if it isn't cleanly at
+            # a player decision.
+            if self._persistent_bc_enabled and self._pbc is not None:
+                live_turn = getattr(self.game, "turn", None)
+                if live_turn != self._pbc_last_end_turn:
+                    self._pbc_last_end_turn = live_turn
+                    self._pbc_advance(sts.Action(sts.ActionType.END_TURN))
             return EndTurnAction()
         if self.game.cancel_available:
             return CancelAction()
@@ -2894,56 +2909,84 @@ class STSLightspeedAgent:
                 hand, mons, potions, powers)
 
     def _pbc_carry(self, fresh_bc, fresh_slots, action):
-        """M1 persistent-bc lifecycle, carried in PARALLEL with live play (never drives the live
-        command). Live decisions run on the fresh per-decision reconstruction exactly as on master;
-        this maintains one engine-advanced bc alongside, to exercise the carry-forward plumbing and
-        measure drift. Driving live from the pbc waits for M2's reconcile -- an un-reconciled pbc
-        drifts (splits/deaths/hp), and its actions then aren't safe to send live (wrong slot
-        coordinates, live-only targeting rules). See PERSISTENT_BC_PHASE2.md.
+        """Persistent-bc lifecycle, carried in PARALLEL with live play (never drives the live command;
+        live decisions run on the fresh per-decision reconstruction exactly as on master). Maintains
+        one engine-advanced bc alongside: seed at combat start, RECONCILE observable reality onto it
+        each decision (M2), advance by the action we actually committed live. Flipping live onto the
+        pbc waits until reconcile is proven (M5). See PERSISTENT_BC_PHASE2.md.
 
-        Seeds `self._pbc` from a COPY of the reconstruction at the first decision of a combat (a clean
-        point), then each later decision logs drift vs the live reconstruction and advances the pbc by
-        the action we actually committed live. A new fight is a new floor (combats are floor-unique),
-        so a floor change drops the previous combat's bc. Any failure drops the pbc (never crash)."""
+        A new fight is a new floor (combats are floor-unique), so a floor change drops the previous
+        combat's bc. Any failure drops the pbc (never crash)."""
         try:
             floor = self.game.floor
             if self._pbc is not None and floor != self._pbc_floor:
                 self._pbc = None
             if self._pbc is None:
                 self._pbc = fresh_bc.copy()
-                self._pbc_slots = dict(fresh_slots)
-                self._pbc_floor = floor
+                self._pbc_last_end_turn = None
                 print(f"[pbc] seeded persistent bc at floor {floor}", file=sys.stderr)
             else:
-                self._pbc_log_drift(fresh_bc)
-            # Advance by the action actually taken (chosen on fresh_bc; same slot coords as the pbc
-            # while the two are in sync). Guarded -- drift can make it invalid on the pbc.
+                # Adopt the faithful reconstruction (correct observables + piles + powers) and
+                # transplant the engine-evolved hidden state from the carried pbc onto it.
+                self._pbc = self._pbc_reconcile(fresh_bc, fresh_slots)
+            self._pbc_slots = dict(fresh_slots)
+            self._pbc_floor = floor
+            # Advance by the action actually taken (chosen on fresh_bc == the new pbc's observables, so
+            # valid; the guard stays as defense). This evolves the hidden state through the action and,
+            # for END_TURN, the monster turn -- the value that gets transplanted next decision.
             self._pbc_advance(action)
+            # Mark this turn as already advanced so the out-of-handle_combat end-turn path (line ~2613)
+            # doesn't re-advance it on a transient duplicate emit.
+            if action.get_action_type() == sts.ActionType.END_TURN:
+                self._pbc_last_end_turn = getattr(self.game, "turn", None)
         except Exception as e:
             print(f"[pbc] carry failed ({type(e).__name__}: {e}); dropping persistent bc",
                   file=sys.stderr)
             self._pbc = None
 
-    def _pbc_log_drift(self, fresh_bc):
-        """Log where the carried pbc has diverged from the live reconstruction (player hp, monster
-        count, per-slot monster hp). This is the M1 drift signal -- the quantity M2's reconcile
-        eliminates. Best-effort/observable-only; never raises into the caller."""
-        try:
-            p, f = self._pbc, fresh_bc
-            msgs = []
-            if p.player.curHp != f.player.curHp:
-                msgs.append(f"php {p.player.curHp}vs{f.player.curHp}")
-            pn, fn = p.monsters.monsterCount, f.monsters.monsterCount
-            if pn != fn:
-                msgs.append(f"moncount {pn}vs{fn}")
-            else:
-                for i in range(fn):
-                    if p.monsters[i].curHp != f.monsters[i].curHp:
-                        msgs.append(f"mon{i}hp {p.monsters[i].curHp}vs{f.monsters[i].curHp}")
-            if msgs:
-                print(f"[pbc drift] {', '.join(msgs)}", file=sys.stderr)
-        except Exception:
-            pass
+    def _pbc_reconcile(self, fresh_bc, fresh_slots):
+        """M2 reconcile (transplant form). Return a NEW bc: the faithful per-decision reconstruction
+        `fresh_bc` (so every OBSERVABLE field -- hp/block/energy/piles/powers/move intents -- and the
+        slot layout come from reality) with the engine-evolved HIDDEN monster state transplanted from
+        the carried pbc. This is correct-by-construction: one bc, observables from the live snapshot,
+        only the few counters the snapshot can't see carried forward.
+
+        Hidden fields transplanted per monster (matched by stable live monster_index -- spirecomm keeps
+        dead monsters listed, so indices survive deaths/repacks): `uniquePower0/1` always (pure hidden
+        counters the reconstruction never sets), and `miscInfo` EXCEPT where the reconstruction already
+        restored it from an observable intent (current move in the _MISCINFO damage/hits tables, e.g.
+        Giant Head's It Is Time slam damage) -- there the observed value wins. A monster absent from
+        the carried pbc (a split/summon child) keeps the reconstruction's values (no carry).
+
+        Also emits `[pbc DESYNC]`: where the carried pbc's one-step prediction missed reality
+        (player/monster hp/block/energy, monster intent) -- the artifact-free fidelity signal."""
+        old = self._pbc
+        old_live_to_slot = {live: slot for slot, live in self._pbc_slots.items()}
+        new = fresh_bc.copy()
+        d = []
+        op, fp = old.player, fresh_bc.player
+        if op.curHp != fp.curHp: d.append(f"php {op.curHp}->{fp.curHp}")
+        if op.block != fp.block: d.append(f"pblk {op.block}->{fp.block}")
+        if op.energy != fp.energy: d.append(f"energy {op.energy}->{fp.energy}")
+        for s_b, live in fresh_slots.items():
+            nm = new.monsters[s_b]
+            os_ = old_live_to_slot.get(live)
+            if os_ is None:
+                continue                      # split/summon child: no carried hidden state
+            om = old.monsters[os_]
+            if om.curHp != nm.curHp: d.append(f"m{live}hp {om.curHp}->{nm.curHp}")
+            if om.block != nm.block: d.append(f"m{live}blk {om.block}->{nm.block}")
+            omv, nmv = int(om.moveHistory[0]), int(nm.moveHistory[0])
+            if omv != nmv: d.append(f"m{live}move {omv}->{nmv}")
+            nm.uniquePower0 = om.uniquePower0
+            nm.uniquePower1 = om.uniquePower1
+            # Keep the reconstruction's miscInfo only when it was restored from an observable intent;
+            # otherwise carry the engine-evolved counter (Book of Stabbing stab count, Champ phase, ...).
+            if nmv not in _MISCINFO_DAMAGE_MOVE_INTS and nmv not in _MISCINFO_HITS_MOVE_INTS:
+                nm.miscInfo = om.miscInfo
+        if d:
+            print(f"[pbc DESYNC] {', '.join(d)}", file=sys.stderr)
+        return new
 
     def _pbc_advance(self, action):
         """Carry the persistent bc forward through the action just committed live, to the next input

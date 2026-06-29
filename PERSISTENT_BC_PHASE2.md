@@ -138,10 +138,20 @@ everything observable) and remove overlays as the shadow proves each axis clean.
   added: `Action.is_valid_action(bc)` (gate every `execute` — the only way to avoid the SIGABRT) and
   `BattleContext.copy()`. Status: **DONE** — gated live run shows 0 aborts/asserts/live-rejects, with
   `[pbc seeded]` / `[pbc drift]` / advance-invalid (drop+reseed) lifecycle logs.
-- **M2 — full reconcile overlay.** Implement `reconcile()` overlaying every observable field +
-  `setMove`. With full overlay, the pbc should track reality as well as today's reconstruction *plus*
-  keep hidden state. Run the shadow alongside; `[pbc DESYNC]` count should be ≤ the Phase-1 real
-  divergences (artifact bucket gone).
+- **M2 — reconcile (transplant form). DONE.** Rather than overlaying every observable onto the carried
+  pbc (which would leave un-overlaid fields like the RNG-drifted hand stale and break the card-advance),
+  reconcile rebuilds from the faithful per-decision reconstruction each decision — so every observable
+  (hp/block/energy/piles/powers/move intent) and the slot layout come from reality — and **transplants
+  only the engine-evolved HIDDEN monster state** (`uniquePower0/1`; `miscInfo` except where the
+  reconstruction restored it from an observable intent, e.g. Giant Head). Monsters matched by stable
+  live `monster_index` (survives deaths/repacks; splits/summons keep the reconstruction's values).
+  Emits `[pbc DESYNC]` where the carried pbc's one-step prediction missed reality — artifact-free (one
+  bc, no re-pack). **Key fix found via the gated run:** the bot ends most turns through the
+  out-of-`handle_combat` path (`get_next_action_in_game`, when no card is playable), which bypassed the
+  carry and left the pbc a full turn behind (`energy 0->3` DESYNC on nearly every turn); now that path
+  advances the pbc through END_TURN too (turn-deduped). Gated result (~104 decisions): 0 aborts, 0
+  advance-invalid, **0 hp/block/energy DESYNCs** — only residual monster move-intent DESYNCs (RNG roll
+  divergence, corrected by keeping the observed intent).
 - **M3 — the 4 monsterData monsters.** With engine-natural advancement (no manual counter code), run
   full Champ/Darkling/Book of Stabbing/Gremlin Wizard fights under the shadow and check for selection
   drift. Add the C++ `correctSelectionMiscInfo(observedMove)` hook *only if* a real divergence-correction
