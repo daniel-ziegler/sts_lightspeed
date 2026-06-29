@@ -2728,9 +2728,13 @@ class STSLightspeedAgent:
                 # whether Ice Cream is held tells real-relic-reconstruction-gap from one-off mis-sim.
                 p = prev_bc.player
                 mayhem = p.getStatus(sts.PlayerStatus.MAYHEM)
+                # draw/hand context: cardDrawPerTurn + the leftover (pre-end-turn) hand size + relics
+                # pin a hand-size divergence to its cause (draw-bonus relic vs over-retain vs deck size).
                 pre_ctx = (f"preE={p.energy} ept={p.energyPerTurn} preblk={p.block} "
                            f"prehp={p.curHp} icecream={int(p.hasRelic(sts.RelicId.ICE_CREAM))} "
-                           f"mayhem={mayhem}")
+                           f"mayhem={mayhem} draw={p.cardDrawPerTurn} prevhand={prev_bc.cards.cardsInHand} "
+                           f"drawpile={len(prev_bc.cards.drawPile)} discard={len(prev_bc.cards.discardPile)} "
+                           f"relics={[r.name for r in (self.game.relics or [])]}")
                 # Mayhem plays the top of the draw pile at the START of the next turn, before the draw
                 # (atStartOfTurn, engine BattleContext applyStartOfTurnPowers precedes DrawCards) -- the
                 # same top we observe now (nothing touches the draw pile between end-turn and that play).
