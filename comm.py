@@ -2544,6 +2544,9 @@ class STSLightspeedAgent:
         # (get_next_action_in_game), to dedup a repeated end-turn emit (that path has no transient
         # guard). Reset per combat seed.
         self._pbc_last_end_turn = None
+        # Short description of the action the pbc was last advanced by, tagged onto the next DESYNC so
+        # a divergence is attributable to a card mis-sim vs a monster-turn mis-sim.
+        self._pbc_prev_action_desc = None
         # Combat-decision signature of the state we last issued an action for. CommunicationMod can
         # emit a transient combat_state mid-resolution (e.g. the *_played_this_turn counters reset
         # while hand/energy/monsters still show the pre-play values) with ready_for_command=true; the
@@ -2634,6 +2637,7 @@ class STSLightspeedAgent:
                 if live_turn != self._pbc_last_end_turn:
                     self._pbc_last_end_turn = live_turn
                     self._pbc_advance(sts.Action(sts.ActionType.END_TURN))
+                    self._pbc_prev_action_desc = "END_TURN(auto)"
             return EndTurnAction()
         if self.game.cancel_available:
             return CancelAction()
@@ -2944,6 +2948,7 @@ class STSLightspeedAgent:
             # valid; the guard stays as defense). This evolves the hidden state through the action and,
             # for END_TURN, the monster turn -- the value that gets transplanted next decision.
             self._pbc_advance(action)
+            self._pbc_prev_action_desc = self._describe_action(action, fresh_bc)
             # Mark this turn as already advanced so the out-of-handle_combat end-turn path (line ~2613)
             # doesn't re-advance it on a transient duplicate emit.
             if action.get_action_type() == sts.ActionType.END_TURN:
@@ -2952,6 +2957,16 @@ class STSLightspeedAgent:
             print(f"[pbc] carry failed ({type(e).__name__}: {e}); dropping persistent bc",
                   file=sys.stderr)
             self._pbc = None
+
+    def _describe_action(self, action, bc):
+        """Short tag for the action the pbc was advanced by, for DESYNC attribution."""
+        try:
+            at = action.get_action_type()
+            if at == sts.ActionType.CARD:
+                return f"CARD(src{action.get_source_idx()},tgt{action.get_target_idx()})"
+            return str(at).split(".")[-1]
+        except Exception:
+            return "?"
 
     def _pbc_reconcile(self, fresh_bc, fresh_slots):
         """M2 reconcile (transplant form). Return a NEW bc: the faithful per-decision reconstruction
@@ -3003,7 +3018,7 @@ class STSLightspeedAgent:
             if nmv not in _MISCINFO_DAMAGE_MOVE_INTS and nmv not in _MISCINFO_HITS_MOVE_INTS:
                 nm.miscInfo = om.miscInfo
         if d:
-            print(f"[pbc DESYNC] {', '.join(d)}", file=sys.stderr)
+            print(f"[pbc DESYNC after {self._pbc_prev_action_desc}] {', '.join(d)}", file=sys.stderr)
         return new
 
     def _pbc_advance(self, action):

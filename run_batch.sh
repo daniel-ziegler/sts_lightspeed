@@ -38,7 +38,7 @@ for i in $(seq 1 "$N"); do
 
   # Harvest this game's persistent-bc fidelity signal before the next launch truncates the errlog:
   # any DESYNC, abort/assert, or pbc-guard event, tagged with the game's ascension + seed.
-  grep -aE "\[pbc DESYNC\]|\[pbc\] (carry failed|chosen action invalid)|Assertion|cannot be played with the selected target" "$ERRLOG" \
+  grep -aE "\[pbc DESYNC|\[pbc\] (carry failed|chosen action invalid)|Assertion|cannot be played with the selected target" "$ERRLOG" \
     | sed "s/^/g$i a$GAME_ASC: /" >> "$DESYNCS" 2>/dev/null
 
   # Parse this game's result from the (still-untruncated) errlog before the next launch clears it.
