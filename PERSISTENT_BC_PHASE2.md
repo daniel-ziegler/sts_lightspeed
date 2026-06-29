@@ -30,23 +30,28 @@ free. Phase 2 is both the fix and a cleaner measurement.
 One `self._pbc` (persistent BattleContext) per combat, gated behind `STS_PERSISTENT_BC` (default off).
 
 ```
-combat start (first handle_combat of a fight, or _pbc is None):
+combat start (no _pbc AND live screen is a genuine combat-start):
     self._pbc = convert_combat_state(...)        # full reconstruction ONCE, at a clean point
     # at fight start there is no hidden history: firstTurn() true, miscInfo fresh, slots == native
     # layout (packing-in-order matches the native encounter; summoners use fixed_slot_layouts)
 
-every decision:
-    reconcile(self._pbc, snapshot)               # overlay observable truth, KEEP engine hidden state
+every decision (top-level OR mid-action sub-decision, distinguished by _pbc.inputState):
+    reconcile(self._pbc, snapshot)               # overlay observable truth, KEEP engine hidden state;
+                                                 # correct moveHistory[0] ONLY where it diverges from intent
     searcher = BattleSearcher(self._pbc); searcher.search(sims)
     action = searcher.get_best_action()
     send map_search_action_to_spirecomm(action, self._pbc, ...) to live
-    action.execute(self._pbc)                    # carry the bc forward through the action queue
+    action.execute(self._pbc)                    # carry the bc forward to the next input point
 
 monster turn (the action was END_TURN):
-    execute(END_TURN) runs the monster turn inside the engine;
-    next decision's reconcile setMove()s each monster's observed intent + overlays results.
+    execute(END_TURN) runs the monster turn AND rolls each monster's next intent inside the engine;
+    next decision's reconcile corrects only the (rare) intents that diverge from what the live game shows.
 
-combat end / new combat / mid-fight entry:
+mid-action input (execute left _pbc.inputState == CARD_SELECT, e.g. Warcry/Headbutt):
+    do NOT re-init; the live bot re-enters handle_combat for the GRID/HAND_SELECT screen and we
+    keep advancing the SAME _pbc (search offers the card-select actions, execute drains the queue).
+
+combat end / mid-fight entry with no _pbc:
     self._pbc = None  -> next combat re-inits; mid-fight entry falls back to per-decision reconstruction.
 ```
 
@@ -61,7 +66,7 @@ away and search on a fresh reconstruction. Phase 2 **keeps** the executed bc and
 |---|---|---|
 | Player hp / block / energy | **snapshot** | overlay; if engine ≠ snapshot beyond tol, log fidelity bug, then hard-set |
 | Monster hp / block / statuses | **snapshot** | overlay onto the matching slot (slots are stable now — see below) |
-| Monster move for the turn | **snapshot intent** | `setMove(observedMove)` per monster (maintains `moveHistory`) |
+| Monster move for the turn | **engine; snapshot corrects** | the engine already rolled the intent at the end of the prior monster turn (`execute(END_TURN)` → `rollMoveFromInputs`). Compare `moveHistory[0]` to the observed intent and **only on mismatch** call `commit_observed_move(observed)` (setMove + drop any deferred roll). Do **not** unconditionally `setMove` every decision — that shifts the already-correct rolled move into `moveHistory[1]`, corrupting `lastMove`/`lastTwoMoves` and the `monsterData` counters. |
 | Hand / draw / discard / exhaust **contents** | **snapshot** | replace from snapshot (reuse `convert_combat_state` pile logic) — draw order is RNG, snapshot is ground truth |
 | `miscInfo` / `uniquePower0/1` / `moveHistory` / phase counters | **engine (pbc)** | keep — the whole point |
 | Card `specialData` / `strikeCount` / accumulated scaling / `uniqueId` | **engine (pbc)** | keep |
@@ -81,12 +86,25 @@ everything observable) and remove overlays as the shadow proves each axis clean.
 1. **Player actions** — already covered. `Action.execute(pbc)` runs the card/potion/end-turn/select
    through the engine to the next input point. No new work; this alone preserves specialData/scaling/
    uniqueId, today's most impactful loss.
-2. **Monster moves** — `setMove(observedMove)` covers **61/65** monsters (selection reads only
-   `moveHistory`). The roll-sweep trick does *not* work (`getMoveForRoll` draws internal rerolls).
+2. **Monster moves** — the engine rolls the next intent itself at the end of each monster turn, so in
+   the persistent bc the move is *already correct* after `execute(END_TURN)` whenever the engine is
+   faithful. We never force speculatively; we only **correct on observed divergence** via
+   `commit_observed_move(observed)`. The roll-sweep trick does *not* work (`getMoveForRoll` draws
+   internal rerolls), but we don't need it — we're not re-deriving the roll, just overwriting its result
+   when it disagrees with the live intent.
 3. **The 4 `monsterData` monsters** — `THE_CHAMP`, `DARKLING`, `BOOK_OF_STABBING`, `GREMLIN_WIZARD`
-   read/write a selection counter in `miscInfo`. `setMove` won't advance it. Options: (a) a small C++
-   `advanceSelectionMiscInfo(observedMove)` hook, or (b) infer the counter from observed move history in
-   Python. Only Champ is a boss; bounded surface. **Decide (a) vs (b) before coding the monster path.**
+   carry a selection/scaling counter that *is* `miscInfo` (`getMoveForRoll`'s `monsterData` param is
+   `miscInfoCopy = in.miscInfo`, written back at `Monster.cpp:805`). Because the engine's own roll
+   advances `miscInfo` for these exactly like every other monster, **no manual counter advance is needed
+   in the faithful path** — this dissolves the original (a)-vs-(b) question. The only residual is a
+   *divergent correction*: `commit_observed_move` fixes `moveHistory` but leaves `miscInfo` at whatever
+   the (wrong) roll produced. Gremlin Wizard self-heals (`monsterData = 1` unconditionally next roll);
+   Book of Stabbing (stab count → hit count) and Champ (phase-2 bit `0x4` + defensive-stance count
+   `&0x3`) could carry a stale counter across a correction. This is rare and only on an already-flagged
+   `[pbc DESYNC]`. **Resolution: ship M2/M3 with engine-natural advancement + correction-only override;
+   add a C++ `correctSelectionMiscInfo(observedMove)` hook *only if* M3 measurement shows residual
+   monsterData drift.** C++ over Python because the semantics live in `getMoveForRoll` and we own the
+   engine.
 4. **Draw / shuffle** — force from the resulting snapshot hand (simpler than setting pre-shuffle pile
    order, and it's exactly what the snapshot gives). Havoc/Mayhem top-of-draw stays irreducibly
    unforceable mid-turn → overlay from the next snapshot.
@@ -115,8 +133,11 @@ everything observable) and remove overlays as the shadow proves each axis clean.
   `setMove`. With full overlay, the pbc should track reality as well as today's reconstruction *plus*
   keep hidden state. Run the shadow alongside; `[pbc DESYNC]` count should be ≤ the Phase-1 real
   divergences (artifact bucket gone).
-- **M3 — the 4 monsterData monsters.** Add the chosen counter-advance mechanism; verify Champ/Darkling/
-  Book of Stabbing/Gremlin Wizard fights show no selection drift over a full fight.
+- **M3 — the 4 monsterData monsters.** With engine-natural advancement (no manual counter code), run
+  full Champ/Darkling/Book of Stabbing/Gremlin Wizard fights under the shadow and check for selection
+  drift. Add the C++ `correctSelectionMiscInfo(observedMove)` hook *only if* a real divergence-correction
+  leaves a stale counter (per Forcing §3 / decision 1) — otherwise this milestone is a verification, not
+  new code.
 - **M4 — thin the overlay.** Per axis the shadow shows clean, stop overlaying it (trust the engine).
   Each removal is a measurable fidelity claim.
 - **M5 — measure.** Gated 10–20 game live set at fixed seed/ascension, compare to the ~75% offline
@@ -131,20 +152,45 @@ everything observable) and remove overlays as the shadow proves each axis clean.
 - **Card scaling** (Rampage / Ritual Dagger / Genetic Algorithm / Glass Knife / Perfect Strike) — kept
   by the engine instead of needing per-card `specialData` reconstruction.
 
-## Open decisions (resolve before coding the relevant milestone)
+## Resolved decisions (2026-06-28, grounded in the engine code)
 
-1. **monsterData counter (M3):** C++ `advanceSelectionMiscInfo` hook vs Python inference. C++ is more
-   robust (matches engine semantics exactly); Python avoids a rebuild. Lean C++ — it's ~4 monsters and
-   we control the engine.
-2. **Reconcile granularity (M2):** start by reusing `convert_combat_state`'s pile/overlay code wholesale
-   against `_pbc` (overwrite observable, keep hidden), or write a leaner `reconcile`? Start by reusing —
-   it's proven — then thin in M4.
-3. **slot_to_spire maintenance:** advance it alongside `_pbc` (track engine slot → live index across
-   summons/deaths), or recompute by identity each decision? Advancing is correct-by-construction;
-   recomputing risks reintroducing the packing artifact. Lean advance.
-4. **Mid-turn extra inputs** (card-select screens spawned by a card, e.g. Warcry/Headbutt): confirm
-   `execute` runs the queue to *each* input point and we re-enter `handle_combat` cleanly for the sub-
-   decision while keeping the same `_pbc`.
+1. **monsterData counter (M3) — RESOLVED: engine-natural advancement, correction-only override, C++
+   hook deferred.** `monsterData` *is* `miscInfo` (`Monster.cpp:801-805`), and the engine rolls each
+   monster's next move at the end of its turn, so `execute(END_TURN)` advances the counter for *all*
+   monsters by construction — the original C++-vs-Python framing was a false choice born of the
+   `setMove`-every-decision model. Correct moves only on divergence via the existing
+   `commit_observed_move`. Add a C++ `correctSelectionMiscInfo` hook *only* if M3 shows residual
+   monsterData drift after a real correction (Book of Stabbing / Champ); Gremlin Wizard self-heals and
+   Darkling's counter-bearing moves are setMove overrides already. See Forcing §3.
+
+2. **Reconcile granularity (M2) — RESOLVED: lean overlay that shares the pile/status helpers but NOT the
+   fresh-build seeding.** Do *not* call `convert_combat_state` wholesale on `_pbc`: it re-seeds
+   `miscInfo` from the live intent (`_MISCINFO_*` tables), calls `rollMove`, and sets `moveHistory[0]`
+   from scratch — all of which would clobber the engine-maintained hidden state that is the entire point
+   of Phase 2. Instead factor the *observable overlay* out of `_set_sts_monster_fields` (hp / block /
+   powers / pile contents) into a `reconcile()` that writes onto the existing slots and skips the
+   move/miscInfo/rollMove seeding. The miscInfo-restore + rollMove path stays where it belongs: the
+   fresh-build (`convert_combat_state`) used at init and on the per-decision fallback.
+
+3. **slot_to_spire maintenance — RESOLVED: advance alongside `_pbc`.** Correct-by-construction:
+   `_pbc` is built once and only mutated by `execute`, so the engine owns slot identity across
+   splits / summons / deaths. Establish the map at init (in-order packing + `fixed_slot_layouts` for
+   summoners, exactly as today's `_build_monster_group`) and maintain it incrementally — on death keep
+   the slot entry (engine marks the slot gone; never compact), on summon/split map the new live monster
+   to the engine's known target slot via the same fixed-layout rule. Recomputing by identity each
+   decision is rejected: it reintroduces the packing artifact this whole phase exists to kill.
+
+4. **Mid-turn extra inputs — RESOLVED: key the lifecycle on `inputState`, continue the same `_pbc`.**
+   A card needing a selection (Warcry/Headbutt/Armaments/…) drives `bc.inputState` to `CARD_SELECT`
+   (`InputState.h`), and the engine search already resolves these internally as `SINGLE/MULTI_CARD_SELECT`
+   actions (`_CARD_SELECT_TASK_BY_ACTION`). After `execute(card)`, `_pbc` sits at the `CARD_SELECT`
+   input point with its queue partially drained. The live bot re-enters `handle_combat` for the
+   GRID/HAND_SELECT screen — so the lifecycle gate must distinguish *new combat* from *mid-action
+   sub-decision*: if `_pbc` exists and `_pbc.inputState != PLAYER_NORMAL` (i.e. `EXECUTING_ACTIONS` /
+   `CARD_SELECT`), **continue the same `_pbc`** (search offers the card-select actions; `execute` the
+   chosen pick drains the rest of the queue). Only init a fresh `_pbc` when there is none and the live
+   screen is a genuine combat-start. This makes "first `handle_combat` of a fight" precise instead of
+   heuristic.
 
 ## Success criteria
 
