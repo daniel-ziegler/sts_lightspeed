@@ -11,10 +11,14 @@
 - [x] reenable path choices
 - [x] share embeds between identical IntSpaces (key it) and EnumSpaces. (maybe even FixedVecSpace proj params for gold?)
 - [x] map repr: mark reachable nodes from each choice
-- [ ] eliminate redundancy when showing card choices from deck and in map choices
+- [ ] eliminate redundancy when showing card choices from deck and in map choices?
 - [ ] shop prices
 - [ ] relics repr: add counters
 - [ ] history repr: list of enemies, events, history of rares and potions being offered
+- [ ] distinguish Prayer Wheel option sets
+
+## actions
+- [ ] full potion actions incl discard before gain & drink fruit juice anytime
 
 # learning
 
@@ -48,4 +52,5 @@
 - [ ] refactor comm.py
     - share engine logic instead of reconstructing a bunch of it for the shadow
     - split into multiple components, e.g. shadow state class that's fresh for each battle
+- [ ] audit for: correctness, duplicated logic that should be shared, papering over issues rather than root causing, ...
 
