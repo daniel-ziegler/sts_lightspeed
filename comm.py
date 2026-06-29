@@ -2537,6 +2537,15 @@ class STSLightspeedAgent:
         # whenever we must fall back to per-decision reconstruction.
         self._persistent_bc_enabled = (
             os.environ.get("STS_PERSISTENT_BC", "") not in ("", "0", "false", "False", "no"))
+        # M5: when on (implies _persistent_bc_enabled), the live combat decision is searched on the
+        # reconciled pbc instead of the fresh reconstruction -- so the search sees the engine-evolved
+        # hidden state the per-decision reconstruction can't restore (Hexaghost's uniquePower0 move
+        # sequence, Book of Stabbing's stab count, escalating-damage counters). The pbc's observables
+        # equal the fresh reconstruction, so its chosen action is valid live exactly as today's is.
+        self._pbc_drive = (
+            os.environ.get("STS_PBC_DRIVE", "") not in ("", "0", "false", "False", "no"))
+        if self._pbc_drive:
+            self._persistent_bc_enabled = True
         self._pbc = None
         self._pbc_slots = None
         self._pbc_floor = None
@@ -2958,6 +2967,30 @@ class STSLightspeedAgent:
                   file=sys.stderr)
             self._pbc = None
 
+    def _pbc_reconcile_build(self, fresh_bc, fresh_slots):
+        """M5 (drive): reconcile/seed self._pbc from the fresh reconstruction (observables + slot
+        layout from reality, hidden monster state transplanted from the carried pbc) and RETURN it to
+        search on. Does not advance -- the advance happens after the search picks the action. Returns
+        None on any failure so the caller falls back to searching the fresh reconstruction."""
+        try:
+            floor = self.game.floor
+            if self._pbc is not None and floor != self._pbc_floor:
+                self._pbc = None
+            if self._pbc is None:
+                self._pbc = fresh_bc.copy()
+                self._pbc_last_end_turn = None
+                print(f"[pbc] seeded persistent bc at floor {floor}", file=sys.stderr)
+            else:
+                self._pbc = self._pbc_reconcile(fresh_bc, fresh_slots)
+            self._pbc_slots = dict(fresh_slots)
+            self._pbc_floor = floor
+            return self._pbc
+        except Exception as e:
+            print(f"[pbc] build failed ({type(e).__name__}: {e}); searching reconstruction",
+                  file=sys.stderr)
+            self._pbc = None
+            return None
+
     def _describe_action(self, action, bc):
         """Short tag for the action the pbc was advanced by, for DESYNC attribution."""
         try:
@@ -3084,14 +3117,23 @@ class STSLightspeedAgent:
             print(f"[card-damage WARN] {e}", file=sys.stderr)
         print(bc, file=sys.stderr)
 
+        # M5: when driving, search the reconciled persistent bc (observables == this reconstruction,
+        # plus the engine-evolved hidden state the reconstruction can't restore). Its slot layout is
+        # the reconstruction's (pbc is a copy of it), so search_slots == slot_to_spire and the chosen
+        # action maps to live exactly as a fresh-reconstruction action would. Falls back to `bc` if the
+        # build fails. When not driving, live runs on the fresh reconstruction (carry stays parallel).
+        search_bc, search_slots = bc, slot_to_spire
+        if self._pbc_drive:
+            built = self._pbc_reconcile_build(bc, slot_to_spire)
+            if built is not None:
+                search_bc = built
+
         # Configure the searcher with heart1's exact training/eval battle-search knobs
         # (exploration / chance + end-turn widening / eval weights, boss variants) and matching
         # per-decision sim count, via the shared SearchAgent config -- so live play uses the same
         # search heart1 was tuned around rather than a mistuned standalone BattleSearcher.
-        # Live play always runs on the fresh reconstruction `bc`; the persistent bc (when enabled) is
-        # carried in parallel at the end of this method, not used to drive the live command (M1).
-        searcher = sts.BattleSearcher(bc)
-        simulation_count = self.search_agent.configure_searcher(searcher, bc)
+        searcher = sts.BattleSearcher(search_bc)
+        simulation_count = self.search_agent.configure_searcher(searcher, search_bc)
 
         print("=" * 80, file=sys.stderr)
         print(f"Running {simulation_count} simulations for combat decision...", file=sys.stderr)
@@ -3107,7 +3149,10 @@ class STSLightspeedAgent:
         except Exception as e:
             print(f"!!! BATTLE SEARCH CRASH ({type(e).__name__}: {e}) -- ending turn; state dumped",
                   file=sys.stderr)
-            print(bc, file=sys.stderr)
+            print(search_bc, file=sys.stderr)
+            # If we were driving on the pbc, it may be wedged -- drop it so the next decision re-seeds.
+            if self._pbc_drive:
+                self._pbc = None
             try:
                 crash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           "runs", "battle_search_crashes.jsonl")
@@ -3118,15 +3163,15 @@ class STSLightspeedAgent:
                 pass
             return EndTurnAction()
 
-        # Map the search action to a spirecomm action
-        spirecomm_action = map_search_action_to_spirecomm(first_action, bc, self.game, slot_to_spire)
+        # Map the search action to a spirecomm action (interpreted against the bc we searched on)
+        spirecomm_action = map_search_action_to_spirecomm(first_action, search_bc, self.game, search_slots)
 
         print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
 
         # Diagnostic: Spot Weakness is rejected live if its target doesn't intend to attack. If the
         # search aimed it at a monster the live game shows as non-attacking (or gone / out of range),
         # the play wastes the card -- capture the full target picture (non-fatal) to root-cause it.
-        self._check_attack_intent_target(first_action, spirecomm_action, slot_to_spire)
+        self._check_attack_intent_target(first_action, spirecomm_action, search_slots)
 
         # Print top 5 moves and their visit counts
         edges = searcher.get_root_edges()
@@ -3135,7 +3180,7 @@ class STSLightspeedAgent:
             sorted_edges = sorted(edges, key=lambda e: e.node.simulation_count, reverse=True)
             print("Top 5 moves by visit count:", file=sys.stderr)
             for i, edge in enumerate(sorted_edges[:5]):
-                action_desc = edge.action.print_desc(bc)
+                action_desc = edge.action.print_desc(search_bc)
                 visits = edge.node.simulation_count
                 avg_value = edge.node.evaluation_sum / visits if visits > 0 else 0
                 print(f"  {i+1}. {action_desc} - visits: {visits}, avg_value: {avg_value:.2f}", file=sys.stderr)
@@ -3160,12 +3205,18 @@ class STSLightspeedAgent:
             if cid != sts.CardId.INVALID:
                 self._shadow_prev_draw_top = (cid, top.upgrades)
 
-        # Persistent-bc parallel carry (gated, M1): maintain the engine-advanced pbc alongside live
-        # play -- seed at combat start, log drift vs this reconstruction, advance it by the action we
-        # just committed live. Never affects the live command above; the pbc is a separate copy so
-        # advancing it can't corrupt the shadow's bc. M2 adds reconcile; flipping live onto the pbc
-        # comes after that.
-        if self._persistent_bc_enabled:
+        # Advance the persistent bc by the action we committed live.
+        if self._pbc_drive:
+            # M5: the pbc was already reconciled/built before the search (search_bc is self._pbc), so
+            # only advance it here through the chosen action.
+            if self._pbc is search_bc:
+                self._pbc_advance(first_action)
+                self._pbc_prev_action_desc = self._describe_action(first_action, bc)
+                if first_action.get_action_type() == sts.ActionType.END_TURN:
+                    self._pbc_last_end_turn = getattr(self.game, "turn", None)
+        elif self._persistent_bc_enabled:
+            # Verification mode: maintain the pbc in parallel (reconcile + advance), live driven by the
+            # fresh reconstruction. The pbc is a separate copy, so advancing can't corrupt the shadow.
             self._pbc_carry(bc, slot_to_spire, first_action)
 
         return spirecomm_action
