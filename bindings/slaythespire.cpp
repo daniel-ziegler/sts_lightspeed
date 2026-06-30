@@ -884,6 +884,10 @@ PYBIND11_MODULE(slaythespire, m) {
     def_value(battleContext, "input_state", &BattleContext::inputState);
     def_value(battleContext, "encounter", &BattleContext::encounter);
     def_value(battleContext, "outcome", &BattleContext::outcome);
+    battleContext.def_property_readonly("card_select_task",
+        [](const BattleContext &bc) { return bc.cardSelectInfo.cardSelectTask; },
+        "the pending CARD_SELECT task (valid only when input_state == CARD_SELECT), so the bridge "
+        "can confirm a pbc opened the same select the live game did before advancing through it");
 
     // Player bindings
     pybind11::class_<Player> player(m, "Player");

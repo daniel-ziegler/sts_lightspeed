@@ -764,6 +764,19 @@ _UNKNOWN_INTENT_DEFAULT_MOVE = {
     sts.MonsterId.TORCH_HEAD: sts.MonsterMoveId.TORCH_HEAD_TACKLE,
 }
 
+# Monsters whose next move is a DETERMINISTIC function of their last move (a fixed alternation set via
+# setMove in takeTurn, no roll). When the live snapshot omits their current intent, getMoveForRoll
+# returns only their fixed OPENER (Donu->Circle, Deca->Beam) regardless of cycle phase -- so the search
+# forces Donu to buff (+3 strength) and Deca to beam (0 block) every lookahead turn, drifting the boss's
+# strength/block out of phase. Infer the real next move from last_move instead. Successors mirror the
+# setMove calls in MonsterSpecific.cpp (DONU_BEAM<->DONU_CIRCLE_OF_POWER, DECA_BEAM<->DECA_SQUARE).
+_DETERMINISTIC_MOVE_SUCCESSOR = {
+    int(sts.MonsterMoveId.DONU_BEAM): sts.MonsterMoveId.DONU_CIRCLE_OF_POWER,
+    int(sts.MonsterMoveId.DONU_CIRCLE_OF_POWER): sts.MonsterMoveId.DONU_BEAM,
+    int(sts.MonsterMoveId.DECA_BEAM): sts.MonsterMoveId.DECA_SQUARE_OF_PROTECTION,
+    int(sts.MonsterMoveId.DECA_SQUARE_OF_PROTECTION): sts.MonsterMoveId.DECA_BEAM,
+}
+
 
 # Moves whose damage the engine reads from the monster's `miscInfo` (rolled at battle start or set
 # mid-move), rather than a hardcoded constant in takeTurn. A mid-fight reconstruction can't recover
@@ -920,6 +933,12 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
         sts_monster.buff(sts.MonsterStatus.ASLEEP, 1)
 
     if not move_known:
+        # A deterministic alternator (Donu/Deca) with a known last move: infer the real next move from
+        # the fixed cycle rather than rolling to its phase-blind opener (see _DETERMINISTIC_MOVE_SUCCESSOR).
+        successor = _DETERMINISTIC_MOVE_SUCCESSOR.get(move_history[1]) if move_history[1] else None
+        if successor is not None:
+            sts_monster.moveHistory = [int(successor), move_history[1]]
+            return
         # A summoned minion whose move is set by its summoner (TorchHead via the Collector spawn)
         # has no getMoveForRoll case -- rolling it assert(false)s in the engine (uncatchable). When
         # it appears with no committed intent (just spawned), set its fixed move directly instead.
@@ -2506,6 +2525,29 @@ _CARD_SELECT_POOL_BY_TASK = {
     sts.CardSelectTask.SECRET_WEAPON: "draw",
 }
 
+# Single-card-select tasks the persistent-bc drive resolves directly on the parked pbc -- deterministic
+# pile picks (a known pool, mapped from a real action) the search reads straight off the carried piles.
+_PBC_THROUGH_SELECT_TASKS = (
+    (frozenset(_CARD_SELECT_TASK_BY_ACTION.values()) & frozenset(_CARD_SELECT_POOL_BY_TASK.keys()))
+    - _DISCOVERY_TASKS - {sts.CardSelectTask.CODEX}
+)
+
+# RNG-generated single selects: the pbc rolls its OWN candidates from a desynced RNG, so the drive
+# injects the live-observed offered cards onto the parked pbc before searching (M4). The per-decision
+# reconcile masks the RNG-state desync (every observable is overwritten from reality each decision),
+# so this only needs the right candidates, not a matching roll.
+_PBC_DISCOVERY_SELECT_TASKS = _DISCOVERY_TASKS | {sts.CardSelectTask.CODEX}
+
+# "Choose any number" selects (Gamble / Exhaust-many): resolved by looping search+execute on the
+# parked pbc (each pick sets a bit and re-opens; a confirm applies the set) until it leaves CARD_SELECT.
+_PBC_MULTI_SELECT_TASKS = frozenset(_MULTI_CARD_SELECT_TASK_BY_ACTION.values())
+
+# Every card-select task the drive can advance THROUGH (park the pbc instead of dropping + re-seeding).
+# Anything outside this set (the engine-unimplemented Meditate/Nightmare/Recycle/Setup/Seek) re-seeds.
+_PBC_PARK_SELECT_TASKS = (
+    _PBC_THROUGH_SELECT_TASKS | _PBC_DISCOVERY_SELECT_TASKS | _PBC_MULTI_SELECT_TASKS
+)
+
 
 class STSLightspeedAgent:
 
@@ -3081,12 +3123,51 @@ class STSLightspeedAgent:
                   file=sys.stderr)
             self._pbc = None
             return
+        if self._pbc.outcome != sts.BattleOutcome.UNDECIDED:
+            self._pbc = None            # combat ended -- nothing left to carry
+            return
+        ist = self._pbc.input_state
+        if ist == sts.InputState.PLAYER_NORMAL:
+            return                      # clean decision point
+        # A played card opened a card-select sub-input. When driving, park the pbc at the select so
+        # the in-combat card-select handler resolves it on this SAME bc and advances through (M4) --
+        # preserving the carried hidden monster state across the whole card+select sequence rather
+        # than dropping and re-seeding. Covers single (pile), Discovery/Codex (inject live candidates)
+        # and multi (loop) selects; only the engine-unimplemented tasks fall through to re-seed.
+        if (ist == sts.InputState.CARD_SELECT and self._pbc_drive
+                and self._pbc.card_select_task in _PBC_PARK_SELECT_TASKS):
+            print(f"[pbc] parked at card-select ({self._pbc.card_select_task}); "
+                  f"resolving on the persistent bc", file=sys.stderr)
+            return
+        print(f"[pbc] not at a clean decision after execute "
+              f"(input_state={ist}, outcome={self._pbc.outcome}); re-seeding next decision",
+              file=sys.stderr)
+        self._pbc = None
+
+    def _pbc_advance_through_select(self, select_action):
+        """Advance the parked pbc through an in-combat card-select by executing the chosen select
+        action on it, resolving the CARD_SELECT sub-input back to the next player decision. The
+        action was chosen by searching this same pbc, so it's valid; the guard is defense. Drops the
+        pbc on any error or if it lands anywhere but a clean player turn (re-seeds next decision)."""
+        try:
+            if not select_action.is_valid_action(self._pbc):
+                print("[pbc] select action invalid on persistent bc; dropping it", file=sys.stderr)
+                self._pbc = None
+                return
+            select_action.execute(self._pbc)
+        except Exception as e:
+            print(f"[pbc] select execute failed ({type(e).__name__}: {e}); dropping persistent bc",
+                  file=sys.stderr)
+            self._pbc = None
+            return
         if (self._pbc.input_state != sts.InputState.PLAYER_NORMAL
                 or self._pbc.outcome != sts.BattleOutcome.UNDECIDED):
-            print(f"[pbc] not at a clean decision after execute "
-                  f"(input_state={self._pbc.input_state}, outcome={self._pbc.outcome}); "
-                  f"re-seeding next decision", file=sys.stderr)
+            print(f"[pbc] not at a clean decision after select "
+                  f"(input_state={self._pbc.input_state}, outcome={self._pbc.outcome}); re-seeding",
+                  file=sys.stderr)
             self._pbc = None
+            return
+        self._pbc_prev_action_desc = "CARD_SELECT"   # DESYNC attribution for the next reconcile
 
     def handle_combat(self):
         self.capture_battle_state()
@@ -3254,6 +3335,20 @@ class STSLightspeedAgent:
             # The battle search does not enumerate these subsets -- it resolves them to "select
             # nothing" -- so playout_battle (and thus RL training) always picks zero. Drive the
             # search the same way and forward whatever it selects (empty => confirm nothing).
+            # When driving, resolve on the parked pbc (advancing it through the whole select); fall
+            # back to a fresh reconstruction on no parked pbc or any divergence.
+            if (self._pbc_drive and self._pbc is not None
+                    and self._pbc.input_state == sts.InputState.CARD_SELECT
+                    and self._pbc.card_select_task == multi_task):
+                try:
+                    chosen = self._pbc_resolve_multi_select(multi_task, action_name)
+                except Exception as e:
+                    print(f"[pbc] multi-select on persistent bc failed ({type(e).__name__}: {e}); "
+                          f"resolving on reconstruction", file=sys.stderr)
+                    self._pbc = None
+                else:
+                    return CardSelectAction(chosen)
+
             gc = spirecomm_to_gamecontext(self.game)
             bc, _ = convert_combat_state(self.game, gc)
             bc.open_card_select(multi_task, min(num, bc.cards.cardsInHand))
@@ -3293,6 +3388,17 @@ class STSLightspeedAgent:
                 if cid == sts.CardId.INVALID:
                     raise ValueError(f"unknown offered card in discovery select: {c.card_id}")
                 ids.append(cid)
+            # When driving, inject the live-observed candidates onto the parked pbc and resolve there
+            # (advancing it through the select); fall back to a fresh reconstruction on divergence.
+            if (self._pbc_drive and self._pbc is not None
+                    and self._pbc.input_state == sts.InputState.CARD_SELECT
+                    and self._pbc.card_select_task == task):
+                try:
+                    return self._pbc_resolve_discovery(task, ids, offered, action_name)
+                except Exception as e:
+                    print(f"[pbc] discovery on persistent bc failed ({type(e).__name__}: {e}); "
+                          f"resolving on reconstruction", file=sys.stderr)
+                    self._pbc = None
             if task == sts.CardSelectTask.CODEX:
                 bc.open_codex_select(ids)
             else:
@@ -3320,22 +3426,121 @@ class STSLightspeedAgent:
                 return ChooseAction(sel_idx)
             return CardSelectAction([chosen])
 
+        # Resolve the pick on the parked persistent bc when driving (the engine already opened this
+        # exact select there when we advanced the triggering card), so the carried hidden monster
+        # state survives the card+select sequence; then advance the pbc through it. Fall back to a
+        # fresh reconstruction if no parked pbc, or if its pick can't be matched live (divergence) --
+        # one reconstruction-resolved pick beats crashing the run.
+        if (self._pbc_drive and self._pbc is not None
+                and self._pbc.input_state == sts.InputState.CARD_SELECT
+                and self._pbc.card_select_task == task):
+            try:
+                live_card, chosen_action = self._search_single_select(self._pbc, task, action_name,
+                                                                      driven=True)
+            except Exception as e:
+                print(f"[pbc] select on persistent bc failed ({type(e).__name__}: {e}); "
+                      f"resolving on reconstruction", file=sys.stderr)
+                self._pbc = None
+            else:
+                self._pbc_advance_through_select(chosen_action)
+                return CardSelectAction([live_card])
+
         bc.open_card_select(task, num)
-        searcher = sts.BattleSearcher(bc)
-        searcher.search(self.search_agent.configure_searcher(searcher, bc))
-        sel_idx = searcher.get_best_action().get_select_idx()
+        live_card, _ = self._search_single_select(bc, task, action_name, driven=False)
+        return CardSelectAction([live_card])
+
+    def _search_single_select(self, select_bc, task, action_name, driven):
+        """Run the combat MCTS on `select_bc` (parked in CARD_SELECT for `task`) and return
+        (live_card, chosen_action): the live screen card to commit, and the engine Action that made
+        the pick (used to advance a driven pbc through the select). Raises if the search's index is
+        out of range or its card isn't on the live screen."""
+        searcher = sts.BattleSearcher(select_bc)
+        searcher.search(self.search_agent.configure_searcher(searcher, select_bc))
+        chosen_action = searcher.get_best_action()
+        sel_idx = chosen_action.get_select_idx()
 
         pool_name = _CARD_SELECT_POOL_BY_TASK[task]
-        pool = {"hand": bc.cards.hand, "discard": bc.cards.discardPile,
-                "exhaust": bc.cards.exhaustPile, "draw": bc.cards.drawPile}[pool_name]
+        pool = {"hand": select_bc.cards.hand, "discard": select_bc.cards.discardPile,
+                "exhaust": select_bc.cards.exhaustPile, "draw": select_bc.cards.drawPile}[pool_name]
         if not (0 <= sel_idx < len(pool)):
             raise RuntimeError(f"MCTS card-select idx {sel_idx} out of range for the {pool_name} "
                                f"pile (size {len(pool)}, task {task})")
         chosen = pool[sel_idx]
         live_card = self._match_live_select_card(chosen)
         print(f"[mcts] card-select ({action_name}) -> {chosen.getName()}"
-              f"{'+' if chosen.upgraded else ''} ({pool_name} idx {sel_idx})", file=sys.stderr)
-        return CardSelectAction([live_card])
+              f"{'+' if chosen.upgraded else ''} ({pool_name} idx {sel_idx}"
+              f"{', pbc-driven' if driven else ''})", file=sys.stderr)
+        return live_card, chosen_action
+
+    def _pbc_resolve_discovery(self, task, ids, offered, action_name):
+        """Drive an in-combat Discovery/Codex select on the parked pbc: OVERWRITE its rolled
+        candidates with the live-observed offered cards (the pbc rolled its own from a desynced RNG;
+        reality's offered set is observable), search, and advance the pbc through the pick. The chosen
+        index lines up with `offered` (ids were built from it in order). Returns the live action;
+        raises (caller drops the pbc + falls back) on an invalid pick or an unclean resolution."""
+        if task == sts.CardSelectTask.CODEX:
+            self._pbc.open_codex_select(ids)
+        else:
+            self._pbc.open_discovery_select(ids, 1, True)
+        searcher = sts.BattleSearcher(self._pbc)
+        searcher.search(self.search_agent.configure_searcher(searcher, self._pbc))
+        chosen_action = searcher.get_best_action()
+        sel_idx = chosen_action.get_select_idx()
+        if not chosen_action.is_valid_action(self._pbc):
+            raise RuntimeError(f"discovery pick invalid on persistent bc ({task})")
+        chosen_action.execute(self._pbc)          # advance the pbc through the select (CODEX idx==3 = skip)
+        if (self._pbc.input_state != sts.InputState.PLAYER_NORMAL
+                or self._pbc.outcome != sts.BattleOutcome.UNDECIDED):
+            raise RuntimeError(f"discovery left pbc unclean (input_state={self._pbc.input_state})")
+        self._pbc_prev_action_desc = "DISCOVERY"
+        if task == sts.CardSelectTask.CODEX and sel_idx == len(offered):
+            print(f"[mcts] discovery ({action_name}) -> skip (idx {sel_idx}, pbc-driven)",
+                  file=sys.stderr)
+            return CancelAction()
+        if not (0 <= sel_idx < len(offered)):
+            raise RuntimeError(f"MCTS discovery idx {sel_idx} out of range "
+                               f"({len(offered)} offered, {action_name})")
+        chosen = offered[sel_idx]
+        print(f"[mcts] discovery ({action_name}) -> {chosen.card_id} (idx {sel_idx}, pbc-driven)",
+              file=sys.stderr)
+        if self.game.screen_type == ScreenType.CARD_REWARD:
+            return ChooseAction(sel_idx)
+        return CardSelectAction([chosen])
+
+    def _pbc_resolve_multi_select(self, multi_task, action_name):
+        """Drive an in-combat multi-card-select (Gamble / Exhaust-many) on the parked pbc. The engine
+        models these sequentially: each SINGLE pick sets a bit and re-opens the screen; a MULTI confirm
+        applies the running set. Loop search+execute on the pbc until it leaves CARD_SELECT, collecting
+        the picked hand cards to mirror live (the search resolves these to "select nothing" in
+        practice, so the common result is an empty confirm). Raises (caller drops + falls back) on a
+        pick that can't be matched live, non-convergence, or an unclean resolution."""
+        chosen = []
+        for _ in range(64):                       # bound: hand size is <= ~10; 64 is a safe backstop
+            if (self._pbc.input_state != sts.InputState.CARD_SELECT
+                    or self._pbc.card_select_task != multi_task):
+                break
+            searcher = sts.BattleSearcher(self._pbc)
+            searcher.search(self.search_agent.configure_searcher(searcher, self._pbc))
+            best = searcher.get_best_action()
+            if best.get_action_type() == sts.ActionType.SINGLE_CARD_SELECT:
+                idx = best.get_select_idx()
+                hand = self._pbc.cards.hand
+                if not (0 <= idx < len(hand)):
+                    raise RuntimeError(f"multi-select idx {idx} out of hand range "
+                                       f"({len(hand)}, {multi_task})")
+                chosen.append(self._match_live_select_card(hand[idx]))
+            if not best.is_valid_action(self._pbc):
+                raise RuntimeError(f"multi-select action invalid on persistent bc ({multi_task})")
+            best.execute(self._pbc)               # SINGLE re-opens (loop continues); MULTI confirms (loop exits)
+        else:
+            raise RuntimeError(f"multi-select did not converge ({multi_task})")
+        if (self._pbc.input_state != sts.InputState.PLAYER_NORMAL
+                or self._pbc.outcome != sts.BattleOutcome.UNDECIDED):
+            raise RuntimeError(f"multi-select left pbc unclean (input_state={self._pbc.input_state})")
+        self._pbc_prev_action_desc = "MULTI_CARD_SELECT"
+        print(f"[mcts] multi-select ({action_name}, {multi_task}) -> {len(chosen)} card(s), pbc-driven",
+              file=sys.stderr)
+        return chosen
 
     def _match_live_select_card(self, engine_card):
         """Find the live select-screen candidate matching the engine-chosen card by stable CardId +

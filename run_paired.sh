@@ -44,7 +44,7 @@ run_one () {  # $1=seed $2=tag(drive|master) $3=extra-env-prefix
   local line kind floor
   line=$(grep -a 'completed with result' "$ERRLOG" | tail -1)
   if [ -n "$line" ]; then
-    kind=$(echo "$line" | grep -oE 'kind=[a-z]+' | cut -d= -f2)
+    kind=$(echo "$line" | grep -oE 'kind=[a-z0-9]+' | cut -d= -f2)
     floor=$(echo "$line" | grep -oE 'max_floor=[0-9]+' | cut -d= -f2)
     echo "${kind}:${floor}"
   elif pgrep -f '[c]omm.py --character' >/dev/null; then echo "TIMEOUT:?"
