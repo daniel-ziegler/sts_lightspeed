@@ -10,6 +10,7 @@ set +e
 RUN="${1:?usage: ./run_paired.sh <run_name> [num_seeds]}"
 N="${2:-30}"
 SIMS="${SIMS:-2000}"
+ASCLVL="${ASC:-0}"                   # ascension for both arms (set ASC=10 for more signal)
 TMO_MIN="${TMO_MIN:-120}"            # 2h per-game hang cap
 REPO=/home/dmz/osrc/sts_lightspeed
 ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
@@ -25,11 +26,11 @@ r=random.Random(20260629)
 print('\n'.join(comm.seed_long_to_string(r.getrandbits(63)) for _ in range($N)))
 ")
 
-echo "paired ${RUN}: ${N} seeds x {DRIVE,master} at A0 / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap" | tee -a "$RESULTS"
+echo "paired ${RUN}: ${N} seeds x {DRIVE,master} at A${ASCLVL} / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap" | tee -a "$RESULTS"
 
 run_one () {  # $1=seed $2=tag(drive|master) $3=extra-env-prefix
   local seed="$1" tag="$2"
-  env $3 SEED="$seed" ASC=0 SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}_${tag}" 1 >/dev/null 2>&1
+  env $3 SEED="$seed" ASC="$ASCLVL" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}_${tag}" 1 >/dev/null 2>&1
   for t in $(seq 1 "$TICKS"); do
     sleep 15
     pgrep -f '[c]omm.py --character' >/dev/null || break
