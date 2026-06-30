@@ -1007,6 +1007,13 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("addDebuff", [](Monster &m, MonsterStatus s, int amount, bool isSourceMonster) {
             m.addDebuff(s, amount, isSourceMonster);
         }, pybind11::arg("status"), pybind11::arg("amount"), pybind11::arg("isSourceMonster") = true)
+        .def("set_just_applied", [](Monster &m, MonsterStatus s, bool value) {
+            m.setJustApplied(s, value);
+        }, "status"_a, "value"_a,
+            "set/clear a status's just-applied (skipFirst) flag. buff()/addDebuff() set it true on "
+            "application (RitualPower/WeakPower skip their first end-of-round); a mid-fight "
+            "reconstruction must clear it for powers applied on a PRIOR turn (e.g. a Cultist whose "
+            "Ritual was cast last turn), or applyEndOfRoundPowers wrongly skips the effect every turn.")
         .def("isAlive", &Monster::isAlive)
         .def("isTargetable", &Monster::isTargetable)
         .def("isDying", &Monster::isDying)

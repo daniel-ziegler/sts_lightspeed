@@ -398,6 +398,12 @@ def apply_monster_power(sts_monster, power_id: str, amount: int) -> None:
         sts_monster.addDebuff(status, amount, False)
     else:
         sts_monster.buff(status, amount)
+    # buff()/addDebuff() flag the status "just applied" (skipFirst), so its FIRST end-of-round effect is
+    # skipped -- RitualPower/WeakPower semantics. A mid-fight reconstruction always observes a power
+    # applied on a PRIOR turn (the round it was cast has ended), so clear the flag. Without this the
+    # engine skips Ritual's strength gain EVERY simulated turn (confirmed: a live Cultist with Ritual 4
+    # gained 0 strength per END_TURN instead of 4 -> the search under-models its escalating damage).
+    sts_monster.set_just_applied(status, False)
 
 
 # spirecomm forwards the game's raw AbstractPotion.ID string (CommunicationMod reads
