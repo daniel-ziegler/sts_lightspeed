@@ -2578,23 +2578,15 @@ class STSLightspeedAgent:
         self._shadow_prev_action = None
         self._shadow_prev_draw_top = None
         self._shadow_prev_floor = None
-        # Persistent-bc bridge (PERSISTENT_BC_PHASE2.md), gated behind STS_PERSISTENT_BC (default OFF).
+        # Persistent-bc bridge (PERSISTENT_BC_PHASE2.md), gated behind STS_PBC_DRIVE (default OFF).
         # When on, one engine-advanced BattleContext is carried across a combat's decisions and the
-        # search runs on it (preserving hidden state) instead of a fresh per-decision reconstruction.
-        # M1 is the lifecycle skeleton: seed at combat start, search, execute the chosen action to
-        # carry forward, re-seed on a new fight -- no reconcile yet (drift expected). _pbc is None
-        # whenever we must fall back to per-decision reconstruction.
-        self._persistent_bc_enabled = (
-            os.environ.get("STS_PERSISTENT_BC", "") not in ("", "0", "false", "False", "no"))
-        # M5: when on (implies _persistent_bc_enabled), the live combat decision is searched on the
-        # reconciled pbc instead of the fresh reconstruction -- so the search sees the engine-evolved
-        # hidden state the per-decision reconstruction can't restore (Hexaghost's uniquePower0 move
-        # sequence, Book of Stabbing's stab count, escalating-damage counters). The pbc's observables
-        # equal the fresh reconstruction, so its chosen action is valid live exactly as today's is.
+        # live combat decision is searched on the reconciled pbc instead of a fresh per-decision
+        # reconstruction -- so the search sees the engine-evolved hidden state the reconstruction can't
+        # restore (Hexaghost's uniquePower0 move sequence, Book of Stabbing's stab count, escalating-
+        # damage counters). The pbc's observables equal the fresh reconstruction, so its chosen action
+        # is valid live exactly as a reconstruction action would be. Off => master (reconstruction only).
         self._pbc_drive = (
             os.environ.get("STS_PBC_DRIVE", "") not in ("", "0", "false", "False", "no"))
-        if self._pbc_drive:
-            self._persistent_bc_enabled = True
         self._pbc = None
         self._pbc_slots = None
         self._pbc_floor = None
@@ -2690,7 +2682,7 @@ class STSLightspeedAgent:
             # monster turn) here too -- otherwise it falls a full turn behind reality and its hidden
             # state never evolves through monster turns. Guarded; drops the pbc if it isn't cleanly at
             # a player decision.
-            if self._persistent_bc_enabled and self._pbc is not None:
+            if self._pbc_drive and self._pbc is not None:
                 live_turn = getattr(self.game, "turn", None)
                 if live_turn != self._pbc_last_end_turn:
                     self._pbc_last_end_turn = live_turn
@@ -2979,43 +2971,6 @@ class STSLightspeedAgent:
                 getattr(p, "energy", None), getattr(p, "block", None),
                 hand, mons, potions, powers)
 
-    def _pbc_carry(self, fresh_bc, fresh_slots, action):
-        """Persistent-bc lifecycle, carried in PARALLEL with live play (never drives the live command;
-        live decisions run on the fresh per-decision reconstruction exactly as on master). Maintains
-        one engine-advanced bc alongside: seed at combat start, RECONCILE observable reality onto it
-        each decision (M2), advance by the action we actually committed live. Flipping live onto the
-        pbc waits until reconcile is proven (M5). See PERSISTENT_BC_PHASE2.md.
-
-        A new fight is a new floor (combats are floor-unique), so a floor change drops the previous
-        combat's bc. Any failure drops the pbc (never crash)."""
-        try:
-            floor = self.game.floor
-            if self._pbc is not None and floor != self._pbc_floor:
-                self._pbc = None
-            if self._pbc is None:
-                self._pbc = fresh_bc.copy()
-                self._pbc_last_end_turn = None
-                print(f"[pbc] seeded persistent bc at floor {floor}", file=sys.stderr)
-            else:
-                # Adopt the faithful reconstruction (correct observables + piles + powers) and
-                # transplant the engine-evolved hidden state from the carried pbc onto it.
-                self._pbc = self._pbc_reconcile(fresh_bc, fresh_slots)
-            self._pbc_slots = dict(fresh_slots)
-            self._pbc_floor = floor
-            # Advance by the action actually taken (chosen on fresh_bc == the new pbc's observables, so
-            # valid; the guard stays as defense). This evolves the hidden state through the action and,
-            # for END_TURN, the monster turn -- the value that gets transplanted next decision.
-            self._pbc_advance(action)
-            self._pbc_prev_action_desc = self._describe_action(action, fresh_bc)
-            # Mark this turn as already advanced so the out-of-handle_combat end-turn path (line ~2613)
-            # doesn't re-advance it on a transient duplicate emit.
-            if action.get_action_type() == sts.ActionType.END_TURN:
-                self._pbc_last_end_turn = getattr(self.game, "turn", None)
-        except Exception as e:
-            print(f"[pbc] carry failed ({type(e).__name__}: {e}); dropping persistent bc",
-                  file=sys.stderr)
-            self._pbc = None
-
     def _pbc_reconcile_build(self, fresh_bc, fresh_slots):
         """M5 (drive): reconcile/seed self._pbc from the fresh reconstruction (observables + slot
         layout from reality, hidden monster state transplanted from the carried pbc) and RETURN it to
@@ -3296,17 +3251,13 @@ class STSLightspeedAgent:
 
         # Advance the persistent bc by the action we committed live.
         if self._pbc_drive:
-            # M5: the pbc was already reconciled/built before the search (search_bc is self._pbc), so
-            # only advance it here through the chosen action.
+            # The pbc was already reconciled/built before the search (search_bc is self._pbc), so only
+            # advance it here through the chosen action.
             if self._pbc is search_bc:
                 self._pbc_advance(first_action)
                 self._pbc_prev_action_desc = self._describe_action(first_action, bc)
                 if first_action.get_action_type() == sts.ActionType.END_TURN:
                     self._pbc_last_end_turn = getattr(self.game, "turn", None)
-        elif self._persistent_bc_enabled:
-            # Verification mode: maintain the pbc in parallel (reconcile + advance), live driven by the
-            # fresh reconstruction. The pbc is a separate copy, so advancing can't corrupt the shadow.
-            self._pbc_carry(bc, slot_to_spire, first_action)
 
         return spirecomm_action
 

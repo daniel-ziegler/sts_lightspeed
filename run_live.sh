@@ -20,10 +20,9 @@ GAMES="${2:-20}"
 #   WATCH_PRE=<ms>  watch mode (enables it): ms before moving the cursor to the pick (default 1000)
 #   WATCH_POST=<ms> watch mode (enables it): ms after moving the cursor, before committing (default 500)
 #                   -- setting either WATCH_PRE or WATCH_POST turns watch mode on; unset = full speed
-#   PBC=1          enable the persistent-bc bridge in carry/verification mode (STS_PERSISTENT_BC)
-#   PBC_DRIVE=1    M5: drive the live decision from the reconciled pbc (STS_PBC_DRIVE; implies PBC)
+#   PBC_DRIVE=1    drive the live combat decision from the reconciled persistent bc (STS_PBC_DRIVE)
 SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
-WATCH_PRE="${WATCH_PRE:-}"; WATCH_POST="${WATCH_POST:-}"; PBC="${PBC:-}"; PBC_DRIVE="${PBC_DRIVE:-}"
+WATCH_PRE="${WATCH_PRE:-}"; WATCH_POST="${WATCH_POST:-}"; PBC_DRIVE="${PBC_DRIVE:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
 CFG="/mnt/c/Users/zieDa/AppData/Local/ModTheSpire/CommunicationMod/config.properties"
@@ -53,7 +52,6 @@ ENVV=" PYTHONHASHSEED\\=0"
 [ -n "$TEMP" ] && ENVV="$ENVV STS_TEMPERATURE\\=$TEMP"
 [ -n "$WATCH_PRE" ] && ENVV="$ENVV STS_WATCH_PRE_MS\\=$WATCH_PRE"
 [ -n "$WATCH_POST" ] && ENVV="$ENVV STS_WATCH_POST_MS\\=$WATCH_POST"
-[ -n "$PBC" ] && ENVV="$ENVV STS_PERSISTENT_BC\\=$PBC"
 [ -n "$PBC_DRIVE" ] && ENVV="$ENVV STS_PBC_DRIVE\\=$PBC_DRIVE"
 # Insert the env assignments right after the existing STS_COMM_CAPTURE\=... token.
 [ -n "$ENVV" ] && sed -i "s#\(STS_COMM_CAPTURE\\\\=[^ ]*\)#\1${ENVV}#" "$CFG"
