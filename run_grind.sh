@@ -1,0 +1,67 @@
+#!/bin/bash
+# PBC_DRIVE robustness grind on FRESH seeds (single arm, no master): stress the persistent-bc drive
+# across many games and surface any remaining card-select FALLBACK, engine ASSERT/crash, or coordinator
+# HANG. Per-game isolation (fresh JVM via run_live) so a crash/hang ends only that game. Each game's
+# signals are harvested to runs/grind_<run>_results.txt before the next launch truncates the errlog;
+# run_live also archives the full errlog per game to runs/errlog_archive/. Offending lines go to
+# runs/grind_<run>_issues.txt for triage.
+#
+# Usage: ./run_grind.sh <run_name> [num_games]
+set +e
+RUN="${1:?usage: ./run_grind.sh <run_name> [num_games]}"
+N="${2:-50}"
+SIMS="${SIMS:-2000}"
+ASCLVL="${ASC:-0}"
+TMO_MIN="${TMO_MIN:-90}"
+REPO=/home/dmz/osrc/sts_lightspeed
+ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
+RESULTS="$REPO/runs/grind_${RUN}_results.txt"
+ISSUES="$REPO/runs/grind_${RUN}_issues.txt"
+: > "$RESULTS"; : > "$ISSUES"
+TICKS=$(( TMO_MIN * 4 ))
+
+# Fresh deterministic seeds (RNG seed distinct from the paired set so these are genuinely new games).
+mapfile -t SEEDS < <(python3 -c "
+import sys; sys.path.insert(0,'$REPO'); import comm, random
+r=random.Random(70150131)
+print('\n'.join(comm.seed_long_to_string(r.getrandbits(63)) for _ in range($N)))
+")
+
+echo "grind ${RUN}: ${N} PBC_DRIVE games at A${ASCLVL} / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap" | tee -a "$RESULTS"
+
+i=0
+for seed in "${SEEDS[@]}"; do
+  i=$((i+1))
+  env PBC_DRIVE=1 SEED="$seed" ASC="$ASCLVL" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}" 1 >/dev/null 2>&1
+  timedout=1
+  for t in $(seq 1 "$TICKS"); do
+    sleep 15
+    pgrep -f '[c]omm.py --character' >/dev/null || { timedout=0; break; }
+  done
+  pkill -9 -f comm.py 2>/dev/null
+  fb=$(grep -acE "not on the live select screen|on persistent bc failed" "$ERRLOG" 2>/dev/null)
+  asrt=$(grep -acE "Assertion|BATTLE SEARCH CRASH" "$ERRLOG" 2>/dev/null)
+  hang=$(grep -acE "appears hung" "$ERRLOG" 2>/dev/null)
+  driven=$(grep -acE "pbc-driven" "$ERRLOG" 2>/dev/null)
+  line=$(grep -a 'completed with result' "$ERRLOG" | tail -1)
+  kind=$(echo "$line" | grep -oE 'kind=[a-z0-9]+' | cut -d= -f2)
+  floor=$(echo "$line" | grep -oE 'max_floor=[0-9]+' | cut -d= -f2)
+  if [ -z "$kind" ]; then
+    if [ "$hang" -gt 0 ]; then kind="HANG"
+    elif [ "$timedout" -eq 1 ]; then kind="TIMEOUT"
+    else kind="CRASH"; fi
+  fi
+  if [ "$fb" -gt 0 ] || [ "$asrt" -gt 0 ] || [ "$hang" -gt 0 ]; then
+    { echo "=== seed $seed (g$i, kind=$kind) ==="
+      grep -aE "on persistent bc failed|not on the live select screen|Assertion|BATTLE SEARCH CRASH|appears hung|left pbc unclean|did not converge" "$ERRLOG"
+    } >> "$ISSUES" 2>/dev/null
+  fi
+  echo "g$i seed=$seed kind=${kind}:${floor} driven=$driven fallbacks=$fb asserts=$asrt hangs=$hang" | tee -a "$RESULTS"
+done
+
+echo "=== grind ${RUN} FINAL ===" | tee -a "$RESULTS"
+sum() { grep -oE "$1=[0-9]+" "$RESULTS" | grep -oE '[0-9]+' | paste -sd+ | bc; }
+echo "games=$(grep -c '^g[0-9]' "$RESULTS")  driven=$(sum driven)  fallbacks=$(sum fallbacks)  asserts=$(sum asserts)  hangs=$(sum hangs)" | tee -a "$RESULTS"
+for k in heart act3 loss HANG CRASH TIMEOUT; do
+  echo "$k: $(grep -oE "kind=${k}:" "$RESULTS" | wc -l)" | tee -a "$RESULTS"
+done
