@@ -2285,18 +2285,7 @@ void BattleContext::discardPotion(int idx) {
 }
 
 bool BattleContext::smokeBombEscapeBlocked() const {
-    if (isBossEncounter(encounter) || player.hasStatus<PS::SURROUNDED>()) {
-        return true;
-    }
-    // Java's escape fires only inside a MonsterRoom (map monster/elite rooms): an event-spawned
-    // combat consumes the potion with NO effect (canUse still allows the drink). Model the wasted
-    // drink as blocked so the search offers only the discard. A bc without a game context
-    // (standalone battles/tests) counts as a plain monster room.
-    if (gameContext != nullptr && gameContext->curRoom != Room::MONSTER
-            && gameContext->curRoom != Room::ELITE) {
-        return true;
-    }
-    return false;
+    return isBossEncounter(encounter) || player.hasStatus<PS::SURROUNDED>();
 }
 
 void BattleContext::drinkPotion(int idx, int target) {
