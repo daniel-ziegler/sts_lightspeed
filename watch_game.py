@@ -15,18 +15,13 @@ import argparse
 import random
 import time
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-
 import slaythespire as sts
 
-from network import choice_space
 from playouts import (
     NNService,
+    choose_overworld_action,
     construct_choice,
     load_net,
-    path_to_action_and_desc,
     take_free_rewards,
 )
 
@@ -163,15 +158,10 @@ def watch_choice(gc, agent, service, rng, temperature: float, choice_delay: floa
         len(choice.fixed_actions) + len(choice.paths_offered))
 
     if service is not None and choice is not None and total > 1:
-        batch_tensors, output = service.get_logits(choice)
-        logits = output[0] if isinstance(output, tuple) else output
-        logits_tensor = torch.tensor(logits)
-        if temperature != 1.0:
-            logits_tensor = logits_tensor / temperature
-        probs = np.exp(F.log_softmax(logits_tensor, dim=0).numpy())
-        chosen_idx = int(rng.choices(range(len(probs)), weights=probs, k=1)[0])
-        path = choice_space.ix_to_path(batch_tensors['choices'], chosen_idx)
-        action, desc = path_to_action_and_desc(choice, path, gc)
+        # The SAME decision core rl_train.run_episode and comm.py use, so the watched game plays
+        # exactly what the deployed policy would.
+        action, desc, path, _idx, _logp, _val = choose_overworld_action(
+            service, choice, gc, rng, temperature=temperature)
         print(f"  chose [{path[0]}] {desc}", flush=True)
     else:
         action = agent.pick_gameaction(gc)
