@@ -11,7 +11,7 @@ set +e
 RUN="${1:?usage: ./run_grind.sh <run_name> [num_games]}"
 N="${2:-50}"
 SIMS="${SIMS:-2000}"
-ASCLVL="${ASC:-0}"
+ASCLVL="${ASC:-0}"       # a fixed level, or ASC=rand for a random 0-20 per game (recorded per line)
 TMO_MIN="${TMO_MIN:-90}"
 REPO=/home/dmz/osrc/sts_lightspeed
 ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
@@ -32,7 +32,9 @@ echo "grind ${RUN}: ${N} PBC_DRIVE games at A${ASCLVL} / ${SIMS} sims / temp 0 /
 i=0
 for seed in "${SEEDS[@]}"; do
   i=$((i+1))
-  env PBC_DRIVE=1 SEED="$seed" ASC="$ASCLVL" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}" 1 >/dev/null 2>&1
+  # Per-game ascension: a fixed level, or a random 0-20 when ASC=rand (mirrors run_batch.sh).
+  if [ "$ASCLVL" = "rand" ]; then GAME_ASC=$(( RANDOM % 21 )); else GAME_ASC="$ASCLVL"; fi
+  env PBC_DRIVE=1 SEED="$seed" ASC="$GAME_ASC" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}" 1 >/dev/null 2>&1
   timedout=1
   for t in $(seq 1 "$TICKS"); do
     sleep 15
@@ -60,7 +62,7 @@ for seed in "${SEEDS[@]}"; do
       grep -aE "Game error:|Traceback|pbc/live select divergence|driven persistent bc|not parked at expected|shop choice unresolved|unmapped|Assertion|BATTLE SEARCH CRASH|appears hung|left pbc unclean|did not converge" "$ERRLOG"
     } >> "$ISSUES" 2>/dev/null
   fi
-  echo "g$i seed=$seed kind=${kind}:${floor} driven=$driven crashes=$crash asserts=$asrt hangs=$hang" | tee -a "$RESULTS"
+  echo "g$i seed=$seed asc=$GAME_ASC kind=${kind}:${floor} driven=$driven crashes=$crash asserts=$asrt hangs=$hang" | tee -a "$RESULTS"
 done
 
 echo "=== grind ${RUN} FINAL ===" | tee -a "$RESULTS"
