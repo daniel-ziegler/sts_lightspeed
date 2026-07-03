@@ -1086,12 +1086,10 @@ void BattleContext::useAttackCard() {
             addToBot( Actions::HeadbuttAction() );
             break;
 
-        case CardId::HEAVY_BLADE: {
-            const int dmg1 = 14 + ((up ? 4 : 2) * player.getStatus<PS::STRENGTH>());
-            const int dmg2 = calculateCardDamage(c, t, dmg1);
-            addToBot( Actions::AttackEnemy(t, dmg2) );
+        case CardId::HEAVY_BLADE:
+            // applyPlayerDamageModifiers owns the extra strength multiples.
+            addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, 14)) );
             break;
-        }
 
         case CardId::HEMOKINESIS:
             //  attack enemy should recalculate damage, because we can lose hp and therefore gain strength before the dmg, need to test
@@ -2286,6 +2284,10 @@ void BattleContext::discardPotion(int idx) {
     --potionCount;
 }
 
+bool BattleContext::smokeBombEscapeBlocked() const {
+    return isBossEncounter(encounter) || player.hasStatus<PS::SURROUNDED>();
+}
+
 void BattleContext::drinkPotion(int idx, int target) {
     const bool hasBark = player.hasRelic<R::SACRED_BARK>();
     const Potion p = potions[idx];
@@ -2446,11 +2448,7 @@ void BattleContext::drinkPotion(int idx, int target) {
             break;
 
         case Potion::SMOKE_BOMB:
-            // Java SmokeBomb.canUse(): blocked if any monster.type == BOSS or any monster has
-            // BackAttack. Keying on curRoom != BOSS lets you escape an EVENT boss (Mind Bloom's
-            // Guardian, room == EVENT) and ignores the act-4 SURROUNDED back-attack. Match the search
-            // gating: escape only when not a boss encounter and not surrounded.
-            if (!isBossEncounter(encounter) && !player.hasStatus<PS::SURROUNDED>()) {
+            if (!smokeBombEscapeBlocked()) {
                 smokeBombUsed = true;
                 outcome = Outcome::PLAYER_VICTORY;
             }
@@ -2751,33 +2749,18 @@ int BattleContext::getCardBaseDamage(const CardInstance &card) const {
 
 int BattleContext::getCardDamageDisplay(const CardInstance &card) const {
     // The card's damage as the live game shows it in hand: base (incl. combat-state bonuses) run
-    // through the PLAYER-side modifiers only, with no target (so no vulnerable/slow). Mirrors the
-    // player-side block of calculateCardDamage below; used to check a reconstruction against the
-    // live AbstractCard.damage field. Returns -1 for non-attacks.
+    // through the player-side modifiers only, with no target (so no vulnerable/slow). Used to
+    // check a reconstruction against the live AbstractCard.damage field. Returns -1 for
+    // non-attacks.
     const int base = getCardBaseDamage(card);
     if (base < 0) {
         return -1;
     }
-    float damage = static_cast<float>(base);
-    if (player.hasRelic<R::STRIKE_DUMMY>() && card.isStrikeCard()) damage += 3;
-    if (player.hasRelic<R::WRIST_BLADE>() && card.costForTurn == 0) damage += 4;
-    damage += static_cast<float>(player.getStatus<PS::STRENGTH>());
-    if (card.getId() == CardId::HEAVY_BLADE) {
-        // Strength applies 3x (5x upgraded) total; the generic line above added it once.
-        damage += static_cast<float>((card.isUpgraded() ? 4 : 2) * player.getStatus<PS::STRENGTH>());
-    }
-    if (player.hasStatus<PS::VIGOR>()) damage += static_cast<float>(player.getStatus<PS::VIGOR>());
-    if (player.hasStatus<PS::DOUBLE_DAMAGE>()) damage *= 2;
-    if (player.hasStatus<PS::PEN_NIB>()) damage *= 2;
-    if (player.hasStatus<PS::WEAK>()) damage *= .75f;
-    if (player.stance == Stance::WRATH) damage *= 2;
-    else if (player.stance == Stance::DIVINITY) damage *= 3;
-    return damage < 0 ? 0 : static_cast<int>(damage);
+    const float damage = applyPlayerDamageModifiers(card, static_cast<float>(base));
+    return std::max(0, static_cast<int>(damage));
 }
 
-int BattleContext::calculateCardDamage(const CardInstance &card, int targetIdx, int baseDamage) const {
-
-    auto damage = static_cast<float>(baseDamage);
+float BattleContext::applyPlayerDamageModifiers(const CardInstance &card, float damage) const {
 
     // ****** Player Relics AtDamageModify ******
 
@@ -2793,6 +2776,11 @@ int BattleContext::calculateCardDamage(const CardInstance &card, int targetIdx, 
     // ****** Player Powers AtDamageGive ******
 
     damage += static_cast<float>(player.getStatus<PS::STRENGTH>());
+
+    if (card.getId() == CardId::HEAVY_BLADE) {
+        // Strength applies 3x (5x upgraded) total; the generic line above added it once.
+        damage += static_cast<float>((card.isUpgraded() ? 4 : 2) * player.getStatus<PS::STRENGTH>());
+    }
 
     if (player.hasStatus<PS::VIGOR>()) {
         damage += static_cast<float>(player.getStatus<PS::VIGOR>());
@@ -2817,6 +2805,13 @@ int BattleContext::calculateCardDamage(const CardInstance &card, int targetIdx, 
     } else if (player.stance == Stance::DIVINITY) {
         damage *= 3;
     }
+
+    return damage;
+}
+
+int BattleContext::calculateCardDamage(const CardInstance &card, int targetIdx, int baseDamage) const {
+
+    auto damage = applyPlayerDamageModifiers(card, static_cast<float>(baseDamage));
 
     // ****** Enemy Powers AtDamageReceive ******
     const Monster &monster = monsters.arr[targetIdx];

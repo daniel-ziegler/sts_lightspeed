@@ -388,13 +388,10 @@ bool search::SimpleAgent::playPotion(BattleContext &bc) {
     for (; i < bc.potionCapacity; ++i) {
         auto p = bc.potions[i];
 
-        // Smoke Bomb is an invalid action when you can't flee (boss, or Surrounded by the act-4 Spire
-        // elite); offering it here would trip the isValidAction assert in Action::execute. Mirrors the
-        // gate in chooseDumpPotionAction / isValidPotionAction.
+        // An escape-blocked Smoke Bomb is an invalid action; drinking it here would trip the
+        // isValidAction assert in Action::execute.
         bool canDrink = !(p == sts::Potion::FAIRY_POTION || p == sts::Potion::EMPTY_POTION_SLOT
-                          || (p == sts::Potion::SMOKE_BOMB
-                              && (isBossEncounter(bc.encounter)
-                                  || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED))));
+                          || (p == sts::Potion::SMOKE_BOMB && bc.smokeBombEscapeBlocked()));
 
         if (canDrink) {
             int target = 0;
@@ -421,10 +418,9 @@ static bool chooseDumpPotionAction(const BattleContext &bc, bool randomize,
     for (int i = 0; i < bc.potionCapacity; ++i) {
         const Potion p = bc.potions[i];
         if (p == Potion::EMPTY_POTION_SLOT || p == Potion::FAIRY_POTION || p == Potion::INVALID
-                || (p == Potion::SMOKE_BOMB
-                    && (isBossEncounter(bc.encounter) || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED)))) {
-            // Smoke Bomb escapes combat -- forbidden when you can't flee (boss, or Surrounded by the
-            // act-4 Spire elite); a rollout drinking it would falsely score the escape as a survival.
+                || (p == Potion::SMOKE_BOMB && bc.smokeBombEscapeBlocked())) {
+            // A rollout drinking an escape-blocked Smoke Bomb would falsely score the escape as
+            // a survival.
             continue;
         }
         int target = 0;

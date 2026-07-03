@@ -183,6 +183,12 @@ namespace sts {
         void obtainPotion(Potion p);
         void discardPotion(int idx);
         void drinkPotion(int idx, int target=0);
+        // Smoke Bomb can't flee: Java SmokeBomb.canUse() blocks it if any monster.type == BOSS or
+        // any monster has BackAttack. Keying on the encounter (not curRoom) lets you escape an
+        // EVENT boss (Mind Bloom's Guardian) and matches the act-4 SURROUNDED back-attack, which
+        // drops once either of Shield/Spear dies. Gates drinking, search enumeration, and rollout
+        // policies alike -- an ungated use is rejected by the live game / isValidAction assert.
+        [[nodiscard]] bool smokeBombEscapeBlocked() const;
 
         void drawCards(int count);
         void discardAtEndOfTurn();
@@ -204,6 +210,10 @@ namespace sts {
         void debuffEnemy(MonsterStatus s, int idx, int amount, bool isSourceMonster=true);
 
         [[nodiscard]] int calculateCardDamage(const CardInstance &card, int targetIdx, int baseDamage) const;
+        // Player-side half of the damage formula (relics AtDamageModify, powers AtDamageGive incl.
+        // Heavy Blade's extra strength multiples, stance): shared by calculateCardDamage (which then
+        // applies target-side modifiers) and getCardDamageDisplay (no target).
+        [[nodiscard]] float applyPlayerDamageModifiers(const CardInstance &card, float damage) const;
         // Base attack damage for a card (before strength/vulnerable/etc.), accounting for the
         // combat-state-dependent cards whose base isn't the printed constant (Perfect Strike's
         // strikeCount bonus, Body Slam's block). Returns -1 for non-attack cards. Mirrors the live

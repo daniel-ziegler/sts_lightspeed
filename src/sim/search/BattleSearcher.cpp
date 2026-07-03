@@ -737,11 +737,9 @@ void search::BattleSearcher::enumeratePotionActions(search::BattleSearcher::Node
             continue;
         }
 
-        // Smoke Bomb escapes combat, forbidden whenever you can't flee: a boss, or while Surrounded
-        // by the act-4 Spire Shield+Spear (drops once either dies). The search otherwise over-picks
-        // the high-value escape and the live game rejects the "use" command. Offer only its discard.
-        if (p == Potion::SMOKE_BOMB
-                && (isBossEncounter(bc.encounter) || bc.player.hasStatusRuntime(PlayerStatus::SURROUNDED))) {
+        // Offer only Smoke Bomb's discard when it can't flee -- the search otherwise over-picks
+        // the high-value escape and the live game rejects the "use" command.
+        if (p == Potion::SMOKE_BOMB && bc.smokeBombEscapeBlocked()) {
             node.edges.push_back({Action(ActionType::POTION, pIdx, -1)});
             continue;
         }
@@ -766,102 +764,12 @@ void search::BattleSearcher::enumeratePotionActions(search::BattleSearcher::Node
     }
 }
 
-template <typename ForwardIt>
-void setupCardOptionsHelper(search::BattleSearcher::Node &node, const ForwardIt begin, const ForwardIt end, const std::function<bool(const CardInstance &)> &p= nullptr) {
-    for (int i = 0; begin+i != end; ++i) {
-        const auto &c = begin[i];
-        if (!p || (p(c))) {
-            node.edges.push_back(
-                    {search::Action(search::ActionType::SINGLE_CARD_SELECT, i)}
-                );
-        }
-    }
-}
-
 void search::BattleSearcher::enumerateCardSelectActions(search::BattleSearcher::Node &node,
                                                                   const BattleContext &bc) {
-
-    switch (bc.cardSelectInfo.cardSelectTask) {
-        case CardSelectTask::ARMAMENTS:
-            setupCardOptionsHelper( node, bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand,
-                                    [] (const CardInstance &c) { return c.canUpgrade(); });
-            break;
-
-        case CardSelectTask::CODEX:
-            for (int i = 0; i < 4; ++i) { // i -> 3 action means skip
-                node.edges.push_back({Action(search::ActionType::SINGLE_CARD_SELECT, i)});
-            }
-            break;
-
-        case CardSelectTask::DISCOVERY:
-            for (int i = 0; i < 3; ++i) {
-                node.edges.push_back({Action(search::ActionType::SINGLE_CARD_SELECT, i)});
-            }
-            break;
-
-        case CardSelectTask::DUAL_WIELD:
-            setupCardOptionsHelper( node, bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand,
-                                    [] (const CardInstance &c) {
-                                        return c.getType() == CardType::POWER || c.getType() == CardType::ATTACK;
-                                    });
-            break;
-
-        case CardSelectTask::EXHUME:
-            setupCardOptionsHelper(node, bc.cards.exhaustPile.begin(), bc.cards.exhaustPile.end(),
-                                   [](const auto &c) { return c.getId() != CardId::EXHUME; });
-            break;
-
-        case CardSelectTask::EXHAUST_ONE:
-            setupCardOptionsHelper(node, bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand);
-            break;
-
-        case CardSelectTask::FORETHOUGHT:
-        case CardSelectTask::WARCRY:
-            setupCardOptionsHelper(node, bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand);
-            break;
-
-        case CardSelectTask::HEADBUTT:
-        case CardSelectTask::LIQUID_MEMORIES_POTION:
-            setupCardOptionsHelper(node, bc.cards.discardPile.begin(), bc.cards.discardPile.end());
-            break;
-
-        case CardSelectTask::SECRET_TECHNIQUE:
-            setupCardOptionsHelper(node, bc.cards.drawPile.begin(), bc.cards.drawPile.end(),
-                                    [] (const CardInstance &c) {
-                                        return c.getType() == CardType::SKILL;
-                                    });
-            break;
-
-        case CardSelectTask::SECRET_WEAPON:
-            setupCardOptionsHelper(node, bc.cards.drawPile.begin(), bc.cards.drawPile.end(),
-                                    [] (const CardInstance &c) {
-                                        return c.getType() == CardType::ATTACK;
-                                    });
-            break;
-
-        case CardSelectTask::EXHAUST_MANY:
-        case CardSelectTask::GAMBLE: {
-            // Sequential multi-select: offer each not-yet-picked hand card (while more may be
-            // picked), plus a confirm carrying the running selection. See CardSelectInfo::selectedBits.
-            const auto &csi = bc.cardSelectInfo;
-            const int numSelected = __builtin_popcount(static_cast<unsigned>(csi.selectedBits));
-            const bool canSelectMore = csi.canPickAnyNumber || numSelected < csi.pickCount;
-            if (canSelectMore) {
-                for (int i = 0; i < bc.cards.cardsInHand; ++i) {
-                    if (!(csi.selectedBits & (1 << i))) {
-                        node.edges.push_back({search::Action(search::ActionType::SINGLE_CARD_SELECT, i)});
-                    }
-                }
-            }
-            node.edges.push_back({search::Action(search::ActionType::MULTI_CARD_SELECT, csi.selectedBits)});
-            break;
-        }
-
-        default:
-#ifdef sts_asserts
-            assert(false);
-#endif
-            break;
+    // Action::enumerateCardSelectActions is the single source of truth for which selects a
+    // card-select screen offers; the search just wraps each one in an edge.
+    for (const auto &a : Action::enumerateCardSelectActions(bc)) {
+        node.edges.push_back({a});
     }
 }
 
