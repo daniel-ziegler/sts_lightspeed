@@ -725,7 +725,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
                 auto &minion = bc.monsters.arr[i];
                 if (!minion.isDying()) {
                     minion.buff<MS::STRENGTH>(strGain);
-                    minion.addBlock(asc3 ? 10 : 6);
+                    minion.addBlock(asc18 ? 10 : 6);   // GremlinLeader.blockAmt: 6, A18+ 10
                 }
             }
             buff<MS::STRENGTH>(strGain);
@@ -1279,7 +1279,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
         }
 
         case MMID::THE_CHAMP_GLOAT: {
-            const int strAmts[3] {3, 4, 5};
+            const int strAmts[3] {2, 3, 4};
             buff<MS::STRENGTH>(strAmts[bossDiffIdx]);
             rollMove(bc);
             break;
@@ -1302,7 +1302,10 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
 
         case MMID::THE_COLLECTOR_BUFF: { //3
             const int strAmounts[3] {3, 4, 5};
+            // Block follows TheCollector's blockAmt (15, A9+ 18) +5 at A19 -- the A9 HP-tier
+            // gate, NOT the A4 damage/strength tier bossDiffIdx uses.
             const int blockAmounts[3] {15, 18, 23};
+            const int blockIdx = getTriIdx(bc.ascension, 9, 19);
 
             for (int i = 0; i < 2; ++i) {
                 auto &torchHead = bc.monsters.arr[i];
@@ -1311,7 +1314,7 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
                 }
             }
             buff<MS::STRENGTH>(strAmounts[bossDiffIdx]);
-            addBlock(blockAmounts[bossDiffIdx]);
+            addBlock(blockAmounts[blockIdx]);
 
             bc.addToBot(Actions::RollMove(idx));
             break;
