@@ -2781,10 +2781,41 @@ class STSLightspeedAgent:
     def handle_error(self, error):
         raise Exception(error)
 
+    def _reset_combat_carry(self):
+        """Forget every piece of per-fight carried state. Runs on EVERY observed non-combat state
+        (room_phase left COMBAT) -- the positive battle-over signal: reward/event/map screens follow
+        every fight, including between Colosseum's two same-floor fights, so no floor/turn heuristic
+        has to infer the boundary. The floor/turn stale guards in the reconcile and the select path
+        remain only as backstops for a missed emit."""
+        if self._pbc is not None:
+            # A pbc that outlives its fight was left PARKED by a fight-ending play (a clean end
+            # reaches a decided outcome and is dropped in _pbc_advance).
+            print(f"[pbc] live left combat with the bc still carried "
+                  f"(input_state={self._pbc.input_state}); dropping it", file=sys.stderr)
+            self._pbc = None
+        self._pbc_decided = None
+        self._pbc_floor = None
+        self._pbc_live_turn = None
+        self._pbc_last_end_turn = None
+        self._shadow_prev_bc = None
+        self._shadow_prev_action = None
+        self._shadow_prev_draw_top = None
+        self._shadow_prev_floor = None
+        self._known_draw_top = []
+        self._known_draw_bottom = []
+        self._known_draw_floor = None
+        self._last_acted_combat_sig = None
+        self._last_combat_action_sent = None
+        self._dedup_stuck_since = None
+
     def get_next_action_in_game(self, game_state):
         self.choice_count += 1
         self.game = game_state
         self._log_seed_once()
+        # Positive battle-over signal: the room left the COMBAT phase, so all per-fight carried
+        # state (persistent bc, shadow one-step, draw knowledge, combat dedup) is now stale.
+        if not self.game.in_combat:
+            self._reset_combat_carry()
         # Persist the raw incoming state BEFORE we touch it, so a silent C++ segfault during
         # processing (no Python traceback) still leaves the triggering state on disk for offline
         # repro. Overwrites each decision; the file is the last state we started to handle.
@@ -3554,13 +3585,11 @@ class STSLightspeedAgent:
             return False
         live_turn = getattr(self.game, "turn", None) or 0
         if self._pbc_floor != self.game.floor or live_turn < (self._pbc_live_turn or 0):
-            # The pbc was parked in a PREVIOUS fight: its final play opened a sub-input in the sim,
-            # but the live fight ended on that play (live skips e.g. Headbutt's discard-select when
-            # the kill ends combat, while the engine opens it before resolving the kill), so no
-            # combat decision ever ran the reconcile's stale-pbc drops. A new floor marks the next
-            # fight; a same-floor live-turn regression marks Colosseum's second fight. Either way
-            # the park is stale for this select -- drop the pbc and resolve on the fresh
-            # reconstruction.
+            # Backstop only: a pbc parked by a fight-ending play is normally dropped by
+            # _reset_combat_carry on the first non-combat state after the fight. Reaching here
+            # means that emit was missed -- a new floor, or a same-floor live-turn regression
+            # (Colosseum's second fight), still marks the park as a previous fight's; drop the
+            # pbc and resolve on the fresh reconstruction.
             print(f"[pbc] parked select ({self._pbc.card_select_task}) is stale (parked at floor "
                   f"{self._pbc_floor} turn {self._pbc_live_turn}, live at floor {self.game.floor} "
                   f"turn {live_turn}); dropping the pbc", file=sys.stderr)
