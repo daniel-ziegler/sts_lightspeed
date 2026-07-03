@@ -3,6 +3,13 @@
 Repository-level guidance for Claude. See `AGENTS.md` for the general project docs (build,
 testing, architecture, etc.); the notes below are Claude-specific rules of engagement.
 
+## No shortcuts
+
+We want FULL CORRECTNESS. No edge cases that don't quite work right. If you can't figure out
+how to solve something 100% correctly, please flag it loudly to me. If I've told you to 
+proceed autonomously, do so but log the issue in a `CORRECTNESS_ISSUES.md` file and tell me
+next time I'm there.
+
 ## Comment style
 
 Comments describe the current code, not its history. **Never write "tombstone comments"** that
