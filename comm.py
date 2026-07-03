@@ -3552,6 +3552,17 @@ class STSLightspeedAgent:
         observed live draw-top first, so the pbc plays the same card and opens the same select.)"""
         if not self._pbc_drive or self._pbc is None:
             return False
+        if self._pbc_floor != self.game.floor:
+            # The pbc was parked in a PREVIOUS fight: its final play opened a sub-input in the sim,
+            # but the live fight ended on that play (live skips e.g. Headbutt's discard-select when
+            # the kill ends combat, while the engine opens it before resolving the kill), so no
+            # combat decision ever ran the reconcile's floor-drop. The park is stale for this
+            # floor's select -- drop the pbc and resolve on the fresh reconstruction.
+            print(f"[pbc] parked select ({self._pbc.card_select_task}) is stale (parked at floor "
+                  f"{self._pbc_floor}, live at floor {self.game.floor}); dropping the pbc",
+                  file=sys.stderr)
+            self._pbc = None
+            return False
         if self._pbc.input_state == sts.InputState.CARD_SELECT:
             if self._pbc.card_select_task == task:
                 return True
