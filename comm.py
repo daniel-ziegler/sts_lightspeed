@@ -2688,10 +2688,7 @@ class STSLightspeedAgent:
         # Persistent-bc shadow carry-over between combat decisions: the prior decision's reconstructed
         # bc, the action taken, and the live draw-pile top (id, upgrade) for forcing a Havoc draw. All
         # None between decisions or when an intervening screen invalidates the one-step prediction.
-        self._shadow_prev_bc = None
-        self._shadow_prev_action = None
-        self._shadow_prev_draw_top = None
-        self._shadow_prev_floor = None
+        self._shadow_reset()
         # Persistent-bc bridge (PERSISTENT_BC_PHASE2.md), gated behind STS_PBC_DRIVE (default OFF).
         # When on, one engine-advanced BattleContext is carried across a combat's decisions and the
         # live combat decision is searched on the reconciled pbc instead of a fresh per-decision
@@ -2781,6 +2778,13 @@ class STSLightspeedAgent:
     def handle_error(self, error):
         raise Exception(error)
 
+    def _shadow_reset(self):
+        """Invalidate the shadow's one-step prediction (prior bc, action, draw top, floor)."""
+        self._shadow_prev_bc = None
+        self._shadow_prev_action = None
+        self._shadow_prev_draw_top = None
+        self._shadow_prev_floor = None
+
     def _reset_combat_carry(self):
         """Forget every piece of per-fight carried state. Runs on EVERY observed non-combat state
         (room_phase left COMBAT) -- the positive battle-over signal: reward/event/map screens follow
@@ -2797,10 +2801,7 @@ class STSLightspeedAgent:
         self._pbc_floor = None
         self._pbc_live_turn = None
         self._pbc_last_end_turn = None
-        self._shadow_prev_bc = None
-        self._shadow_prev_action = None
-        self._shadow_prev_draw_top = None
-        self._shadow_prev_floor = None
+        self._shadow_reset()
         self._known_draw_top = []
         self._known_draw_bottom = []
         self._known_draw_floor = None
@@ -2942,10 +2943,7 @@ class STSLightspeedAgent:
         prev_action = self._shadow_prev_action
         prev_draw_top = self._shadow_prev_draw_top
         prev_floor = self._shadow_prev_floor
-        self._shadow_prev_bc = None
-        self._shadow_prev_action = None
-        self._shadow_prev_draw_top = None
-        self._shadow_prev_floor = None
+        self._shadow_reset()
         if prev_bc is None or prev_action is None:
             return
         # A combat lives on exactly one floor; the next fight is a higher floor. If the floor changed,
@@ -3613,10 +3611,7 @@ class STSLightspeedAgent:
         action_name = self.game.current_action
         # A card-select screen intervened between combat decisions -- the prior card play didn't lead
         # directly to the next handle_combat, so the shadow's one-step prediction would be invalid.
-        self._shadow_prev_bc = None
-        self._shadow_prev_action = None
-        self._shadow_prev_draw_top = None
-        self._shadow_prev_floor = None
+        self._shadow_reset()
         # Invalidate the combat duplicate-emit signature: resolving this select is an action that
         # changes the position, but it's committed here (not through handle_combat), so the sig was
         # never updated for it. Without this reset, a post-select combat position that happens to match
@@ -3688,33 +3683,9 @@ class STSLightspeedAgent:
             # through the pick. NO fallback: raise (crash) on failure so the divergence is debuggable.
             if self._pbc_driving_at_select(task):
                 self._pbc_reconcile_at_select(bc, slot_to_spire)
-                return self._pbc_resolve_discovery(task, ids, offered, action_name)
-            if task == sts.CardSelectTask.CODEX:
-                bc.open_codex_select(ids)
-            else:
-                bc.open_discovery_select(ids, 1, True)
-            searcher = sts.BattleSearcher(bc)
-            searcher.search(self.search_agent.configure_searcher(searcher, bc))
-            sel_idx = searcher.get_best_action().get_select_idx()
-            # Nilry's Codex is skippable: the engine's CODEX select validates idx in [0,4) and treats
-            # idx == 3 (one past the 3 offered cards) as "skip" (Action.cpp / BattleSimulator); the live
-            # CARD_REWARD advertises this as skip_available, and the mod routes skip == cancel. Discovery
-            # (open_discovery_select) is not skippable, so this only fires for CODEX.
-            if task == sts.CardSelectTask.CODEX and sel_idx == len(offered):
-                print(f"[mcts] discovery ({action_name}) -> skip (idx {sel_idx})", file=sys.stderr)
-                return CancelAction()
-            if not (0 <= sel_idx < len(offered)):
-                raise RuntimeError(f"MCTS discovery idx {sel_idx} out of range "
-                                   f"({len(offered)} offered, {action_name})")
-            chosen = offered[sel_idx]
-            print(f"[mcts] discovery ({action_name}) -> {chosen.card_id} (idx {sel_idx})",
-                  file=sys.stderr)
-            # A Discovery/potion choice is delivered on a CARD_REWARD screen, where the pick is a
-            # "choose <index>" command (CardSelectAction only works on HAND_SELECT/GRID). The
-            # choice_list / screen.cards order matches sel_idx.
-            if self.game.screen_type == ScreenType.CARD_REWARD:
-                return ChooseAction(sel_idx)
-            return CardSelectAction([chosen])
+                return self._resolve_discovery(self._pbc, task, ids, offered, action_name,
+                                               driven=True)
+            return self._resolve_discovery(bc, task, ids, offered, action_name, driven=False)
 
         # When driving, resolve on a bc reconciled from LIVE at the select (pool == the live screen)
         # with the carried hidden monster state transplanted, then advance the pbc through it. This
@@ -3770,37 +3741,47 @@ class STSLightspeedAgent:
               f"{', pbc-driven' if driven else ''})", file=sys.stderr)
         return live_card, chosen_action
 
-    def _pbc_resolve_discovery(self, task, ids, offered, action_name):
-        """Drive an in-combat Discovery/Codex select on the parked pbc: OVERWRITE its rolled
-        candidates with the live-observed offered cards (the pbc rolled its own from a desynced RNG;
-        reality's offered set is observable), search, and advance the pbc through the pick. The chosen
-        index lines up with `offered` (ids were built from it in order). Returns the live action;
-        raises (crashes -- no fallback) on an invalid pick or an unclean resolution."""
+    def _resolve_discovery(self, select_bc, task, ids, offered, action_name, driven):
+        """Resolve an in-combat Discovery/Codex select on `select_bc`: inject the live-observed
+        offered cards as the candidates (a driven pbc rolled its own from a desynced RNG; reality's
+        offered set is observable), search, and commit the pick to the live screen. The chosen index
+        lines up with `offered` (ids were built from it in order). When driven, `select_bc` is the
+        parked pbc and is also advanced through the pick, which must land it back in a clean player
+        turn. Raises (crashes -- no fallback) on an invalid pick or an unclean resolution."""
         if task == sts.CardSelectTask.CODEX:
-            self._pbc.open_codex_select(ids)
+            select_bc.open_codex_select(ids)
         else:
-            self._pbc.open_discovery_select(ids, 1, True)
-        searcher = sts.BattleSearcher(self._pbc)
-        searcher.search(self.search_agent.configure_searcher(searcher, self._pbc))
+            select_bc.open_discovery_select(ids, 1, True)
+        searcher = sts.BattleSearcher(select_bc)
+        searcher.search(self.search_agent.configure_searcher(searcher, select_bc))
         chosen_action = searcher.get_best_action()
         sel_idx = chosen_action.get_select_idx()
-        if not chosen_action.is_valid_action(self._pbc):
-            raise RuntimeError(f"discovery pick invalid on persistent bc ({task})")
-        chosen_action.execute(self._pbc)          # advance the pbc through the select (CODEX idx==3 = skip)
-        if (self._pbc.input_state != sts.InputState.PLAYER_NORMAL
-                or self._pbc.outcome != sts.BattleOutcome.UNDECIDED):
-            raise RuntimeError(f"discovery left pbc unclean (input_state={self._pbc.input_state})")
-        self._pbc_prev_action_desc = "DISCOVERY"
+        if driven:
+            if not chosen_action.is_valid_action(select_bc):
+                raise RuntimeError(f"discovery pick invalid on persistent bc ({task})")
+            chosen_action.execute(select_bc)      # advance the pbc through the select (CODEX idx==3 = skip)
+            if (select_bc.input_state != sts.InputState.PLAYER_NORMAL
+                    or select_bc.outcome != sts.BattleOutcome.UNDECIDED):
+                raise RuntimeError(f"discovery left pbc unclean (input_state={select_bc.input_state})")
+            self._pbc_prev_action_desc = "DISCOVERY"
+        suffix = ", pbc-driven" if driven else ""
+        # Nilry's Codex is skippable: the engine's CODEX select validates idx in [0,4) and treats
+        # idx == 3 (one past the 3 offered cards) as "skip" (Action.cpp / BattleSimulator); the live
+        # CARD_REWARD advertises this as skip_available, and the mod routes skip == cancel. Discovery
+        # (open_discovery_select) is not skippable, so this only fires for CODEX.
         if task == sts.CardSelectTask.CODEX and sel_idx == len(offered):
-            print(f"[mcts] discovery ({action_name}) -> skip (idx {sel_idx}, pbc-driven)",
+            print(f"[mcts] discovery ({action_name}) -> skip (idx {sel_idx}{suffix})",
                   file=sys.stderr)
             return CancelAction()
         if not (0 <= sel_idx < len(offered)):
             raise RuntimeError(f"MCTS discovery idx {sel_idx} out of range "
                                f"({len(offered)} offered, {action_name})")
         chosen = offered[sel_idx]
-        print(f"[mcts] discovery ({action_name}) -> {chosen.card_id} (idx {sel_idx}, pbc-driven)",
+        print(f"[mcts] discovery ({action_name}) -> {chosen.card_id} (idx {sel_idx}{suffix})",
               file=sys.stderr)
+        # A Discovery/potion choice is delivered on a CARD_REWARD screen, where the pick is a
+        # "choose <index>" command (CardSelectAction only works on HAND_SELECT/GRID). The
+        # choice_list / screen.cards order matches sel_idx.
         if self.game.screen_type == ScreenType.CARD_REWARD:
             return ChooseAction(sel_idx)
         return CardSelectAction([chosen])
