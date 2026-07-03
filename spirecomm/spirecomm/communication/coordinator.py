@@ -273,6 +273,14 @@ class Coordinator:
         nudged = False
         last_sig = self._state_signature()
         last_progress_t = time.monotonic()
+        last_force_t = 0.0
+        # After this long with no progress and a queued action the game won't accept (it reports
+        # ready_for_command False for far longer than any real transition -- observed on empty
+        # combat-reward frames after taking a chest relic, and on post-buy shop frames), the game is
+        # wedged waiting for input it claims not to want. Force-send the action (bypass the ready gate)
+        # as a rescue before the hard watchdog kills the run; retried periodically until progress.
+        force_after = 60.0
+        force_every = 25.0
         # Track the deepest act/floor reached so a victory can be split into a heart kill (act 4)
         # vs an act-3-only win -- the meaningful distinction for a heart-run agent. (Mirrors the
         # offline eval's heart_win_rate / act3_win_rate.)
@@ -299,8 +307,21 @@ class Coordinator:
                           file=sys.stderr)
                     self.send_message("state")
                     nudged = True
+            stuck = time.monotonic() - last_progress_t
+            # Rescue: a queued action the game won't accept (ready_for_command stuck False) gets
+            # force-sent once progress has stalled well past any real animation. If the send unsticks
+            # the game, the next state advances the signature and this resets; if not, the watchdog
+            # below still fires. execute_next_action pops+sends unconditionally (ignores can_be_executed).
+            if (stuck >= force_after and len(self.action_queue) > 0
+                    and not self.action_queue[0].can_be_executed(self)
+                    and time.monotonic() - last_force_t >= force_every):
+                print(f"[coordinator] no progress for {int(stuck)}s with a queued "
+                      f"{type(self.action_queue[0]).__name__} the game won't accept "
+                      f"(ready_for_command False); force-sending it", file=sys.stderr)
+                self.execute_next_action()
+                last_force_t = time.monotonic()
             # Progress watchdog -- covers both true silence and live no-progress loops.
-            if time.monotonic() - last_progress_t >= 150.0:
+            if stuck >= 150.0:
                 screen = getattr(self.last_game_state, "screen_type", "?")
                 raise RuntimeError(f"No game-state progress for 150s; game appears hung "
                                    f"(last screen: {screen}).")

@@ -2604,6 +2604,10 @@ class STSLightspeedAgent:
         # ("Invalid command: play, ready_for_command:false" -> fatal). We skip a decision whose sig
         # matches the last action's, waiting for the state to actually change.
         self._last_acted_combat_sig = None
+        # When the dedup above first started skipping the current (unchanged) position. If it stays
+        # unchanged far longer than any real resolution transient, the last command didn't take and we
+        # re-decide rather than wait out the hard watchdog. None whenever the position is progressing.
+        self._dedup_stuck_since = None
         self.chosen_class = chosen_class
         self.change_class(chosen_class)
         self.choice_count = 0
@@ -3143,9 +3147,20 @@ class STSLightspeedAgent:
         # coordinator waits for the next state instead. Real progress changes the sig and we act again.
         sig = self._combat_decision_sig()
         if sig == self._last_acted_combat_sig:
-            print("[combat] position unchanged since last action (transient/duplicate emit); "
-                  "waiting for the prior action to resolve", file=sys.stderr)
-            return None
+            now = time.monotonic()
+            if self._dedup_stuck_since is None:
+                self._dedup_stuck_since = now
+            if now - self._dedup_stuck_since < 8.0:
+                print("[combat] position unchanged since last action (transient/duplicate emit); "
+                      "waiting for the prior action to resolve", file=sys.stderr)
+                return None
+            # Unchanged for far longer than any real resolution transient: the last command didn't take
+            # (dropped mid-emit, or an action that doesn't advance the live game), so waiting will only
+            # burn out the 150s watchdog. Release the dedup and re-decide -- re-issuing the command
+            # rescues a dropped send; a genuinely stuck position just re-loops here until the watchdog.
+            print(f"[combat] position unchanged for {now - self._dedup_stuck_since:.0f}s -- prior action "
+                  f"did not advance the game; re-deciding (dedup released)", file=sys.stderr)
+        self._dedup_stuck_since = None
         self._last_acted_combat_sig = sig
         # Convert spirecomm game state to our internal format
         gc = spirecomm_to_gamecontext(self.game)
@@ -3236,24 +3251,25 @@ class STSLightspeedAgent:
         self._shadow_prev_bc = bc
         self._shadow_prev_action = first_action
         self._shadow_prev_floor = self.game.floor
-        # Capture the TRUE top of the live draw pile (group[-1] == AbstractCard getTopCard()), so the
-        # shadow can force the exact card a top-of-deck play (Havoc) draws. The reconstructed pile is
-        # deliberately in unknown order, but the raw live order is real -- observing the top card up
-        # front is direct and robust to any side-effect of the play (extra draws, a power card that
-        # never hits a pile), unlike a post-hoc pile diff. None when the draw pile is empty (Havoc then
-        # reshuffles the discard, whose new order we don't know -- left to diverge).
-        self._shadow_prev_draw_top = None
-        if self.game.draw_pile:
-            top = self.game.draw_pile[-1]
-            cid = map_card_id(top.card_id)
-            if cid != sts.CardId.INVALID:
-                self._shadow_prev_draw_top = (cid, top.upgrades)
+        # Capture the TRUE top of the live draw pile so the shadow can force the exact card a top-of-deck
+        # play (Havoc) draws. The reconstructed pile is deliberately in unknown order, but the raw live
+        # order is real -- observing the top card up front is direct and robust to any side-effect of the
+        # play (extra draws, a power card that never hits a pile), unlike a post-hoc pile diff.
+        self._shadow_prev_draw_top = self._live_draw_top()
 
         # Advance the persistent bc by the action we committed live.
         if self._pbc_drive:
             # The pbc was already reconciled/built before the search (search_bc is self._pbc), so only
             # advance it here through the chosen action.
             if self._pbc is search_bc:
+                # A card played off the top of the draw pile (Havoc) draws whatever is on top; the pbc's
+                # reconstructed draw order is arbitrary, so without help its Havoc plays a DIFFERENT card
+                # than live -- and if live's top is a select-opener (Headbutt), the pbc never opens the
+                # matching select and the parked-select drive diverges. Force the observed live draw-top
+                # onto the pbc first (same mechanism the shadow uses) so a top-of-deck play resolves to
+                # the real card. No-op when live's top isn't in the pbc's draw pile or the pile is empty.
+                if first_action.get_action_type() == sts.ActionType.CARD:
+                    self._force_observed_draw(self._pbc, self._shadow_prev_draw_top)
                 self._pbc_advance(first_action)
                 self._pbc_prev_action_desc = self._describe_action(first_action, bc)
                 if first_action.get_action_type() == sts.ActionType.END_TURN:
@@ -3261,22 +3277,42 @@ class STSLightspeedAgent:
 
         return spirecomm_action
 
+    def _live_draw_top(self):
+        """The live draw pile's top card as (CardId, upgrades), or None if the pile is empty or the top
+        card doesn't map. draw_pile[-1] is AbstractCard.getTopCard() -- the card a top-of-deck play
+        (Havoc) or a start-of-turn Mayhem draws next."""
+        if not self.game.draw_pile:
+            return None
+        top = self.game.draw_pile[-1]
+        cid = map_card_id(top.card_id)
+        if cid == sts.CardId.INVALID:
+            return None
+        return (cid, top.upgrades)
+
     def _pbc_driving_at_select(self, task):
         """True if the driven persistent bc is parked at the expected card-select `task`, so the select
-        resolves on it (carrying the hidden monster state through the pick). False when not driving, or
-        when the pbc is unseeded (None) at a combat-start select (e.g. Gambling Chip before the first
-        decision seeds the pbc) -- there the fresh reconstruction is searched, which is correct because
-        no hidden state exists yet. Raises when driving with a LIVE pbc parked somewhere other than
-        `task`: the pbc and live game disagree on which select opened, a genuine divergence we surface
-        rather than mask by silently searching the reconstruction."""
+        resolves on it (carrying the hidden monster state through the pick). False -> resolve the select
+        on the fresh reconstruction instead, which is correct whenever the pbc isn't parked at this
+        select:
+          - not driving, or the pbc is unseeded (None) at a combat-start select (e.g. Gambling Chip
+            before the first decision seeds the pbc); or
+          - the pbc is at PLAYER_NORMAL because the select was opened by something the drive doesn't
+            advance the pbc through -- a POTION played via the net path (Attack/Skill/Colorless Potion
+            Discovery, Elixir/Gambler exhaust-many), or an unforceable Havoc top-of-deck play. Potions
+            don't touch monster hidden state, so the pbc stays valid for the next decision's reconcile.
+        Raises ONLY on a true contradiction: the pbc opened a card-select for a DIFFERENT task than live
+        (same triggering card, divergent select) -- a genuine sim divergence to surface, not mask.
+
+        (Havoc that plays a select-opener off the top DOES park correctly: _pbc_advance forces the
+        observed live draw-top first, so the pbc plays the same card and opens the same select.)"""
         if not self._pbc_drive or self._pbc is None:
             return False
-        if (self._pbc.input_state == sts.InputState.CARD_SELECT
-                and self._pbc.card_select_task == task):
-            return True
-        raise RuntimeError(f"[pbc] driving but persistent bc not parked at expected card-select {task} "
-                           f"(pbc input_state={self._pbc.input_state}, "
-                           f"pbc task={self._pbc.card_select_task}); pbc/live select divergence")
+        if self._pbc.input_state == sts.InputState.CARD_SELECT:
+            if self._pbc.card_select_task == task:
+                return True
+            raise RuntimeError(f"[pbc] driving: pbc parked at card-select {self._pbc.card_select_task} "
+                               f"but live opened {task} (same play, divergent select)")
+        return False   # PLAYER_NORMAL: select opened by a potion / combat-start / untracked action
 
     def mcts_card_select_action(self):
         """Resolve an in-combat card-select (Armaments/Headbutt/Warcry/Dual Wield/Exhume/...) with
@@ -4265,6 +4301,19 @@ def run_agent_cli():
         except Exception as e:
             print(f"Game error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
+            # Dump the last raw communication state so a hang/crash is debuggable after the fact -- the
+            # errlog otherwise keeps only [step]/[net] summaries, not the raw screen (choice_list,
+            # available_commands, ready_for_command, prices) needed to root-cause e.g. a wedged shop buy.
+            try:
+                raw = getattr(coordinator, "last_raw_communication_state", None)
+                if raw is not None:
+                    dump = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs",
+                                        "game_error_states.jsonl")
+                    with open(dump, "a") as f:
+                        f.write(json.dumps({"error": str(e), "raw": raw}) + "\n")
+                    print(f"[dump] last raw state -> {dump}", file=sys.stderr)
+            except Exception as de:
+                print(f"[dump] failed to write last raw state: {de}", file=sys.stderr)
             break
 
 

@@ -39,7 +39,11 @@ for seed in "${SEEDS[@]}"; do
     pgrep -f '[c]omm.py --character' >/dev/null || { timedout=0; break; }
   done
   pkill -9 -f comm.py 2>/dev/null
-  fb=$(grep -acE "not on the live select screen|on persistent bc failed" "$ERRLOG" 2>/dev/null)
+  # Fallbacks are gone (divergence now crashes): a game that can't be resolved raises, so run_agent_cli
+  # prints "Game error:" + a traceback and the game ends with no "completed with result" line. Count the
+  # crash markers (pbc/shop/unmapped-select RuntimeErrors + the catch-all) rather than the retired
+  # fallback strings.
+  crash=$(grep -acE "Game error:|pbc/live select divergence|driven persistent bc|not parked at expected|shop choice unresolved|unmapped" "$ERRLOG" 2>/dev/null)
   asrt=$(grep -acE "Assertion|BATTLE SEARCH CRASH" "$ERRLOG" 2>/dev/null)
   hang=$(grep -acE "appears hung" "$ERRLOG" 2>/dev/null)
   driven=$(grep -acE "pbc-driven" "$ERRLOG" 2>/dev/null)
@@ -51,17 +55,17 @@ for seed in "${SEEDS[@]}"; do
     elif [ "$timedout" -eq 1 ]; then kind="TIMEOUT"
     else kind="CRASH"; fi
   fi
-  if [ "$fb" -gt 0 ] || [ "$asrt" -gt 0 ] || [ "$hang" -gt 0 ]; then
+  if [ "$crash" -gt 0 ] || [ "$asrt" -gt 0 ] || [ "$hang" -gt 0 ] || [ "$kind" = "CRASH" ]; then
     { echo "=== seed $seed (g$i, kind=$kind) ==="
-      grep -aE "on persistent bc failed|not on the live select screen|Assertion|BATTLE SEARCH CRASH|appears hung|left pbc unclean|did not converge" "$ERRLOG"
+      grep -aE "Game error:|Traceback|pbc/live select divergence|driven persistent bc|not parked at expected|shop choice unresolved|unmapped|Assertion|BATTLE SEARCH CRASH|appears hung|left pbc unclean|did not converge" "$ERRLOG"
     } >> "$ISSUES" 2>/dev/null
   fi
-  echo "g$i seed=$seed kind=${kind}:${floor} driven=$driven fallbacks=$fb asserts=$asrt hangs=$hang" | tee -a "$RESULTS"
+  echo "g$i seed=$seed kind=${kind}:${floor} driven=$driven crashes=$crash asserts=$asrt hangs=$hang" | tee -a "$RESULTS"
 done
 
 echo "=== grind ${RUN} FINAL ===" | tee -a "$RESULTS"
 sum() { grep -oE "$1=[0-9]+" "$RESULTS" | grep -oE '[0-9]+' | paste -sd+ | bc; }
-echo "games=$(grep -c '^g[0-9]' "$RESULTS")  driven=$(sum driven)  fallbacks=$(sum fallbacks)  asserts=$(sum asserts)  hangs=$(sum hangs)" | tee -a "$RESULTS"
+echo "games=$(grep -c '^g[0-9]' "$RESULTS")  driven=$(sum driven)  crashes=$(sum crashes)  asserts=$(sum asserts)  hangs=$(sum hangs)" | tee -a "$RESULTS"
 for k in heart act3 loss HANG CRASH TIMEOUT; do
   echo "$k: $(grep -oE "kind=${k}:" "$RESULTS" | wc -l)" | tee -a "$RESULTS"
 done
