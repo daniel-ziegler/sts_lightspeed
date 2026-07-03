@@ -1341,7 +1341,7 @@ class STSLightspeedAgent:
         Uses playouts.choose_overworld_action -- the SAME decision core rl_train.run_episode uses
         for training/eval -- so heart1 makes the same choice live as it did in training. temperature
         <= 0 (the deploy default) picks greedily; > 0 samples with net_rng."""
-        from playouts import construct_choice, choose_overworld_action
+        from lightspeed.playouts import construct_choice, choose_overworld_action
 
         obs = sts.getNNRepresentation(gc)
         actions = sts.GameAction.getAllActionsInState(gc)

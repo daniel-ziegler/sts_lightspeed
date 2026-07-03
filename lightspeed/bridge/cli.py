@@ -26,8 +26,8 @@ def load_policy_service(ckpt_path, device=None):
     offline replay tooling load without torch). Mirrors eval_hero.py's loader: single net, value
     head, default ModelHP (the architecture rl_train.py used for the heart1 run)."""
     import torch
-    from network import NN, ModelHP, load_network_backward_compatible
-    from playouts import NNService
+    from lightspeed.network import NN, ModelHP, load_network_backward_compatible
+    from lightspeed.playouts import NNService
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
