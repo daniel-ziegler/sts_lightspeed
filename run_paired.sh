@@ -31,9 +31,10 @@ echo "paired ${RUN}: ${N} seeds x {DRIVE,master} at A${ASCLVL} / ${SIMS} sims / 
 run_one () {  # $1=seed $2=tag(drive|master) $3=extra-env-prefix
   local seed="$1" tag="$2"
   env $3 SEED="$seed" ASC="$ASCLVL" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}_${tag}" 1 >/dev/null 2>&1
+  local timedout=1
   for t in $(seq 1 "$TICKS"); do
     sleep 15
-    pgrep -f '[c]omm.py --character' >/dev/null || break
+    pgrep -f '[c]omm.py --character' >/dev/null || { timedout=0; break; }
   done
   pkill -9 -f comm.py 2>/dev/null
   # Harvest the DRIVE arm's fidelity/crash signal before the next launch truncates the errlog.
@@ -47,7 +48,7 @@ run_one () {  # $1=seed $2=tag(drive|master) $3=extra-env-prefix
     kind=$(echo "$line" | grep -oE 'kind=[a-z0-9]+' | cut -d= -f2)
     floor=$(echo "$line" | grep -oE 'max_floor=[0-9]+' | cut -d= -f2)
     echo "${kind}:${floor}"
-  elif pgrep -f '[c]omm.py --character' >/dev/null; then echo "TIMEOUT:?"
+  elif [ "$timedout" -eq 1 ]; then echo "TIMEOUT:?"
   else echo "CRASH:?"; fi
 }
 

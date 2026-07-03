@@ -143,13 +143,10 @@ def watch_battle(gc, agent, battle_delay: float):
 
 def watch_choice(gc, agent, service, rng, temperature: float, choice_delay: float):
     # Mirrors run_episode (rl_train.py): the network only decides screens with >1 representable
-    # option; single-/no-option screens defer to the C++ heuristic pick_gameaction. This gate is
-    # load-bearing -- construct_choice does NOT encode gold/relic/potion rewards (only the card
-    # portion of a REWARDS screen + SKIP), so those are collected by the heuristic on the
-    # follow-up SKIP-only (total==1) reward screen. Without the gate the net runs there and picks
-    # SKIP, forfeiting all gold and relics for the whole run.
-    # Gold/relics aren't in the net's choice space, and SKIP forfeits the whole reward screen --
-    # sweep them up front so the net only ever decides the card.
+    # option; single-/no-option screens defer to the C++ heuristic pick_gameaction. Gold/relic/
+    # potion rewards aren't in the net's choice space (construct_choice encodes only the card
+    # portion of a REWARDS screen, plus SKIP -- and SKIP forfeits the whole screen), so sweep the
+    # free rewards up front and let the net decide only the card.
     swept = take_free_rewards(gc)
     if swept:
         print(f"  (auto-took {len(swept)} free reward(s): gold/relics)", flush=True)

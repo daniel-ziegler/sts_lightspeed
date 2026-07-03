@@ -20,7 +20,6 @@ report() {
   local W H A L
   W=$(grep -ac 'result: True' "$ERRLOG"); L=$(grep -ac 'result: False' "$ERRLOG")
   H=$(grep -ac 'kind=heart' "$ERRLOG"); A=$(grep -ac 'kind=act3' "$ERRLOG")
-  local N=$((W+L)); [ "$N" -eq 0 ] && N=1
   echo "WINS=$W (heart=$H act3=$A)  LOSSES=$L"
   echo "win_rate(incl act3)=$W/$((W+L))   heart_win_rate=$H/$((W+L))   act3_only=$A/$((W+L))"
 }
