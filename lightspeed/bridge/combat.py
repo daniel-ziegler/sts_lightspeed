@@ -314,9 +314,10 @@ _UNKNOWN_INTENT_DEFAULT_MOVE = {
     sts.MonsterId.TORCH_HEAD: sts.MonsterMoveId.TORCH_HEAD_TACKLE,
 }
 
-# The move the engine's die() parks a half-dead monster on (its revival, executed on its next
-# turn). The only monsters the live game reports half_dead: Awakened One (stage-1 death) and
-# Darkling (any death while another darkling stands).
+# Fallback move for a half-dead monster whose committed move the snapshot doesn't report (it
+# normally does): the move the engine's die() parks it on. The only monsters the live game
+# reports half_dead: Awakened One (stage-1 death -> Rebirth) and Darkling (any death while
+# another darkling stands -> the do-nothing idle turn; Reincarnate follows from its own roll).
 _HALF_DEAD_REVIVAL_MOVE = {
     sts.MonsterId.AWAKENED_ONE: sts.MonsterMoveId.AWAKENED_ONE_REBIRTH,
     sts.MonsterId.DARKLING: sts.MonsterMoveId.DARKLING_REGROW,
@@ -481,18 +482,22 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
         move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
     sts_monster.moveHistory = move_history
 
-    # A half-dead monster is mid-revive: the engine's die() parks it on its revival move with
-    # debuffs cleared. The live intent is UNKNOWN, so set that move directly (getMoveForRoll would
-    # also resolve it via the halfDead check, but this mirrors die() and consumes no RNG). Powers
-    # are applied first so the reconstruction mirrors whatever live still reports.
+    # A half-dead monster (Awakened One stage 1, Darkling) is mid-revive. Its committed move IS
+    # exposed live even under an UNKNOWN intent (AO: Rebirth=3; Darkling: idle move 4 the enemy
+    # phase after it fell, THEN Reincarnate=5 with a visible BUFF intent), so the mapped live move
+    # above already parks it in the right phase -- overriding it here would rewind a Darkling
+    # that has already spent its idle turn (it revives THIS enemy phase, not next; drive52 g10's
+    # "pred 0 vs live 29" ET divergence). Only an unreported move falls back to the move die()
+    # parks on. Nothing below applies to a half-dead monster (no damage/hits miscInfo, no rolls).
     if monster.half_dead:
-        revival = _HALF_DEAD_REVIVAL_MOVE.get(sts_monster.id)
-        if revival is None:
-            raise ValueError(f"half-dead {monster.monster_id} has no revival move; "
-                             f"add it to _HALF_DEAD_REVIVAL_MOVE")
         for power in monster.powers:
             apply_monster_power(sts_monster, power.power_id, power.amount)
-        sts_monster.moveHistory = [int(revival), move_history[1]]
+        if not move_known:
+            revival = _HALF_DEAD_REVIVAL_MOVE.get(sts_monster.id)
+            if revival is None:
+                raise ValueError(f"half-dead {monster.monster_id} has no revival move; "
+                                 f"add it to _HALF_DEAD_REVIVAL_MOVE")
+            sts_monster.moveHistory = [int(revival), move_history[1]]
         return
 
     # Awakened One's stage (miscInfo: 0 = unawakened -> die() parks it half-dead for Rebirth;
