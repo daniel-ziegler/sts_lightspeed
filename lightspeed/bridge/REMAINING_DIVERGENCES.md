@@ -28,8 +28,10 @@ Status legend: **ARTIFACT** (shadow measurement noise, not a real gap) · **DEFE
    Signature: pred and live are the same multiset, or paired +K/-K on twins. A fix would be
    shadow-side only (multiset compare / identity alignment).
 2. **RNG-target rolls — ARTIFACT (unverifiable).** Shield Gremlin protects an engine-rolled
-   ally; a Havoc'd attack picks a random target. The one-step shadow can't know the live roll;
-   these could be reclassified `[shadow unverifiable]` the way Runic Dome moves already are.
+   ally; a Havoc'd attack picks a random target; Juggernaut fires its per-block-gain damage at a
+   random enemy (the drive52 g11 SpireShield/Spear lines — every block card "dealt 7" to a
+   different monster in engine vs live). The one-step shadow can't know the live roll; these
+   could be reclassified `[shadow unverifiable]` the way Runic Dome moves already are.
 3. **Havoc on an EMPTY draw pile — DEFERRED.** `playTopCardInDrawPile` queues an
    `EmptyDeckShuffle` (`bc.rng`) whose order the replay can't reproduce, so the played card
    can't be forced. Non-empty Havoc chains are exact: `_pbc_force_live_draw_order` forces the
