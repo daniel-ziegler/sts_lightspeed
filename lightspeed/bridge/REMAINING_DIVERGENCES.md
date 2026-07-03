@@ -63,7 +63,9 @@ Necronomicon `activated` (mod fork exports relic `grayscale`/`activated`; the "A
 halfDead" class was actually Necronomicon double-play); Writhing Mass Flail block; Time Eater
 usedHaste (miscInfo) inference; Time Warp forced end-of-turn; Mayhem moved post-draw; Havoc'd
 Perfected Strike counting its in-flight copy (`autoplay`); Heavy Blade / Mind Blast / Rampage /
-Searing Blow base-damage reconstruction.
+Searing Blow base-damage reconstruction; Awakened One rebirth (engine no longer declares victory
+with a half-dead AO pending; conversion keeps half-dead monsters, parked on their revival move,
+and restores AO's stage from its stage-2-only moves — the drive52 g3 phantom victory).
 
 ## How to refresh this list
 

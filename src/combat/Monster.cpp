@@ -425,10 +425,23 @@ void Monster::die(BattleContext &bc) {
         setMove(MonsterMoveId::AWAKENED_ONE_REBIRTH);
         bc.cardQueue.clear();
 
-    } else if (bc.monsters.monstersAlive == 0 || hasStatus<MS::MINION_LEADER>()) {
+    } else {
+        // A half-dead Awakened One is about to rebirth, so killing the last OTHER monster must not
+        // end the fight (live areMonstersDead treats halfDead as not dead). Darklings still end at
+        // monstersAlive == 0: their fight is over exactly when the last one goes down half-dead.
+        bool rebirthPending = false;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const Monster &m = bc.monsters.arr[i];
+            if (m.id == MonsterId::AWAKENED_ONE && m.isHalfDead()) {
+                rebirthPending = true;
+                break;
+            }
+        }
+        if ((bc.monsters.monstersAlive == 0 && !rebirthPending) || hasStatus<MS::MINION_LEADER>()) {
 //            bc.cleanCardQueue(); // todo should this really return like this?
-        bc.outcome = Outcome::PLAYER_VICTORY;
-        return;
+            bc.outcome = Outcome::PLAYER_VICTORY;
+            return;
+        }
     }
 
     if (hasStatus<MS::SPORE_CLOUD>()) {

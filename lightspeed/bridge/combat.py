@@ -216,6 +216,11 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
     # one that can still split, exactly as native encounters do. slot_to_spire maps each sim slot
     # back to its spirecomm monster_index for translating the searcher's target back to a command.
     slot_to_spire = _build_monster_group(bc, spire_game.monsters)
+    # createMonster counted every converted monster as alive; a half-dead one is not (the engine's
+    # die() decremented it -- its revival move re-increments), and the victory check reads this.
+    for slot, spire_idx in slot_to_spire.items():
+        if spire_game.monsters[spire_idx].half_dead:
+            bc.monsters.monstersAlive -= 1
     _reconstruct_stasis_cards(bc, spire_game, slot_to_spire)
 
     # Boss fights search wider + deeper (SearchAgent gates on isBossEncounter(bc.encounter)); the
@@ -307,6 +312,14 @@ def _infer_elite_encounter(spire_monsters):
 # live move_id), set this fixed move directly instead of rolling. TorchHead only ever tackles.
 _UNKNOWN_INTENT_DEFAULT_MOVE = {
     sts.MonsterId.TORCH_HEAD: sts.MonsterMoveId.TORCH_HEAD_TACKLE,
+}
+
+# The move the engine's die() parks a half-dead monster on (its revival, executed on its next
+# turn). The only monsters the live game reports half_dead: Awakened One (stage-1 death) and
+# Darkling (any death while another darkling stands).
+_HALF_DEAD_REVIVAL_MOVE = {
+    sts.MonsterId.AWAKENED_ONE: sts.MonsterMoveId.AWAKENED_ONE_REBIRTH,
+    sts.MonsterId.DARKLING: sts.MonsterMoveId.DARKLING_REGROW,
 }
 
 # Monsters whose next move is a DETERMINISTIC function of their last move (a fixed alternation set via
@@ -468,6 +481,31 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
         move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
     sts_monster.moveHistory = move_history
 
+    # A half-dead monster is mid-revive: the engine's die() parks it on its revival move with
+    # debuffs cleared. The live intent is UNKNOWN, so set that move directly (getMoveForRoll would
+    # also resolve it via the halfDead check, but this mirrors die() and consumes no RNG). Powers
+    # are applied first so the reconstruction mirrors whatever live still reports.
+    if monster.half_dead:
+        revival = _HALF_DEAD_REVIVAL_MOVE.get(sts_monster.id)
+        if revival is None:
+            raise ValueError(f"half-dead {monster.monster_id} has no revival move; "
+                             f"add it to _HALF_DEAD_REVIVAL_MOVE")
+        for power in monster.powers:
+            apply_monster_power(sts_monster, power.power_id, power.amount)
+        sts_monster.moveHistory = [int(revival), move_history[1]]
+        return
+
+    # Awakened One's stage (miscInfo: 0 = unawakened -> die() parks it half-dead for Rebirth;
+    # 1 = awakened -> death is final) isn't in the snapshot, but stage 2 is observable from its
+    # moves: Dark Echo / Sludge / Tackle exist only awakened, and a seen Rebirth means it revived.
+    if sts_monster.id == sts.MonsterId.AWAKENED_ONE:
+        stage2_moves = {int(sts.MonsterMoveId.AWAKENED_ONE_DARK_ECHO),
+                        int(sts.MonsterMoveId.AWAKENED_ONE_SLUDGE),
+                        int(sts.MonsterMoveId.AWAKENED_ONE_TACKLE),
+                        int(sts.MonsterMoveId.AWAKENED_ONE_REBIRTH)}
+        if any(mv in stage2_moves for mv in sts_monster.moveHistory):
+            sts_monster.miscInfo = 1
+
     # Restore miscInfo for moves whose damage/hit-count the engine reads from it (see the table
     # above). Without this the search predicts 0 incoming damage for these attacks and never blocks
     # them -- the dominant live-combat HP bleed (Louses are everywhere; Hexaghost's Divider is ~36).
@@ -589,7 +627,10 @@ def _build_monster_group(bc: sts.BattleContext, spire_monsters) -> dict:
     # Resolve the live combatants once (alive, non-prop). map_monster_string_to_id raises on unknown.
     live = []
     for spire_idx, monster in enumerate(spire_monsters):
-        if monster.current_hp <= 0 or monster.is_gone:
+        # A half-dead monster (Awakened One stage-1 death, Darkling) reports hp 0 / is_gone but is
+        # still a combatant mid-revive -- dropping it makes the engine end the fight when the last
+        # ordinary monster dies, while live plays the revival (the drive52 g3 phantom victory).
+        if (monster.current_hp <= 0 or monster.is_gone) and not monster.half_dead:
             continue
         # Hexaghost orbs etc. are part of another engine monster, not standalone combatants.
         if monster.monster_id in _MONSTER_IDS_SKIP_IN_COMBAT:
