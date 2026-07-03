@@ -41,7 +41,9 @@ namespace sts::search {
         // targeted slices (thief gold lost 27->4 per battle @~0.1 HP; Writhing Mass implant
         // 68%->24% free; +1.0 max HP per Feed-deck battle) + a 1000-seed paired deployment
         // gate (79.2% vs 77.8% control, no-harm bar). 100 gold == 25 HP per user calibration.
-        double goldLossWeight = 0.25; // per gold permanently lost to an escaped Looter/Mugger
+        double goldWeight = 0.25;     // per effective gold gained/lost vs the search root (Hand
+                                      // of Greed kills, thief steals; gold held by a killed
+                                      // thief refunds at exitBattle so only escapes stay lost)
         double maxHpWeight = 2.0;     // per point of max HP gained vs the search root (Feed, Darkstone)
         double parasitePenalty = 12;  // flat penalty when Writhing Mass's implant will add a Parasite
     };

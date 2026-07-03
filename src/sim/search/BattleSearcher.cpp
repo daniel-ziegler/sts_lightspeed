@@ -792,6 +792,25 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
     return (double)curHpTotal / maxHpTotal;
 }
 
+// The gold the player effectively holds in `bc`: their pocket plus any stolen gold a NOT-escaped
+// Looter/Mugger still carries (exitBattle refunds it whether the thief is dead or merely present
+// at the win). Gold on an ESCAPED thief is gone and excluded.
+static double effectiveGold(const BattleContext &bc) {
+    double gold = bc.player.gold;
+    if (bc.requiresStolenGoldCheck()) {
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const auto &m = bc.monsters.arr[i];
+            const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
+            const bool escaped = m.curHp > 0 && (m.moveHistory[0] == MonsterMoveId::LOOTER_ESCAPE ||
+                                                 m.moveHistory[0] == MonsterMoveId::MUGGER_ESCAPE);
+            if (thief && !escaped) {
+                gold += m.miscInfo;
+            }
+        }
+    }
+    return gold;
+}
+
 double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
     const double potionScore = bc.potionCount * evalWeights.potionWeight;
     // Credit held "cheat death" effects at the HP they would actually restore, so the search keeps
@@ -819,18 +838,14 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
         // postBattleHealedHp: HP after a boss victory reflects the act-transition heal, so the
         // search doesn't value preserving HP that the game is about to restore anyway.
         double score = evalWeights.winBonus + bc.postBattleHealedHp() + potionScore - (bc.turn * evalWeights.victoryTurnPenalty) + deathSaveValue;
-        if (evalWeights.goldLossWeight != 0 && bc.requiresStolenGoldCheck()) {
-            // Gold held by an escaped thief is permanently lost; kills refund it at exitBattle,
-            // so only the escaped case is penalized (steal-then-kill nets the same as no steal).
-            for (int i = 0; i < bc.monsters.monsterCount; ++i) {
-                const auto &m = bc.monsters.arr[i];
-                const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
-                const bool escaped = m.curHp > 0 && (m.moveHistory[0] == MonsterMoveId::LOOTER_ESCAPE ||
-                                                     m.moveHistory[0] == MonsterMoveId::MUGGER_ESCAPE);
-                if (thief && escaped) {
-                    score -= evalWeights.goldLossWeight * m.miscInfo;
-                }
-            }
+        if (evalWeights.goldWeight != 0) {
+            // Effective gold delta vs the search root: values gold gained in combat (Hand of
+            // Greed) and charges gold lost to an escaped thief at the same weight. Gold held by a
+            // NON-escaped thief still counts as the player's -- kills refund it at exitBattle
+            // (steal-then-kill nets the same as no steal); an escape drops it from the sum, so the
+            // steal shows up as a plain negative delta. Root-baselined like maxHpWeight so the
+            // term is a pure delta and cannot distort the victory/loss tradeoff.
+            score += evalWeights.goldWeight * (effectiveGold(bc) - effectiveGold(*rootState));
         }
         if (evalWeights.maxHpWeight != 0) {
             // Max HP gained during the battle (Feed, Darkstone Periapt); baselined at the search
