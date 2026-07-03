@@ -268,7 +268,6 @@ if __name__ == "__main__":
         print(f"  {status}  {name}")
 
     print("\n" + "=" * 80)
-    print("NOTE: If deduplication shows 'INCONCLUSIVE' or 'NOT detected',")
-    print("      this is expected BEFORE implementing the graph search changes.")
-    print("      After implementing GRAPH_SEARCH_PLAN.md, rerun this test to verify.")
+    print("NOTE: 'INCONCLUSIVE' or 'NOT detected' here means graph-search node")
+    print("      deduplication is broken (it is implemented in BattleSearcher).")
     print("=" * 80 + "\n")

@@ -1139,7 +1139,7 @@ PYBIND11_MODULE(slaythespire, m) {
             "history[0]=moveId). The observed-move primitive for the persistent-bc bridge: keeps "
             "moveHistory-driven selection correct for the 61/65 monsters that don't read selection-time "
             "miscInfo. The 4 that do (Champ/Darkling/Book of Stabbing/Gremlin Wizard) need miscInfo "
-            "reconciled separately -- see PERSISTENT_BC_PLAN.md.")
+            "reconciled separately.")
         .def("commit_observed_move", [](Monster &m, int moveId) {
             m.setMove(static_cast<MonsterMoveId>(moveId));
             m.cancelPendingMove();

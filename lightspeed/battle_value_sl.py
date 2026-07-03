@@ -1,6 +1,6 @@
 """Battle-outcome SL lab: does predicting a specific battle's ΔHP improve the value fit?
 
-The gate experiment for BATTLE_OUTCOME_PLAN.md Phase 3. Value task = predict the GAE
+The battle-outcome aux-task gate experiment (EXPERIMENT_LOG.md, 2026-06-12; gate said stop before RL). Value task = predict the GAE
 return-to-go on heart1 episode states (held-out EV, split by game seed — value_sl.py's
 protocol). Battle task = predict a battle's outcome from (state obs, encounter) on
 gen_battle_outcomes.py shards, as 20-bucket CE (--buckets 20) or scaled-float MSE

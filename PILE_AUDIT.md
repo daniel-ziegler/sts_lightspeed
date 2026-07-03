@@ -1,7 +1,7 @@
 # Pile-usage audit (canonical-deck Phase A deliverable)
 
 Every site touching `drawPile` / `discardPile` / `exhaustPile` outside the searcher, classified.
-Gate for Phases B/C of `CANONICAL_DECK_PLAN.md`.
+Gated the canonical-deck pile representation (now landed: CardPile known-top/bottom regions).
 
 ## Classification legend
 - **SIZE/CONTENT** — reads size or membership only; order-independent; no change needed.

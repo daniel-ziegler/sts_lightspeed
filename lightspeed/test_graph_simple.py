@@ -2,8 +2,7 @@
 """
 Simple test for graph search deduplication in BattleSearcher.
 
-Tests the current tree-based implementation as a baseline,
-then can be used to verify graph search after implementing GRAPH_SEARCH_PLAN.md
+Verifies node deduplication in the graph-based BattleSearcher.
 """
 
 import slaythespire as sts
@@ -181,8 +180,7 @@ if __name__ == "__main__":
     print("╔" + "=" * 78 + "╗")
     print("║" + " " * 18 + "GRAPH SEARCH BASELINE TEST" + " " * 31 + "║")
     print("╚" + "=" * 78 + "╝")
-    print("\nThis test establishes a baseline for the current tree-based implementation.")
-    print("After implementing GRAPH_SEARCH_PLAN.md, re-run to verify graph deduplication.\n")
+    print("\nVerifies graph deduplication in the searcher.\n")
 
     results = []
 
@@ -219,9 +217,5 @@ if __name__ == "__main__":
         print(f"  {status}  {name}")
 
     print("\n" + "=" * 80)
-    print("NEXT STEPS:")
-    print("  1. Review GRAPH_SEARCH_PLAN.md for implementation details")
-    print("  2. Implement state hashing and node pool architecture")
-    print("  3. Re-run this test to verify graph deduplication works")
-    print("  4. Run test_graph_search.py for detailed deduplication metrics")
+    print("For detailed deduplication metrics, run test_graph_search.py")
     print("=" * 80 + "\n")

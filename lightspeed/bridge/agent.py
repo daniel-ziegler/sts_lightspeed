@@ -61,7 +61,7 @@ class STSLightspeedAgent:
         # bc, the action taken, and the live draw-pile top (id, upgrade) for forcing a Havoc draw. All
         # None between decisions or when an intervening screen invalidates the one-step prediction.
         self._shadow_reset()
-        # Persistent-bc bridge (PERSISTENT_BC_PHASE2.md), gated behind STS_PBC_DRIVE (default OFF).
+        # Persistent-bc bridge, gated behind STS_PBC_DRIVE (default OFF).
         # When on, one engine-advanced BattleContext is carried across a combat's decisions and the
         # live combat decision is searched on the reconciled pbc instead of a fresh per-decision
         # reconstruction -- so the search sees the engine-evolved hidden state the reconstruction can't
@@ -304,7 +304,7 @@ class STSLightspeedAgent:
         (Action.execute) and diff the predicted deterministic state against this decision's freshly
         reconstructed (ground-truth) bc. A mismatch in player/monster hp/block/energy means the engine
         mis-simulated the card's effect vs the real game -- a fidelity bug contributing to the
-        live<->offline gap. See PERSISTENT_BC_PLAN.md.
+        live<->offline gap. See REMAINING_DIVERGENCES.md (this directory) for the known classes.
 
         Phase 1b also covers END_TURN: the reconstruction sets each monster's CURRENT move from the
         visible intent, so executing END_TURN runs the *real* monster moves -- any divergence in the

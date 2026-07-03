@@ -1,0 +1,78 @@
+# Remaining live<->engine divergences
+
+Living list of known fidelity gaps between the engine and the live game, as surfaced by the live
+bridge (this package). Two detection channels:
+
+- **Driven path (crashes, not logs).** With `STS_PBC_DRIVE` a fight runs on one engine-advanced
+  `BattleContext`; observable divergence fails loud — the per-decision conversion asserts (intent
+  damage, card base damage), pbc/live select mismatches, and the decided-outcome check (engine
+  thinks the fight ended; live continues). Every grind crash is a fidelity bug to root-cause;
+  none are currently known open (drive51's four crashes each produced a fix: Heavy Blade/Mind
+  Blast/Rampage/Searing Blow damage display, Mayhem post-draw, Havoc'd Perfected Strike, stale
+  select parks).
+- **Shadow check (logging only).** `_shadow_card_play_check` (`agent.py`) advances the PRIOR
+  decision's fresh reconstruction by the observed action and diffs deterministic scalars (player
+  hp/block/energy, hand size, per-monster hp/block) against the next decision's reconstruction,
+  logging `[shadow DIVERGE]`. It measures the same engine step the drive executes but from a
+  lossier baseline (per-decision reconstruction), so most residual noise lives here. **Slated for
+  removal** once the classes below are either fixed or covered by driven-path crash checks.
+
+Status legend: **ARTIFACT** (shadow measurement noise, not a real gap) · **DEFERRED**
+(understood; fix not worth it yet) · **OPEN** (not fully root-caused).
+
+## Open / deferred classes
+
+1. **Identical-monster slot churn — ARTIFACT.** After a kill, the fresh reconstruction packs
+   survivors at different slots than the engine-advanced bc (which keeps INVALID gaps); twin
+   monsters (2x BronzeOrb / Dagger / Spiker / JawWorm) churn assignment between decisions.
+   Signature: pred and live are the same multiset, or paired +K/-K on twins. A fix would be
+   shadow-side only (multiset compare / identity alignment).
+2. **RNG-target rolls — ARTIFACT (unverifiable).** Shield Gremlin protects an engine-rolled
+   ally; a Havoc'd attack picks a random target. The one-step shadow can't know the live roll;
+   these could be reclassified `[shadow unverifiable]` the way Runic Dome moves already are.
+3. **Havoc on an EMPTY draw pile — DEFERRED.** `playTopCardInDrawPile` queues an
+   `EmptyDeckShuffle` (`bc.rng`) whose order the replay can't reproduce, so the played card
+   can't be forced. Non-empty Havoc chains are exact: `_pbc_force_live_draw_order` forces the
+   full live pile order before every driven advance, so recursive Havoc-into-Havoc replays
+   reality. Rare, and the next per-decision reconcile masks it.
+4. **Mayhem draw-top shift — DEFERRED (unverifiable residue).** Mayhem fires post-draw (engine
+   fixed 2026-07-03) and the top it plays is forced when observable, but the top can shift
+   between the end-turn decision and the play (monster-turn status shuffles, a reshuffle,
+   stacked Mayhem), leaving some end-turns unverifiable rather than wrong.
+5. **Writhing Mass residual hp-only ET diffs — OPEN.** Malleable / Flail block are modeled now
+   (Hand of Greed routed through `attacked()`, asc-correct Flail block), but a small hp-only
+   end-turn residue in WM fights is still unexplained.
+6. **Energy ±1 counter drift — OPEN (low volume).** Happy Flower / Art of War / Nunchaku /
+   Gremlin Horn counters advance on monster-turn events the per-decision reconstruction can't
+   see. The carried pbc tracks them correctly, so this is shadow-only.
+7. **Runic Dome hidden miscInfo — DEFERRED.** Under Dome, made moves are force-committed onto
+   the shadow (`commit_observed_move`), but the miscInfo monsters (Champ / Darkling / Book of
+   Stabbing / Gremlin Wizard) keep hidden per-hit state that can't be recovered, so their
+   forced end-turns can still genuinely diverge.
+8. **Colosseum elites + Slaver's Collar — DEFERRED edge.** The +1 energy gates on the room's
+   `eliteTrigger`, which the bridge can't see for an EventRoom elite (Colosseum), so the Collar
+   goes ungranted there.
+
+## Fixed (context; no longer divergences)
+
+In fix order: Iron Wave double-`calculateCardBlock`; Havoc draw-order forcing;
+cardDrawPerTurn/Snecko; Slaver's Collar energy (incl. event-boss rooms); Berserk; the act-4
+Smoke Bomb/Surrounded gate; relic onEquip HP/gold double-count; the shadow cross-combat floor
+gate; Panache countdown-vs-damage mapping + `panacheCounter`; Centennial Puzzle used-flag and
+Necronomicon `activated` (mod fork exports relic `grayscale`/`activated`; the "Awakened One
+halfDead" class was actually Necronomicon double-play); Writhing Mass Flail block; Time Eater
+usedHaste (miscInfo) inference; Time Warp forced end-of-turn; Mayhem moved post-draw; Havoc'd
+Perfected Strike counting its in-flight copy (`autoplay`); Heavy Blade / Mind Blast / Rampage /
+Searing Blow base-damage reconstruction.
+
+## How to refresh this list
+
+With a run's errlog scoped (`STS_COMM_CAPTURE` run, truncated per launch):
+```
+grep -a '\[shadow DIVERGE\] (ET)'  "$ERRLOG" | head
+grep -a '\[shadow DIVERGE\] (CARD)' "$ERRLOG" | grep -v Havoc | head
+grep -ao 'force=[a-z-]*' "$ERRLOG" | sort | uniq -c
+```
+The CARD lines carry `[dex= str= frail= preblk= prehp= force=]` context for root-causing.
+On the driven path, also check the crash markers: `Game error:`, `predicted combat over`,
+`invalid on driven`, `not parked at expected`.

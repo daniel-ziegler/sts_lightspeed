@@ -1,5 +1,5 @@
 """Bucket scheme for battle-outcome (ΔHP) prediction. Shared by data generation
-(gen_battle_outcomes.py) and the SL/RL heads. See BATTLE_OUTCOME_PLAN.md.
+(gen_battle_outcomes.py) and the SL/RL heads. See EXPERIMENT_LOG.md (2026-06-12, battle-outcome aux task).
 
 20 classes over hp_delta as a fraction of MAX HP:
     0           DEATH (battle lost)
