@@ -41,6 +41,8 @@ namespace sts::search {
         // targeted slices (thief gold lost 27->4 per battle @~0.1 HP; Writhing Mass implant
         // 68%->24% free; +1.0 max HP per Feed-deck battle) + a 1000-seed paired deployment
         // gate (79.2% vs 77.8% control, no-harm bar). 100 gold == 25 HP per user calibration.
+        // The unified goldWeight delta passed its own 600-seed matched no-harm gate (83.7% vs
+        // 83.5% control, McNemar z=+0.22; heart1 iter_2575, A0, 1000 sims, 2026-07-03).
         double goldWeight = 0.25;     // per effective gold gained/lost vs the search root (Hand
                                       // of Greed kills, thief steals; gold held by a killed
                                       // thief refunds at exitBattle so only escapes stay lost)

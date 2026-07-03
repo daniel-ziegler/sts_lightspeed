@@ -18,6 +18,16 @@ recover an unknown chunk of the gap. All entries below predate honest mode unles
 
 ---
 
+## 2026-07-03 (combat objective: unified gold delta — no-harm gate PASSED)
+
+goldWeight (0.25/gold, replacing goldLossWeight) now scores a root-baselined delta of EFFECTIVE
+gold — pocket + stolen gold held by not-escaped Looters/Muggers (exitBattle refunds it) — so Hand
+of Greed kills are finally worth ~5-6 HP-equivalent to the search, while escaped-thief losses
+price identically to the old penalty. Gate: 600 matched seeds, heart1.pt.iter_2575, A0, 1000
+sims, eval_hero control (pre-change engine) vs treatment. Result: control 501/600 (83.5%) vs
+treatment 502/600 (83.7%); discordant pairs 11 treatment-only vs 10 control-only, McNemar
+z=+0.22 — no significant difference, no-harm bar met. Commit b75776f.
+
 ## 2026-06-20 (heart1 card-preference re-analysis @iter 1950/1955 + boss/ascension conditioning)
 
 Re-ran the card-preference diagnostics on the latest heart1 checkpoint (iter 1950, episodes
