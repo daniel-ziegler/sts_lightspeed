@@ -75,7 +75,13 @@ The `test` executable provides various testing and simulation modes:
 
 ### Python Integration
 
-The codebase includes Python files for ML training and data generation:
+All Python code lives in the `lightspeed/` package and runs from the repo root as
+`python3 -m lightspeed.<module>` (keeping the root `slaythespire` extension module and the
+vendored `spirecomm/` importable). One-off analysis/probe scripts are in `lightspeed/analysis/`;
+the live-game bridge is the `lightspeed/bridge/` subpackage (mappings / combat / overworld /
+actions / seeds / agent / cli), with the repo-root `comm.py` as its runnable entry point.
+
+Key modules for ML training and data generation:
 
 - **`network.py`** - Complete neural network architecture using transformer layers to predict win probabilities for card/relic choices and fixed actions. Includes custom embeddings, attention mechanisms, and data processing utilities
 - **`train.py`** - Training pipeline with hyperparameter sweeping, validation splits, and comprehensive evaluation including ROC curves and card/relic statistics. Supports command-line arguments for flexible training configuration

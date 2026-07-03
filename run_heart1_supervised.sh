@@ -20,7 +20,7 @@ while true; do
   it=$(ls runs/heart1.pt.iter_* 2>/dev/null | grep -v optimizer | sed 's/.*iter_//' | sort -n | tail -1)
   RESUME=""
   [ -n "$it" ] && RESUME="--resume-from-step $it"
-  python -u rl_train.py --algo ppo --seed 1 \
+  python -u -m lightspeed.rl_train --algo ppo --seed 1 \
     --num-games-per-step 512 --num-epochs 2 --batch-size 192 \
     --num-iterations 9999 --mcts-simulations 1000 --battle-timeout 60 \
     --reward-function heart \

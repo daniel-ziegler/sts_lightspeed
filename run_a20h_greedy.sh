@@ -15,7 +15,7 @@ while true; do
   fi
   prev=$done
   echo "$(date -u +%T) (re)starting eval at $done/1000 done" >> "$LOG"
-  nice -n 10 python3 eval_hero.py \
+  nice -n 10 python3 -m lightspeed.eval_hero \
     --ckpt nets/heart1.pt.iter_2575 \
     --ascension 20 --mcts-sims 10000 --battle-timeout 900 \
     --num-workers 8 --n-games 1000 --temperature 0 \
