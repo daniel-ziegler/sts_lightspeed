@@ -27,7 +27,7 @@ from lightspeed.bridge.actions import (
 )
 from lightspeed.bridge.seeds import seed_long_to_string
 from spirecomm.communication.action import (
-    BossRewardAction, CancelAction, CardRewardAction, CardSelectAction, ChooseAction,
+    Action, BossRewardAction, CancelAction, CardRewardAction, CardSelectAction, ChooseAction,
     ChooseMapBossAction, ChooseMapNodeAction, ChooseShopkeeperAction, CombatRewardAction,
     EndTurnAction, OpenChestAction, PlayCardAction, ProceedAction, RestAction, RewardType,
     StartGameAction,
@@ -84,9 +84,12 @@ class STSLightspeedAgent:
         self._known_draw_top = []
         self._known_draw_bottom = []
         self._known_draw_floor = None
-        # (floor, outcome) set when _pbc_advance executed to a decided outcome: if the same fight then
-        # continues live, the engine mis-simulated the finish and _pbc_reconcile_build crashes.
+        # (floor, outcome, via_smoke_bomb) set when _pbc_advance executed to a decided outcome: if
+        # the same fight then continues live, the engine mis-simulated the finish and
+        # _pbc_reconcile_build crashes -- except a smoke-bomb escape, whose live exit animation
+        # handle_combat waits out (bounded by _pbc_escape_waits).
         self._pbc_decided = None
+        self._pbc_escape_waits = 0
         # Live turn we last advanced the pbc through via the out-of-handle_combat end-turn path
         # (get_next_action_in_game), to dedup a repeated end-turn emit (that path has no transient
         # guard). Reset per combat seed.
@@ -170,6 +173,7 @@ class STSLightspeedAgent:
                   f"(input_state={self._pbc.input_state}); dropping it", file=sys.stderr)
             self._pbc = None
         self._pbc_decided = None
+        self._pbc_escape_waits = 0
         self._pbc_floor = None
         self._pbc_live_turn = None
         self._pbc_last_end_turn = None
@@ -628,7 +632,10 @@ class STSLightspeedAgent:
             # The engine predicts this combat is OVER. Normally live ends with it and the next combat
             # decision belongs to a new fight; if one arrives for THIS fight instead, the engine
             # mis-simulated the finish -- _pbc_reconcile_build checks the marker and crashes there.
-            self._pbc_decided = (self._pbc_floor, str(self._pbc.outcome))
+            # A Smoke Bomb escape is flagged: live plays a ~2.5s escape animation during which the
+            # room still reports COMBAT, so handle_combat waits that transient out instead.
+            self._pbc_decided = (self._pbc_floor, str(self._pbc.outcome),
+                                 bool(self._pbc.smoke_bomb_used))
             self._pbc = None
             return
         ist = self._pbc.input_state
@@ -684,6 +691,21 @@ class STSLightspeedAgent:
         # which otherwise leaves no clue (the "Running N simulations" log comes only after conversion).
         print(f"[step] handle_combat floor={self.game.floor} act={self.game.act} "
               f"turn={getattr(self.game, 'combat_round', '?')}", file=sys.stderr)
+        # Smoke Bomb ended the fight in the engine (escape = instant PLAYER_VICTORY), but the live
+        # game plays a ~2.5s escape animation (player.isEscaping) during which the room still
+        # reports COMBAT with the potion already consumed. The fight IS over -- wait for the room
+        # to leave combat (the not-in_combat state then resets all carry) instead of treating the
+        # transient as a mis-simulated finish. Bounded: an escape that genuinely failed live would
+        # sit in combat past the animation, and that IS a divergence worth crashing on.
+        if (self._pbc_decided is not None and self._pbc_decided[0] == self.game.floor
+                and self._pbc_decided[2]):
+            self._pbc_escape_waits += 1
+            if self._pbc_escape_waits > 8:
+                raise RuntimeError(f"[pbc] smoke-bomb escape never left combat "
+                                   f"({self._pbc_escape_waits - 1} waits) -- live escape failed")
+            print("[pbc] smoke-bomb escape pending; waiting for the room to leave combat",
+                  file=sys.stderr)
+            return Action("wait 30")
         # Drop a transient/duplicate emit: if the position hasn't changed since our last action, that
         # action is still resolving in the live game. Re-deciding now would send a second command into
         # a busy game (ready_for_command=false) and get a fatal "Invalid command". Return None so the

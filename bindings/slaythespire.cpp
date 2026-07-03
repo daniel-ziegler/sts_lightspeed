@@ -829,6 +829,7 @@ PYBIND11_MODULE(slaythespire, m) {
     pybind11::class_<BattleContext> battleContext(m, "BattleContext");
     battleContext.def_readwrite("turn", &BattleContext::turn)
         .def_readwrite("ascension", &BattleContext::ascension)
+        .def_readonly("smoke_bomb_used", &BattleContext::smokeBombUsed)
         .def_readwrite("potionCount", &BattleContext::potionCount)
         .def_readwrite("intents_hidden", &BattleContext::intentsHidden)
         .def_property_readonly("player", [](BattleContext &bc) -> Player& {

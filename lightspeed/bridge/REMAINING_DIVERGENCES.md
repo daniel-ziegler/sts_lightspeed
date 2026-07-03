@@ -65,7 +65,10 @@ usedHaste (miscInfo) inference; Time Warp forced end-of-turn; Mayhem moved post-
 Perfected Strike counting its in-flight copy (`autoplay`); Heavy Blade / Mind Blast / Rampage /
 Searing Blow base-damage reconstruction; Awakened One rebirth (engine no longer declares victory
 with a half-dead AO pending; conversion keeps half-dead monsters, parked on their revival move,
-and restores AO's stage from its stage-2-only moves — the drive52 g3 phantom victory).
+and restores AO's stage from its stage-2-only moves — the drive52 g3 phantom victory); Smoke Bomb
+escape semantics (Java escapes only inside a MonsterRoom — event combats waste the potion, now
+blocked in the engine; and a live escape plays a ~2.5s animation during which the room still
+reports COMBAT, which the drive now waits out instead of crashing — the drive52 g7 crash).
 
 ## How to refresh this list
 

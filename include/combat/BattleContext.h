@@ -184,10 +184,10 @@ namespace sts {
         void discardPotion(int idx);
         void drinkPotion(int idx, int target=0);
         // Smoke Bomb can't flee: Java SmokeBomb.canUse() blocks it if any monster.type == BOSS or
-        // any monster has BackAttack. Keying on the encounter (not curRoom) lets you escape an
-        // EVENT boss (Mind Bloom's Guardian) and matches the act-4 SURROUNDED back-attack, which
-        // drops once either of Shield/Spear dies. Gates drinking, search enumeration, and rollout
-        // policies alike -- an ungated use is rejected by the live game / isValidAction assert.
+        // any monster has BackAttack (act-4 SURROUNDED, which drops once either of Shield/Spear
+        // dies) -- and even a permitted drink only ESCAPES inside a MonsterRoom (map monster/elite
+        // rooms); an event-spawned combat just wastes the potion. Gates drinking, search
+        // enumeration, and rollout policies alike.
         [[nodiscard]] bool smokeBombEscapeBlocked() const;
 
         void drawCards(int count);
