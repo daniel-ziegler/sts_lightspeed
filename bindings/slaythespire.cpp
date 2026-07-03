@@ -10,6 +10,8 @@
 
 #include <sstream>
 #include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "constants/MonsterEncounters.h"
 #include "constants/Potions.h"
@@ -826,6 +828,7 @@ PYBIND11_MODULE(slaythespire, m) {
     // Battle Context bindings
     pybind11::class_<BattleContext> battleContext(m, "BattleContext");
     battleContext.def_readwrite("turn", &BattleContext::turn)
+        .def_readwrite("ascension", &BattleContext::ascension)
         .def_readwrite("potionCount", &BattleContext::potionCount)
         .def_readwrite("intents_hidden", &BattleContext::intentsHidden)
         .def_property_readonly("player", [](BattleContext &bc) -> Player& {
@@ -867,6 +870,100 @@ PYBIND11_MODULE(slaythespire, m) {
         .def("get_card_damage_display", &BattleContext::getCardDamageDisplay, "card"_a,
             "engine's in-hand displayed damage for a card (base + player-side modifiers, no target "
             "vulnerable); -1 for non-attacks. Compare to the live card's damage field.")
+        .def("force_draw_pile_order", [](BattleContext &bc, const std::vector<int> &topFirstUniqueIds) {
+            // Reorder the draw pile into a fully KNOWN order: topFirstUniqueIds[0] becomes the next
+            // draw, [1] the one after, and so on. The ids must be exactly the pile's current
+            // uniqueIds (a permutation) -- matching by uniqueId is exact even for twin cards that
+            // differ only in specialData. Consumes no rng and touches no combat counters (the same
+            // instances leave and re-enter the pile). For a driven persistent bc this replays the
+            // OBSERVED live pile order through an advance whose resolution reads the top of the
+            // pile -- a Havoc chain (each nested play pops the true next card), mid-resolution
+            // draws, or the end-turn draw. The bc becomes an oracle of the full order, so it must
+            // never be searched directly afterwards: rebuild observables from the live snapshot
+            // (with an unknown-order pile) before the next search.
+            auto &pile = bc.cards.drawPile;
+            std::unordered_map<int, CardInstance> byId;
+            for (auto it = pile.begin(); it != pile.end(); ++it) {
+                if (!byId.emplace(it->uniqueId, *it).second) {
+                    throw std::invalid_argument("force_draw_pile_order: duplicate uniqueId "
+                                                + std::to_string(it->uniqueId) + " in draw pile");
+                }
+            }
+            if (byId.size() != topFirstUniqueIds.size()) {
+                throw std::invalid_argument("force_draw_pile_order: got "
+                                            + std::to_string(topFirstUniqueIds.size()) + " ids for a pile of "
+                                            + std::to_string(byId.size()));
+            }
+            for (int id : topFirstUniqueIds) {
+                if (byId.find(id) == byId.end()) {
+                    throw std::invalid_argument("force_draw_pile_order: uniqueId "
+                                                + std::to_string(id) + " not in draw pile");
+                }
+            }
+            pile.clear();
+            for (auto it = topFirstUniqueIds.rbegin(); it != topFirstUniqueIds.rend(); ++it) {
+                pile.addToTop(byId.at(*it));   // bottom-up; the last added ([0]) ends on top
+            }
+        }, "top_first_unique_ids"_a,
+            "reorder the draw pile to this exact known order (uniqueIds, top first); throws unless "
+            "the ids are a permutation of the pile's current uniqueIds")
+        .def("force_draw_pile_knowledge", [](BattleContext &bc, const std::vector<int> &topFirstUniqueIds,
+                                             const std::vector<int> &bottomFirstUniqueIds) {
+            // Mark the listed cards as the known TOP (topFirst[0] = the next draw) and known
+            // BOTTOM (bottomFirst[0] = the very bottom) of the draw pile, leaving every other
+            // card in the unknown region -- the player's genuine information set after
+            // Headbutt/Warcry put-backs and Forethought put-unders: they know the cards they
+            // placed, nothing else. Ids must exist in the pile and appear once across both lists;
+            // throws otherwise (and on an order-observed pile, where partial knowledge is
+            // meaningless).
+            auto &pile = bc.cards.drawPile;
+            if (pile.isOrderObserved()) {
+                throw std::invalid_argument("force_draw_pile_knowledge: pile order is fully observed");
+            }
+            std::unordered_map<int, CardInstance> byId;
+            for (auto it = pile.begin(); it != pile.end(); ++it) {
+                if (!byId.emplace(it->uniqueId, *it).second) {
+                    throw std::invalid_argument("force_draw_pile_knowledge: duplicate uniqueId "
+                                                + std::to_string(it->uniqueId) + " in draw pile");
+                }
+            }
+            std::unordered_set<int> listed;
+            for (const auto *ids : {&topFirstUniqueIds, &bottomFirstUniqueIds}) {
+                for (int id : *ids) {
+                    if (byId.find(id) == byId.end() || !listed.insert(id).second) {
+                        throw std::invalid_argument("force_draw_pile_knowledge: uniqueId "
+                                                    + std::to_string(id) + " missing or repeated");
+                    }
+                }
+            }
+            pile.clear();
+            for (const auto &kv : byId) {
+                if (listed.find(kv.first) == listed.end()) {
+                    pile.add(kv.second);              // unknown region
+                }
+            }
+            for (auto it = bottomFirstUniqueIds.rbegin(); it != bottomFirstUniqueIds.rend(); ++it) {
+                pile.addToBottom(byId.at(*it));       // deepest last; [0] ends at the very bottom
+            }
+            for (auto it = topFirstUniqueIds.rbegin(); it != topFirstUniqueIds.rend(); ++it) {
+                pile.addToTop(byId.at(*it));          // bottom-up; [0] ends on top
+            }
+        }, "top_first_unique_ids"_a, "bottom_first_unique_ids"_a,
+            "mark these cards as the KNOWN top ([0] = next draw) and KNOWN bottom ([0] = very "
+            "bottom) of the draw pile, leaving the rest unknown; throws on ids not in the pile, "
+            "repeats, or a fully order-observed pile")
+        .def("set_draw_order_observed", [](BattleContext &bc, bool observed) {
+            // Frozen Eye semantics for a converted state: the player sees the full draw pile order,
+            // so every draw is a deterministic pop and reshuffles materialize concretely (the same
+            // dynamics CardManager::init gives a native battle with the relic). Must be set while
+            // the pile is EMPTY (before the conversion refills it); throws otherwise.
+            if (bc.cards.drawPile.size() > 0) {
+                throw std::invalid_argument("set_draw_order_observed: draw pile must be empty");
+            }
+            bc.cards.drawPile.setOrderObserved(observed);
+        }, "observed"_a,
+            "set Frozen-Eye order-observed mode on the (empty) draw pile; fill it in live order "
+            "with moveToDrawPileTop afterwards")
         .def("open_codex_select", [](BattleContext &bc, std::vector<CardId> cards) {
             // Nilry's Codex: choose 1 of 3 offered cards. Distinct task from DISCOVERY (no
             // cost-to-zero; shuffled into the draw pile, not made free this turn). Inject the live
@@ -916,6 +1013,13 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("nunchakuCounter", &Player::nunchakuCounter)
         .def_readwrite("penNibCounter", &Player::penNibCounter)
         .def_readwrite("sundialCounter", &Player::sundialCounter)
+        // Panache's 5-card countdown (the status amount holds the damage per proc). Writable so a
+        // converted mid-fight state restores the live countdown (PanachePower.amount) -- left at 0
+        // the engine procs on every card play.
+        .def_readwrite("panacheCounter", &Player::panacheCounter)
+        // Necronomicon's per-turn latch. Writable so a converted mid-turn state knows the free
+        // duplication was already spent this turn (live relic 'activated' == false).
+        .def_readwrite("haveUsedNecronomiconThisTurn", &Player::haveUsedNecronomiconThisTurn)
         // The Bomb countdown slots: bombN explodes for that much damage to all enemies N end-of-turns
         // from now (bomb1 fires this end of turn, then slots shift down). Writable so a converted
         // mid-fight state restores in-flight bombs at their correct countdown instead of dropping them.

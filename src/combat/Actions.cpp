@@ -1009,7 +1009,9 @@ void _HandOfGreedAction::operator()(BattleContext &bc) const {
     if (m.isDeadOrEscaped()) {
         return;
     }
-    bc.monsters.arr[idx].damage(bc, damage);
+    // Normal attack damage (HandOfGreed uses DamageType.NORMAL), so onAttacked effects fire:
+    // Malleable/Reactive, Curl Up, The Boot, Envenom. The plain damage() path skips them.
+    bc.monsters.arr[idx].attacked(bc, damage);
 
     const bool effectTriggered = !m.hasStatus<MS::MINION>()
             && !m.isAlive()

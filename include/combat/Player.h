@@ -336,6 +336,13 @@ namespace sts {
             ++combustHpLoss;
         }
 
+        // Panache's status amount is the damage per proc; the 5-card countdown lives in
+        // panacheCounter. Start the countdown on first application (PanachePower's amount starts
+        // at 5); stacking a second Panache only raises the damage, leaving the countdown running.
+        if (s == PS::PANACHE && !hasStatusRuntime(s)) {
+            panacheCounter = 5;
+        }
+
         if (hasStatusRuntime(s)) {
             statusMap[s] += amount;
         } else {

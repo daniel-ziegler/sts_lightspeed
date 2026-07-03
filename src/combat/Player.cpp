@@ -691,12 +691,6 @@ void Player::applyStartOfTurnPowers(BattleContext &bc) {
 //                bc.addToBot( Actions::SetState(InputState::CREATE_RANDOM_CARD_IN_HAND_COLORLESS, pair.second) );
                 break;
 
-            case PS::MAYHEM:
-                for (int i = 0; i < pair.second; i++) {
-                    bc.addToBot( Actions::PlayTopCard(bc.monsters.getRandomMonsterIdx(bc.rng), false) ); // todo fix target
-                }
-                break;
-
             case PS::NEXT_TURN_BLOCK:
                 bc.addToBot( Actions::GainBlock(pair.second) );
                 removeStatus<PS::NEXT_TURN_BLOCK>();
@@ -751,6 +745,16 @@ void Player::applyStartOfTurnPostDrawPowers(BattleContext &bc) {
             case PS::BRUTALITY:
                 bc.addToBot( Actions::PlayerLoseHp(pair.second) );
                 bc.addToBot( Actions::DrawCards(pair.second) );
+                break;
+
+            case PS::MAYHEM:
+                // Plays the POST-draw top of the pile: live uuid tracking shows the turn-start
+                // draw takes the pre-draw top N and Mayhem consumes the next card (an unplayable
+                // top, e.g. Dazed, is discarded). Firing pre-draw played a card the player
+                // actually drew, desyncing the whole turn.
+                for (int i = 0; i < pair.second; i++) {
+                    bc.addToBot( Actions::PlayTopCard(bc.monsters.getRandomMonsterIdx(bc.rng), false) ); // todo fix target
+                }
                 break;
 
             case PS::DEMON_FORM:

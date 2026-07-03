@@ -945,8 +945,14 @@ double search::BattleSearcher::evaluateEndState(const BattleContext &bc) const {
         const double energyPenalty = bc.energyWasted * -evalWeights.energyWasteWeight * (couldHaveSpikers ? 0 : 1);
         const double drawBonus = bc.cardsDrawn * evalWeights.drawWeight;
         const double aliveScore = bc.monsters.monstersAlive * -evalWeights.aliveWeight;
+        // Survival credit rewards dying later in a genuinely lost fight -- but the engine's
+        // infinite-fight safety valve (executeActions: turn > 100 => PLAYER_LOSS) would earn
+        // 1.5/turn * 100+, outscoring any victory, so the search deliberately stalls winnable
+        // fights to the cap (observed live: a 103-turn Gremlin Gang). Zero the credit for
+        // cap losses; real deaths always come far earlier and keep it.
+        const double survivalScore = bc.turn > 100 ? 0 : bc.turn * evalWeights.turnSurvivalWeight;
 
-        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + (bc.turn * evalWeights.turnSurvivalWeight) + deathSaveValue;
+        return (1 - getNonMinionMonsterCurHpRatio(bc)) * evalWeights.monsterDamageWeight + aliveScore + energyPenalty + drawBonus + potionScore / 2 + survivalScore + deathSaveValue;
     }
 }
 

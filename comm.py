@@ -250,9 +250,8 @@ _MONSTER_POWER_ID_TO_STATUS = {
     'Malleable': sts.MonsterStatus.MALLEABLE,
     'Metallicize': sts.MonsterStatus.METALLICIZE,
     # Tag summoned minions (Bronze Orbs, Reptomancer Daggers, Torch Heads, spawned Gremlins) so the
-    # engine's minion-gated logic is correct on a reconstructed fight -- notably Feed not raising max
-    # HP on a minion kill (caught by the persistent-bc shadow: Feed->BronzeOrb gave +3 HP), plus
-    # combat-end / minion-leader checks. Was silently dropped before.
+    # engine's minion-gated logic is correct on a reconstructed fight: Feed's max-HP gain is denied
+    # on a minion kill, and combat-end / minion-leader checks key on it.
     'Minion': sts.MonsterStatus.MINION,
     'Mode Shift': sts.MonsterStatus.MODE_SHIFT,
     'Plated Armor': sts.MonsterStatus.PLATED_ARMOR,
@@ -270,7 +269,6 @@ _MONSTER_POWER_ID_TO_STATUS = {
     'Time Warp': sts.MonsterStatus.TIME_WARP,
     'Vulnerable': sts.MonsterStatus.VULNERABLE,
     'Weakened': sts.MonsterStatus.WEAK,
-    # Engine-modeled monster powers that were previously dropped (the enum existed but wasn't bound).
     'Barricade': sts.MonsterStatus.BARRICADE,     # Spheric Guardian: block doesn't expire each turn
     'Life Link': sts.MonsterStatus.REGROW,        # Darkling: gates Feed's max-HP gain on a revivable kill
     'Painful Stabs': sts.MonsterStatus.PAINFUL_STABS,  # Book of Stabbing: adds a Wound on hit
@@ -282,8 +280,8 @@ _MONSTER_POWER_ID_TO_STATUS = {
 # Monster powers the engine drives INTRINSICALLY from move/encounter logic -- there is no status to
 # set, so skipping them on reconstruction is correct, not a gap. Keep this list tiny and justified:
 # every other power must be mapped above, and an unmapped power now ASSERTS (see apply_*_power). A
-# silently-dropped power mis-simulates invisibly -- that is exactly how the Minion and Life Link
-# (Regrow) bugs hid. Non-Ironclad powers (Watcher/Defect/Silent) can never reach an Ironclad game,
+# silently-dropped power mis-simulates invisibly. Non-Ironclad powers (Watcher/Defect/Silent) can
+# never reach an Ironclad game,
 # so they are deliberately absent here: if one appears it's a real bug and should fail loud.
 _POWER_IDS_ENGINE_INTRINSIC = frozenset({
     'Split',       # slimes split by HP threshold inside the monster move logic (Monster.cpp split moves)
@@ -383,8 +381,7 @@ def apply_the_bomb(bc: sts.BattleContext, countdown: int, damage: int) -> None:
 def apply_monster_power(sts_monster, power_id: str, amount: int) -> None:
     """Apply a live monster power (by stable power_id) to a converted monster. Skips the few powers
     the engine drives intrinsically from move logic (_POWER_IDS_ENGINE_INTRINSIC, e.g. Split); ASSERTS
-    on any other unmapped power -- a silently-dropped monster power mis-simulates invisibly (the Minion
-    and Life Link/Regrow bugs both hid this way)."""
+    on any other unmapped power -- a silently-dropped monster power mis-simulates invisibly."""
     status = _MONSTER_POWER_ID_TO_STATUS.get(power_id)
     if status is None:
         if power_id in _POWER_IDS_ENGINE_INTRINSIC:
@@ -400,9 +397,9 @@ def apply_monster_power(sts_monster, power_id: str, amount: int) -> None:
         sts_monster.buff(status, amount)
     # buff()/addDebuff() flag the status "just applied" (skipFirst), so its FIRST end-of-round effect is
     # skipped -- RitualPower/WeakPower semantics. A mid-fight reconstruction always observes a power
-    # applied on a PRIOR turn (the round it was cast has ended), so clear the flag. Without this the
-    # engine skips Ritual's strength gain EVERY simulated turn (confirmed: a live Cultist with Ritual 4
-    # gained 0 strength per END_TURN instead of 4 -> the search under-models its escalating damage).
+    # applied on a PRIOR turn (the round it was cast has ended), so clear the flag; leaving it set makes
+    # the engine skip the status's first end-of-round tick on EVERY reconstruction (e.g. a Cultist's
+    # Ritual never gains strength in the search's lookahead).
     sts_monster.set_just_applied(status, False)
 
 
@@ -583,14 +580,13 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
                       sts.RelicId.FUSION_HAMMER)
     energy_per_turn = 3 + sum(1 for r in _energy_relics if bc.player.hasRelic(r))
     # Slaver's Collar grants +1 energy/turn when the room's eliteTrigger is set OR any monster's
-    # type == BOSS (SlaversCollar.java onEnergyRecharge). A boss fight reached via an EVENT (Mind
-    # Bloom spawns The Guardian in an EventRoom) still satisfies the boss-monster clause, so gating
-    # on room_type == MonsterRoomBoss misses it -- detect the boss by its encounter signature
-    # instead (same keys as the Java BOSS-type check). Elites only ever appear in MonsterRoomElite,
-    # so room_type is a faithful proxy for eliteTrigger there.
+    # type == BOSS (SlaversCollar.java onEnergyRecharge). Both boss and elite fights can be reached
+    # via an EVENT (Mind Bloom's boss, Dead Adventurer / Colosseum elites), where room_type is
+    # EventRoom -- so detect both by their encounter signature (elite/boss encounters never appear
+    # as normal fights), mirroring the engine's isEliteEncounter/isBossEncounter gate.
     is_boss_fight = _infer_boss_encounter(spire_game.monsters) != sts.MonsterEncounter.INVALID
-    if (bc.player.hasRelic(sts.RelicId.SLAVERS_COLLAR)
-            and (spire_game.room_type == "MonsterRoomElite" or is_boss_fight)):
+    is_elite_fight = _infer_elite_encounter(spire_game.monsters) != sts.MonsterEncounter.INVALID
+    if bc.player.hasRelic(sts.RelicId.SLAVERS_COLLAR) and (is_elite_fight or is_boss_fight):
         energy_per_turn += 1
     bc.player.energyPerTurn = energy_per_turn
 
@@ -601,6 +597,14 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
 
     # Clear the initialized cards to avoid mixing with spirecomm state
     bc.cards.clear()
+
+    # Frozen Eye: the player genuinely sees the full draw pile order, so convert the pile in
+    # order-observed mode -- every card definitely placed in the live order, deterministic pops,
+    # concrete reshuffles: the same dynamics a native battle with the relic gets from
+    # CardManager::init. Must be set while the pile is still empty.
+    frozen_eye = bc.player.hasRelic(sts.RelicId.FROZEN_EYE)
+    if frozen_eye:
+        bc.set_draw_order_observed(True)
     
     # Set the input state to PLAYER_NORMAL so the searcher can find actions
     # InputState enum: EXECUTING_ACTIONS=0, PLAYER_NORMAL=1, CARD_SELECT=2, etc.
@@ -630,6 +634,15 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
             if power.power_id.startswith("TheBomb"):
                 apply_the_bomb(bc, power.amount, power.damage)
                 continue
+            if power.power_id == "Panache":
+                # PanachePower reports the 5..1 card countdown in `amount` and the per-proc damage
+                # in `damage`; the engine keeps them the other way around (status amount = damage,
+                # panacheCounter = countdown). Routed through the generic buff() the countdown
+                # would land in the damage slot and the counter would stay 0 -- which fires a
+                # phantom AoE on EVERY card play.
+                bc.player.buff(sts.PlayerStatus.PANACHE, power.damage or 10)
+                bc.player.panacheCounter = power.amount    # after buff(), which starts it at 5
+                continue
             apply_player_power(bc, power.power_id, power.amount)
 
         # Per-turn play counts (exposed by the forked CommunicationMod). The engine reads these
@@ -658,6 +671,18 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
             bc.player.setHasRelic(sts.RelicId.LIZARD_TAIL, spire_relic.counter != -2)
         elif rid == sts.RelicId.OMAMORI:
             bc.player.setHasRelic(sts.RelicId.OMAMORI, spire_relic.counter > 0)
+        elif rid == sts.RelicId.CENTENNIAL_PUZZLE and getattr(spire_relic, "grayscale", False):
+            # The engine models the once-per-combat draw-3 by clearing the relic bit when it fires
+            # (Player::hpWasLost); the live game grays the relic out at the same moment. Without
+            # this every reconstructed HP loss re-fires it. grayscale needs the forked
+            # CommunicationMod; absent it the relic converts as always-fresh.
+            bc.player.setHasRelic(sts.RelicId.CENTENNIAL_PUZZLE, False)
+        elif rid == sts.RelicId.NECRONOMICON and getattr(spire_relic, "activated", None) is False:
+            # Necronomicon's `activated` latch is True at turn start and False once the free
+            # duplication fired this turn -- so False mid-turn means spent. Without this the
+            # search double-plays every 2+-cost attack for the rest of the turn (engine flag
+            # resets with each fresh reconstruction). Needs the forked mod; None = not exposed.
+            bc.player.haveUsedNecronomiconThisTurn = True
 
     # Card piles conversion - create CardInstance objects from spirecomm cards.
     # Every card needs a DISTINCT uniqueId: the engine tracks cards through hand/queue/piles by id
@@ -682,12 +707,15 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
         _add(spire_card, bc.cards.moveToHand)
 
     if spire_game.draw_pile:
-        # Add to the UNKNOWN region, not the known top: the player can't actually see the draw
-        # order, so the searcher must draw stochastically (chance nodes) like native play.
-        # moveToDrawPileTop would mark the whole pile known-order, letting the search "cheat" on
-        # a reconstructed order and e.g. decline to block because it thinks a Defend is coming.
+        # Without Frozen Eye, add to the UNKNOWN region, not the known top: the live list order is
+        # real but the player can't see it, so the searcher must draw stochastically (chance nodes)
+        # like native play. moveToDrawPileTop would mark the whole pile known-order, letting the
+        # search "cheat" on a reconstructed order and e.g. decline to block because it thinks a
+        # Defend is coming. With Frozen Eye the order IS the player's information: place each card
+        # definitely, live list order (draw_pile[-1] ends on top).
+        mover = bc.cards.moveToDrawPileTop if frozen_eye else bc.cards.moveToDrawPileUnknown
         for spire_card in spire_game.draw_pile:
-            _add(spire_card, bc.cards.moveToDrawPileUnknown)
+            _add(spire_card, mover)
 
     if spire_game.discard_pile:
         for spire_card in spire_game.discard_pile:
@@ -713,7 +741,13 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
 
     # Boss fights search wider + deeper (SearchAgent gates on isBossEncounter(bc.encounter)); the
     # live game doesn't report the encounter, so recover it from the boss monster on the field.
-    bc.encounter = _infer_boss_encounter(spire_game.monsters)
+    # Boss encounters drive the search's wider boss config (SearchAgent gates on isBossEncounter)
+    # and the eval's act-transition heal; elite encounters drive isEliteEncounter consumers. All
+    # other fights keep INVALID, which both predicates treat as "neither".
+    enc = _infer_boss_encounter(spire_game.monsters)
+    if enc == sts.MonsterEncounter.INVALID:
+        enc = _infer_elite_encounter(spire_game.monsters)
+    bc.encounter = enc
 
     return bc, slot_to_spire
 
@@ -752,6 +786,38 @@ def _infer_boss_encounter(spire_monsters):
     INVALID for any non-boss fight."""
     for monster in spire_monsters:
         enc = _BOSS_ENCOUNTER_BY_MONSTER.get(monster.monster_id)
+        if enc is not None:
+            return enc
+    return sts.MonsterEncounter.INVALID
+
+
+# Elite fights recovered from their signature monster, same scheme as _BOSS_ENCOUNTER_BY_MONSTER.
+# Every key appears ONLY in elite encounters (map elites or the event elites -- Dead Adventurer,
+# Colosseum round 2), so a hit is exact; all values satisfy the engine's isEliteEncounter.
+_ELITE_ENCOUNTER_BY_MONSTER = {
+    'GremlinNob': sts.MonsterEncounter.GREMLIN_NOB,
+    'Lagavulin': sts.MonsterEncounter.LAGAVULIN,
+    'Sentry': sts.MonsterEncounter.THREE_SENTRIES,
+    'GremlinLeader': sts.MonsterEncounter.GREMLIN_LEADER,
+    'SlaverBoss': sts.MonsterEncounter.SLAVERS,           # Taskmaster
+    'BookOfStabbing': sts.MonsterEncounter.BOOK_OF_STABBING,
+    'GiantHead': sts.MonsterEncounter.GIANT_HEAD,
+    'Nemesis': sts.MonsterEncounter.NEMESIS,
+    'Reptomancer': sts.MonsterEncounter.REPTOMANCER,
+    'SpireShield': sts.MonsterEncounter.SHIELD_AND_SPEAR,
+    'SpireSpear': sts.MonsterEncounter.SHIELD_AND_SPEAR,
+}
+
+
+def _infer_elite_encounter(spire_monsters):
+    """Return the MonsterEncounter for an elite fight (recognized by its signature monster), or
+    INVALID for any non-elite fight. Colosseum round 2 (Taskmaster + Gremlin Nob together) maps to
+    its own encounter so the inferred id matches the engine's native one."""
+    ids = {m.monster_id for m in spire_monsters}
+    if 'SlaverBoss' in ids and 'GremlinNob' in ids:
+        return sts.MonsterEncounter.COLOSSEUM_EVENT_NOBS
+    for monster in spire_monsters:
+        enc = _ELITE_ENCOUNTER_BY_MONSTER.get(monster.monster_id)
         if enc is not None:
             return enc
     return sts.MonsterEncounter.INVALID
@@ -803,22 +869,26 @@ _MISCINFO_HITS_MOVE_INTS = frozenset(int(m) for m in (
 # per-hit damage / stab count these monsters read from their hidden `miscInfo` stays 0 -> the search
 # predicts 0 incoming damage and NEVER BLOCKS -> compounding chip death (observed: the agent walked
 # into Book of Stabbing at 8 HP thinking its multi-stab did 0). Estimate miscInfo from the monster
-# (and turn for the escalating ones) so the deferred move roll produces a realistic attack. Fixed
-# values are the asc0 means of Monster::construct's rolls (the deployed run is asc0); slightly
-# approximate, but vastly better than 0. Hexaghost Divider (curHp/12) and Gremlin Wizard (charge)
-# are dynamic/rare under RD and left as-is.
+# (and turn for the escalating ones) so the deferred move roll produces a realistic attack. Values
+# are the means of Monster::construct's rolls at the fight's ascension (the rolls step up at A2+);
+# slightly approximate, but vastly better than 0. Hexaghost Divider (curHp/12) and Gremlin Wizard
+# (charge) are dynamic/rare under RD and left as-is.
 _RD_HIDDEN_MISCINFO_FIXED = {
-    sts.MonsterId.GREEN_LOUSE: 6,   # bite damage, mean of rng(5,7)
-    sts.MonsterId.RED_LOUSE: 6,     # bite damage, mean of rng(5,7)
-    sts.MonsterId.DARKLING: 9,      # nip damage, mean of rng(7,11)
+    # monster -> (mean below A2, mean at A2+), from the engine's construct rolls
+    sts.MonsterId.GREEN_LOUSE: (6, 7),   # bite damage: rng(5,7) / rng(6,8)
+    sts.MonsterId.RED_LOUSE: (6, 7),     # bite damage: rng(5,7) / rng(6,8)
+    sts.MonsterId.DARKLING: (9, 13),     # nip damage: rng(7,11) / rng(9,13)+2
 }
 
 
-def _estimate_hidden_miscinfo(monster_id, turn0):
+def _estimate_hidden_miscinfo(monster_id, turn0, ascension):
     """A reasonable miscInfo when Runic Dome hides the real value (turn0 = bc.turn, 0-based)."""
     if monster_id == sts.MonsterId.BOOK_OF_STABBING:
         return max(1, turn0 + 1)    # stab count: 1 at battle start (++miscInfo), grows ~1/turn
-    return _RD_HIDDEN_MISCINFO_FIXED.get(monster_id)
+    pair = _RD_HIDDEN_MISCINFO_FIXED.get(monster_id)
+    if pair is None:
+        return None
+    return pair[1] if ascension >= 2 else pair[0]
 
 
 def assert_intent_damage_matches(bc, spire_game, slot_to_spire) -> None:
@@ -853,29 +923,38 @@ def assert_intent_damage_matches(bc, spire_game, slot_to_spire) -> None:
                 f"conversion.")
 
 
+# Cards whose base damage derives from OBSERVABLE state the live display recomputes lazily --
+# Body Slam (current block), Mind Blast (draw pile size) -- so the live base_damage can lag a
+# mid-turn change while the reconstruction (same snapshot) is current: a mismatch there is live
+# display staleness, not a reconstruction bug, and there is no hidden state to validate anyway.
+# Perfected Strike is skipped because the live game keeps its strike bonus OUT of base_damage
+# (it lands in `damage` only), so base comparison has no ground truth; its strikeCount input is
+# derived from the observable piles during conversion.
+_CARD_BASE_CHECK_SKIP_IDS = frozenset({'Body Slam', 'Mind Blast', 'Perfected Strike'})
+
+
 def assert_card_damage_matches(bc, spire_game) -> None:
-    """Fail loud if the engine's in-hand displayed damage for a reconstructed attack card disagrees
-    with the live game's displayed damage. Catches card-damage reconstruction gaps where a card's
-    damage depends on combat-accumulated state the live snapshot can't directly restore (Perfect
-    Strike's Strike count -> strikeCount; Body Slam's block; permanently-buffed Searing Blow /
-    Rampage / Genetic Algorithm via specialData). Compares the DISPLAYED value (live AbstractCard.
-    damage vs engine getCardDamageDisplay) -- base + player-side modifiers (strength/weak/stance),
-    neither side applying a target's vulnerable -- so it's target-independent and catches the strike
-    bonus (which the live game folds into `damage`, not `base_damage`). Hand cards convert in order,
-    so bc.cards.hand[i] corresponds to spire_game.hand[i]."""
+    """Fail loud if a reconstructed attack card's BASE damage disagrees with the live card's
+    base_damage (exposed by the forked CommunicationMod). The base captures exactly the hidden
+    per-instance state the snapshot must restore -- Rampage's growth and Ritual Dagger's bonus
+    (specialData), Searing Blow's multi-upgrade count -- while excluding player-side modifiers
+    (strength/weak), whose live displayed `damage` can lag a mid-turn change (the game refreshes
+    card displays lazily) and so cannot be asserted against. Hand cards convert in order, so
+    bc.cards.hand[i] corresponds to spire_game.hand[i]."""
     hand = spire_game.hand
     for i, live in enumerate(hand):
-        dmg = live.damage
-        if dmg is None or dmg < 0 or i >= bc.cards.cardsInHand:
+        bd = getattr(live, "base_damage", None)
+        if (bd is None or bd < 0 or i >= bc.cards.cardsInHand
+                or live.card_id in _CARD_BASE_CHECK_SKIP_IDS):
             continue
-        eng = bc.get_card_damage_display(bc.cards.hand[i])
-        if eng < 0:    # engine says non-attack (live reports 0 for these, not -1) -- nothing to check
+        eng = bc.get_card_base_damage(bc.cards.hand[i])
+        if eng < 0:    # engine says non-attack -- nothing to check
             continue
-        if eng != dmg:
+        if eng != bd:
             raise AssertionError(
-                f"card-damage mismatch for {live.card_id} (hand idx {i}): engine displays {eng} vs "
-                f"live {dmg} -- this card's damage is being mis-reconstructed (hidden combat state "
-                f"like strikeCount / specialData / strength); the search would mis-judge playing it.")
+                f"card-damage mismatch for {live.card_id} (hand idx {i}): engine base {eng} vs "
+                f"live base_damage {bd} -- this card's per-instance state (specialData / upgrade "
+                f"count) is being mis-reconstructed; the search would mis-value playing it.")
 
 
 def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
@@ -920,6 +999,18 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
         elif cur in _MISCINFO_HITS_MOVE_INTS and monster.move_hits:
             sts_monster.miscInfo = int(monster.move_hits)
 
+    # Time Eater's one-shot Haste (heal to 50% max HP) is gated by miscInfo (usedHaste in
+    # getMoveForRoll: it hastes whenever hp < half and the flag is unset). A single snapshot can't
+    # observe the flag, but below half HP with a committed non-Haste intent it must already have
+    # hasted -- an unspent Haste below half would BE the intent. Without this the search re-heals
+    # it +50% in every line (observed: pred hp jumped 153 -> 228 = maxHp/2 on a Time Warp turn).
+    # The residual error (it fell below half only this turn, roll pending) suppresses one heal for
+    # one decision; the opposite error mis-heals for the rest of the fight.
+    if (sts_monster.id == sts.MonsterId.TIME_EATER and move_known
+            and move_history[0] != int(sts.MonsterMoveId.TIME_EATER_HASTE)
+            and monster.current_hp * 2 < monster.max_hp):
+        sts_monster.miscInfo = 1
+
     for power in monster.powers:
         apply_monster_power(sts_monster, power.power_id, power.amount)
 
@@ -950,7 +1041,7 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
             # 0 so the deferred roll would predict a 0-damage attack. Seed a realistic estimate first so
             # the search blocks. Only when unset (a restored value from move_hits wins).
             if sts_monster.miscInfo == 0:
-                est = _estimate_hidden_miscinfo(sts_monster.id, bc.turn)
+                est = _estimate_hidden_miscinfo(sts_monster.id, bc.turn, bc.ascension)
                 if est is not None:
                     sts_monster.miscInfo = est
             sts_monster.rollMove(bc)
@@ -1093,24 +1184,29 @@ def convert_spire_card_to_instance(spire_card: card.Card) -> sts.CardInstance:
     if card_id == sts.CardId.INVALID:
         raise ValueError(f"Unknown card: {spire_card.card_id}")
     
-    # Create CardInstance
-    instance = sts.CardInstance(card_id, spire_card.upgrades > 0)
-    
-    # Set additional properties
-    instance.cost = spire_card.cost
-    instance.costForTurn = spire_card.cost
-    
-    # Handle upgrade count for Searing Blow
-    if spire_card.upgrades > 1:
-        # Apply additional upgrades for Searing Blow
-        for _ in range(spire_card.upgrades - 1):
-            instance.upgrade()
+    instance = sts.CardInstance(card_id, False)
 
     # Restore per-instance accumulated state (the engine's specialData == the live card's misc):
-    # Rampage's growing damage, Ritual Dagger / Genetic Algorithm bonuses, Glass Knife, etc. Without
-    # this the search plays these cards at their printed base. Harmless for cards that don't use it
-    # (misc == 0).
+    # Ritual Dagger / Genetic Algorithm bonuses etc. Without this the search plays these cards at
+    # their printed base. Harmless for cards that don't use it (misc == 0). Must precede the
+    # upgrade loop: Searing Blow's upgrade() counts its upgrades IN specialData, which a later
+    # blanket write would erase.
     instance.specialData = spire_card.misc
+    # Rampage keeps its per-combat growth in the card's baseDamage (misc stays 0), which the forked
+    # mod exposes; the engine reads the growth from specialData (base 8 + specialData).
+    if card_id == sts.CardId.RAMPAGE and spire_card.base_damage and spire_card.base_damage > 0:
+        instance.specialData = spire_card.base_damage - 8
+
+    # Apply every live upgrade through upgrade(), the engine's canonical path -- it maintains the
+    # flag AND the per-card upgrade bookkeeping (Searing Blow counts upgrades in specialData).
+    # Constructing with upgraded=True would set only the flag, under-leveling Searing Blow
+    # everywhere its multi-upgrade damage schedule reads getUpgradeCount().
+    for _ in range(spire_card.upgrades):
+        instance.upgrade()
+
+    # Set additional properties (after upgrade(), which adjusts costs itself)
+    instance.cost = spire_card.cost
+    instance.costForTurn = spire_card.cost
 
     return instance
 
@@ -2102,6 +2198,20 @@ def set_screen_state_info(gc: sts.GameContext, spire_game: game.Game) -> None:
         info.relicIdx1 = int(relic_id)
 
 
+# Live AbstractRoom class name (CommunicationMod's room_type) -> engine Room. Unlisted rooms
+# (Neow/debug rooms) fall back to NONE at the lookup site.
+_ROOM_BY_LIVE_TYPE = {
+    "MonsterRoom": sts.Room.MONSTER,
+    "MonsterRoomElite": sts.Room.ELITE,
+    "MonsterRoomBoss": sts.Room.BOSS,
+    "EventRoom": sts.Room.EVENT,
+    "ShopRoom": sts.Room.SHOP,
+    "RestRoom": sts.Room.REST,
+    "TreasureRoom": sts.Room.TREASURE,
+    "TreasureRoomBoss": sts.Room.BOSS_TREASURE,
+}
+
+
 def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     """
     Convert spirecomm Game state to our GameContext.
@@ -2130,6 +2240,11 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
     gc.gold = spire_game.gold
     gc.act = spire_game.act
     gc.floor_num = spire_game.floor
+    # Room kind, from the live AbstractRoom class name. Consumers must not treat an unknown room as
+    # anything specific, so default to NONE. The one room/encounter distinction that matters in
+    # combat: postBattleHealedHp only credits the act-transition heal for a boss ENCOUNTER fought in
+    # the boss ROOM -- Mind Bloom's I Am War is the same encounter in an EventRoom, with no heal.
+    gc.cur_room = _ROOM_BY_LIVE_TYPE.get(spire_game.room_type, sts.Room.NONE)
 
     # The GameContext constructor builds the act-1 map. Regenerate it for the live act so map
     # navigation (getAllActionsInState path choices) and the NN's map features match the real game;
@@ -2166,9 +2281,8 @@ def spirecomm_to_gamecontext(spire_game: game.Game) -> sts.GameContext:
             gc.obtain_relic(sts_relic.id)
         # obtain_relic re-fires one-time onEquip effects that the LIVE snapshot ALREADY reflects --
         # Pear/Strawberry/Mango/Lee's Waffle (+maxHP), Blood Vial (+curHP), Maw Bank/Old Coin (gold).
-        # Re-applying them double-counts: Pear adds +10 maxHP on top of the live 90 -> 100, so the
-        # search plays the whole game with phantom HP and under-estimates danger (was the dominant ET
-        # shadow divergence: php pred consistently +10 vs live). Overwrite HP/gold with live truth.
+        # Re-applying them double-counts (a Pear adds +10 maxHP on top of the live value, so the
+        # search plays with phantom HP and under-estimates danger). Overwrite HP/gold with live truth.
         gc.cur_hp = spire_game.current_hp
         gc.max_hp = spire_game.max_hp
         gc.gold = spire_game.gold
@@ -2590,6 +2704,20 @@ class STSLightspeedAgent:
         self._pbc = None
         self._pbc_slots = None
         self._pbc_floor = None
+        # Live combat turn at the last reconcile: a regression on the same floor marks a NEW fight
+        # (Colosseum chains two combats on one floor), so the carried pbc must not survive it.
+        self._pbc_live_turn = None
+        # Draw-pile cards the player GENUINELY knows the position of -- Headbutt/Warcry put-backs
+        # (top, newest first) and Forethought put-unders (bottom, deepest first) -- recorded at
+        # their selects as (CardId, upgrades), with the floor they belong to. _mark_known_draw_cards
+        # re-validates against the live pile each decision and marks the surviving prefixes known
+        # on the freshly converted bc, so the search plans on them instead of re-randomizing.
+        self._known_draw_top = []
+        self._known_draw_bottom = []
+        self._known_draw_floor = None
+        # (floor, outcome) set when _pbc_advance executed to a decided outcome: if the same fight then
+        # continues live, the engine mis-simulated the finish and _pbc_reconcile_build crashes.
+        self._pbc_decided = None
         # Live turn we last advanced the pbc through via the out-of-handle_combat end-turn path
         # (get_next_action_in_game), to dedup a repeated end-turn emit (that path has no transient
         # guard). Reset per combat seed.
@@ -2604,6 +2732,9 @@ class STSLightspeedAgent:
         # ("Invalid command: play, ready_for_command:false" -> fatal). We skip a decision whose sig
         # matches the last action's, waiting for the state to actually change.
         self._last_acted_combat_sig = None
+        # The spirecomm action last returned by handle_combat, re-sent verbatim if the position stays
+        # frozen past the dedup window (a dropped send), instead of re-deciding on the same position.
+        self._last_combat_action_sent = None
         # When the dedup above first started skipping the current (unchanged) position. If it stays
         # unchanged far longer than any real resolution transient, the last command didn't take and we
         # re-decide rather than wait out the hard watchdog. None whenever the position is progressing.
@@ -2793,6 +2924,10 @@ class STSLightspeedAgent:
         # to have the same number of monsters, so gate on the floor explicitly.
         if prev_floor != self.game.floor:
             return
+        # Two combats can share a floor (Colosseum): a bc turn that went backward means prev_bc
+        # belongs to the previous fight, so the one-step prediction has no live counterpart.
+        if truth_bc.turn < prev_bc.turn:
+            return
         try:
             atype = prev_action.get_action_type()
             is_card = atype == sts.ActionType.CARD
@@ -2828,12 +2963,11 @@ class STSLightspeedAgent:
                            f"mayhem={mayhem} draw={p.cardDrawPerTurn} prevhand={prev_bc.cards.cardsInHand} "
                            f"drawpile={len(prev_bc.cards.drawPile)} discard={len(prev_bc.cards.discardPile)} "
                            f"relics={[r.name for r in (self.game.relics or [])]}")
-                # Mayhem plays the top of the draw pile at the START of the next turn, before the draw
-                # (atStartOfTurn, engine BattleContext applyStartOfTurnPowers precedes DrawCards) -- the
-                # same top we observe now (nothing touches the draw pile between end-turn and that play).
-                # Force the live top onto prev_bc so the engine's Mayhem plays the real card, exactly like
-                # the Havoc forcing. A single stack is then verifiable; an empty pile (reshuffle) or
-                # stacked Mayhem (only the first play is forceable) stays unverifiable below.
+                # Mayhem plays the POST-draw top of the pile at the start of the next turn (the
+                # turn-start draw takes the pre-draw top N; Mayhem consumes the card after them),
+                # so the single observed pre-draw top can't pin down what it plays -- the shadow's
+                # one-step Mayhem replay stays unverifiable below. Forcing the observed top still
+                # helps the engine draw one true card; the force status is context only.
                 if mayhem > 0:
                     force_status = self._force_observed_draw(prev_bc, prev_draw_top)
                     pre_ctx += f" force={force_status}"
@@ -2982,8 +3116,29 @@ class STSLightspeedAgent:
         here is a genuine reconcile bug, so it propagates (crash) rather than silently degrading to a
         fresh-reconstruction search -- which would defeat the whole point of driving on the pbc."""
         floor = self.game.floor
+        live_turn = getattr(self.game, "turn", None) or 0
         if self._pbc is not None and floor != self._pbc_floor:
             self._pbc = None
+            self._pbc_decided = None
+        # A live turn that went BACKWARD on the same floor means a NEW combat started there (the
+        # Colosseum event chains two fights on one floor) -- the carried pbc (and any decided-outcome
+        # marker) belongs to the previous fight, so drop it rather than transplanting its hidden
+        # monster state onto the new fight's monsters.
+        if self._pbc is not None and live_turn < (self._pbc_live_turn or 0):
+            print(f"[pbc] new combat on floor {floor} (live turn {self._pbc_live_turn} -> "
+                  f"{live_turn}); dropping the previous fight's pbc", file=sys.stderr)
+            self._pbc = None
+            self._pbc_decided = None
+        if self._pbc_decided is not None and self._pbc_decided[0] == floor and live_turn > 1:
+            # The engine executed an action to a decided outcome, but the SAME fight is still going
+            # live (same floor, no turn reset): a genuine end-of-combat mis-simulation. Crash to
+            # surface it -- quietly re-seeding would mask exactly the divergence class the driven
+            # pbc exists to expose.
+            decided = self._pbc_decided
+            self._pbc_decided = None
+            raise RuntimeError(f"[pbc] engine predicted combat over ({decided[1]}) at floor {floor} "
+                               f"but the live fight continues (turn {live_turn})")
+        self._pbc_decided = None
         if self._pbc is None:
             self._pbc = fresh_bc.copy()
             self._pbc_last_end_turn = None
@@ -2992,6 +3147,7 @@ class STSLightspeedAgent:
             self._pbc = self._pbc_reconcile(fresh_bc, fresh_slots)
         self._pbc_slots = dict(fresh_slots)
         self._pbc_floor = floor
+        self._pbc_live_turn = live_turn
         return self._pbc
 
     def _describe_action(self, action, bc):
@@ -3058,35 +3214,22 @@ class STSLightspeedAgent:
         return new
 
     def _pbc_advance(self, action):
-        """Carry the persistent bc forward through the action just committed live, to the next input
-        point. Drop the pbc (re-seed next decision) when the action leaves the engine awaiting a
-        sub-input (CARD_SELECT, handled by M4) or ends the combat, and on any engine error.
-
-        execute() asserts(false) -- an uncatchable SIGABRT, not a Python exception -- on an action
-        that isn't valid in the bc, so we MUST gate on is_valid_action first (raising a clean Python
-        error instead of aborting the process). When DRIVING, the action was chosen by searching this
-        exact pbc, so it MUST be valid -- an invalid action is a genuine divergence and we crash to
-        surface it. When carrying in parallel (non-drive measurement), the action was chosen on a
-        separate reconstruction, so drift can legitimately invalidate it: drop the pbc, never crash."""
+        """Carry the driven persistent bc forward through the action just committed live, to the next
+        input point. The action was chosen by searching this exact bc, so it MUST be valid and MUST
+        execute -- a failure is a genuine divergence and we crash to surface it. is_valid_action gates
+        the execute because execute() asserts(false) on an invalid action (an uncatchable SIGABRT,
+        not a Python exception). Drops the pbc (re-seed next decision) when the action ends the
+        simulated combat or leaves the engine awaiting a sub-input the drive doesn't handle."""
         if not action.is_valid_action(self._pbc):
-            if self._pbc_drive:
-                raise RuntimeError("[pbc] chosen action invalid on driven persistent bc: "
-                                   f"{self._describe_action(action, self._pbc)}")
-            print("[pbc] chosen action invalid on persistent bc; dropping it (no execute)",
-                  file=sys.stderr)
-            self._pbc = None
-            return
-        try:
-            action.execute(self._pbc)
-        except Exception as e:
-            if self._pbc_drive:
-                raise
-            print(f"[pbc] execute failed ({type(e).__name__}: {e}); dropping persistent bc",
-                  file=sys.stderr)
-            self._pbc = None
-            return
+            raise RuntimeError("[pbc] chosen action invalid on driven persistent bc: "
+                               f"{self._describe_action(action, self._pbc)}")
+        action.execute(self._pbc)
         if self._pbc.outcome != sts.BattleOutcome.UNDECIDED:
-            self._pbc = None            # combat ended -- nothing left to carry
+            # The engine predicts this combat is OVER. Normally live ends with it and the next combat
+            # decision belongs to a new fight; if one arrives for THIS fight instead, the engine
+            # mis-simulated the finish -- _pbc_reconcile_build checks the marker and crashes there.
+            self._pbc_decided = (self._pbc_floor, str(self._pbc.outcome))
+            self._pbc = None
             return
         ist = self._pbc.input_state
         if ist == sts.InputState.PLAYER_NORMAL:
@@ -3154,12 +3297,20 @@ class STSLightspeedAgent:
                 print("[combat] position unchanged since last action (transient/duplicate emit); "
                       "waiting for the prior action to resolve", file=sys.stderr)
                 return None
-            # Unchanged for far longer than any real resolution transient: the last command didn't take
-            # (dropped mid-emit, or an action that doesn't advance the live game), so waiting will only
-            # burn out the 150s watchdog. Release the dedup and re-decide -- re-issuing the command
-            # rescues a dropped send; a genuinely stuck position just re-loops here until the watchdog.
-            print(f"[combat] position unchanged for {now - self._dedup_stuck_since:.0f}s -- prior action "
-                  f"did not advance the game; re-deciding (dedup released)", file=sys.stderr)
+            # Unchanged for far longer than any real resolution transient: the last command didn't
+            # take (dropped mid-emit), so waiting will only burn out the 150s watchdog. RE-SEND the
+            # exact same command rather than re-deciding: the driven pbc has already been advanced
+            # through this action, so a fresh decide would advance it a SECOND time (hidden monster
+            # state two steps ahead of live, invisible to the reconcile) and could fire a different
+            # command into a still-busy game. A genuinely stuck position re-sends every 8s until the
+            # coordinator watchdog kills the run.
+            if self._last_combat_action_sent is not None:
+                print(f"[combat] position unchanged for {now - self._dedup_stuck_since:.0f}s -- "
+                      f"re-sending the last command", file=sys.stderr)
+                self._dedup_stuck_since = now
+                return self._last_combat_action_sent
+            print(f"[combat] position unchanged for {now - self._dedup_stuck_since:.0f}s with no "
+                  f"stored command -- re-deciding (dedup released)", file=sys.stderr)
         self._dedup_stuck_since = None
         self._last_acted_combat_sig = sig
         # Convert spirecomm game state to our internal format
@@ -3171,14 +3322,14 @@ class STSLightspeedAgent:
         # mis-simulated (a wrong move-byte mapping or unrestored damage state), so the search would
         # mis-judge blocking. Fail loud -- a mis-simulated fight is worse than a stopped run.
         assert_intent_damage_matches(bc, self.game, slot_to_spire)
-        # Card base-damage check. Warn-first (not hard) for now: unlike the monster intent check, the
-        # captures predate the forked card base_damage field so this can't be validated offline, and
-        # special-data cards (Searing Blow / Rampage / Genetic Algorithm) may need handling in
-        # get_card_base_damage. Once a fork-live run shows it clean, promote to a hard assert.
-        try:
-            assert_card_damage_matches(bc, self.game)
-        except AssertionError as e:
-            print(f"[card-damage WARN] {e}", file=sys.stderr)
+        # Card damage check, same contract as the monster intent check above: a hand card whose
+        # engine-displayed damage disagrees with the live card is being mis-reconstructed (hidden
+        # combat state like strikeCount / specialData / strength), so the search would mis-value
+        # playing it. Fail loud rather than plan on wrong numbers.
+        assert_card_damage_matches(bc, self.game)
+        # Restore the player's genuine draw-order knowledge (Headbutt/Warcry/Forethought) before the
+        # search; the reconciled pbc copies this bc, so the marking carries into the drive path.
+        self._mark_known_draw_cards(bc)
         print(bc, file=sys.stderr)
 
         # M5: when driving, search the reconciled persistent bc (observables == this reconstruction,
@@ -3260,22 +3411,116 @@ class STSLightspeedAgent:
         # Advance the persistent bc by the action we committed live.
         if self._pbc_drive:
             # The pbc was already reconciled/built before the search (search_bc is self._pbc), so only
-            # advance it here through the chosen action.
+            # advance it here through the chosen action -- with its draw pile forced to the observed
+            # live order first, so every top-of-pile read in the resolution replays reality (Havoc
+            # chains, mid-resolution draws, potion draws).
             if self._pbc is search_bc:
-                # A card played off the top of the draw pile (Havoc) draws whatever is on top; the pbc's
-                # reconstructed draw order is arbitrary, so without help its Havoc plays a DIFFERENT card
-                # than live -- and if live's top is a select-opener (Headbutt), the pbc never opens the
-                # matching select and the parked-select drive diverges. Force the observed live draw-top
-                # onto the pbc first (same mechanism the shadow uses) so a top-of-deck play resolves to
-                # the real card. No-op when live's top isn't in the pbc's draw pile or the pile is empty.
-                if first_action.get_action_type() == sts.ActionType.CARD:
-                    self._force_observed_draw(self._pbc, self._shadow_prev_draw_top)
+                self._pbc_force_live_draw_order()
                 self._pbc_advance(first_action)
                 self._pbc_prev_action_desc = self._describe_action(first_action, bc)
                 if first_action.get_action_type() == sts.ActionType.END_TURN:
                     self._pbc_last_end_turn = getattr(self.game, "turn", None)
 
+        # Remembered so a dropped send can be re-issued verbatim (see the dedup release above).
+        self._last_combat_action_sent = spirecomm_action
         return spirecomm_action
+
+    def _mark_known_draw_cards(self, bc):
+        """Mark on a freshly converted bc the draw-pile positions the player genuinely knows -- the
+        Headbutt/Warcry put-backs (top) and Forethought put-unders (bottom) recorded at their
+        selects -- so the search plans on them instead of re-randomizing (native play keeps this
+        knowledge: the engine's CardPile tracks known tops/bottoms; only the per-decision
+        reconstruction forgot it).
+
+        Re-validates the memory against the live pile first: top entries drawn since are dropped
+        from the front, and each stack keeps only the prefix that still matches the live order at
+        its end of the pile -- a reshuffle or displacement invalidates from the mismatch on.
+        Matching is by (CardId, upgrades): a coincidental match with a twin copy marks a position
+        that is identical at the level the search sees, so it stays correct. Skipped under Frozen
+        Eye, where the whole pile already converts order-observed."""
+        if ((self._known_draw_top or self._known_draw_bottom)
+                and self._known_draw_floor != self.game.floor):
+            self._known_draw_top = []
+            self._known_draw_bottom = []
+        if not (self._known_draw_top or self._known_draw_bottom) \
+                or bc.player.hasRelic(sts.RelicId.FROZEN_EYE):
+            return
+        live = self.game.draw_pile or []
+
+        def live_key_top(i):       # i cards down from the top (live[-1] is the top)
+            return (map_card_id(live[-1 - i].card_id), live[-1 - i].upgrades) if i < len(live) else None
+
+        def live_key_bottom(i):    # i cards up from the bottom (live[0] is the bottom)
+            return (map_card_id(live[i].card_id), live[i].upgrades) if i < len(live) else None
+
+        # Top stack: drop consumed entries (a drawn put-back leaves the next remembered card on
+        # top; a reshuffle matches nothing and clears), then keep the matching prefix.
+        top = self._known_draw_top
+        while top and live_key_top(0) != top[0]:
+            top.pop(0)
+        keep_t = 0
+        while keep_t < len(top) and live_key_top(keep_t) == top[keep_t]:
+            keep_t += 1
+        del top[keep_t:]
+        # Bottom stack: anchored at the very bottom; entries above it disappear as they are drawn
+        # out the top of a drained pile, so keeping the matching prefix handles both cases.
+        bot = self._known_draw_bottom
+        if bot and live_key_bottom(0) != bot[0]:
+            bot.clear()
+        keep_b = 0
+        while keep_b < len(bot) and live_key_bottom(keep_b) == bot[keep_b]:
+            keep_b += 1
+        del bot[keep_b:]
+
+        if not top and not bot:
+            return
+        base = len(self.game.hand or [])       # conversion uid order: hand cards, then the draw pile
+        top_ids = [base + (len(live) - 1 - i) for i in range(keep_t)]
+        bot_ids = [base + i for i in range(keep_b)]
+        # A nearly-drained pile can put the same card in both views; the top view wins (next draw).
+        bot_ids = [u for u in bot_ids if u not in set(top_ids)]
+        bc.force_draw_pile_knowledge(top_ids, bot_ids)
+        print(f"[known-draw] marked {len(top_ids)} top / {len(bot_ids)} bottom card(s) known "
+              f"on the search bc", file=sys.stderr)
+
+    def _pbc_force_live_draw_order(self):
+        """Put the driven pbc's draw pile into the exact LIVE order (fully known) before advancing it
+        through the committed action, so every top-of-pile read in the resolution replays reality: a
+        Havoc pops the true top, a Havoc'd Havoc pops the true next card, and any mid-resolution draw
+        (Pommel Strike, Battle Trance, Swift Potion) or the end-turn draw pulls the true cards.
+
+        The live message exposes the whole pile order (draw_pile[-1] is the top -- CommunicationMod
+        serializes drawPile.group directly), and the pbc's piles were rebuilt from this same message
+        at reconcile with uniqueIds assigned in live list order (convert_combat_state's _add: hand
+        first, then the draw pile), so the uid <-> position mapping is exact -- even for twin cards
+        that differ only in hidden specialData. Raises on any mismatch: both sides come from the same
+        snapshot, so a mismatch is a reconstruction bug, not drift.
+
+        No knowledge cheat: the fully-known order exists ONLY inside this advance, replaying what the
+        live game is about to resolve. The next search runs on a fresh reconciliation whose pile is
+        rebuilt UNKNOWN-order from the next snapshot (_pbc_reconcile copies the fresh reconstruction),
+        so the search never inherits draw-order knowledge the player lacks. Randomness that happens
+        DURING the live resolution (a reshuffle, a card shuffled in at a live-rng position) still
+        diverges; the next reconcile corrects the observables and the DESYNC oracle reports it."""
+        live = self.game.draw_pile or []
+        pile = self._pbc.cards.drawPile
+        if len(live) != len(pile):
+            raise RuntimeError(f"[pbc] draw-order force: pbc pile size {len(pile)} != live {len(live)}")
+        if not live:
+            return
+        base = len(self.game.hand or [])       # conversion uid order: hand cards, then the draw pile
+        by_uid = {c.uniqueId: c for c in pile}
+        top_first = []
+        for i in range(len(live) - 1, -1, -1):
+            uid = base + i
+            eng = by_uid.get(uid)
+            if eng is None or map_card_id(live[i].card_id) != eng.id:
+                raise RuntimeError(
+                    f"[pbc] draw-order force: uid {uid} mismatch at live index {i} "
+                    f"({live[i].card_id} vs {'missing' if eng is None else eng.getName()}) -- "
+                    f"conversion uid order no longer matches the live pile")
+            top_first.append(uid)
+        self._pbc.force_draw_pile_order(top_first)
 
     def _live_draw_top(self):
         """The live draw pile's top card as (CardId, upgrades), or None if the pile is empty or the top
@@ -3330,12 +3575,13 @@ class STSLightspeedAgent:
         self._shadow_prev_floor = None
         # Invalidate the combat duplicate-emit signature: resolving this select is an action that
         # changes the position, but it's committed here (not through handle_combat), so the sig was
-        # never updated for it. Without this reset, if the post-select combat position happens to match
-        # the pre-select-card signature, handle_combat mis-reads it as a still-resolving duplicate and
-        # never sends the next command -- a hang (observed after a Warcry put-back in act 3).
+        # never updated for it. Without this reset, a post-select combat position that happens to match
+        # the pre-select-card signature (e.g. a Warcry put-back restoring the same hand) reads as a
+        # still-resolving duplicate and the next command is never sent -- a hang.
         self._last_acted_combat_sig = None
         # CardRewardScreen (the in-combat Discovery/potion choice) has no num_cards; it always picks 1.
-        num = getattr(self.game.screen, "num_cards", None) or 1
+        num_cards = getattr(self.game.screen, "num_cards", None)
+        num = num_cards or 1
         single_task = _CARD_SELECT_TASK_BY_ACTION.get(action_name)
         multi_task = _MULTI_CARD_SELECT_TASK_BY_ACTION.get(action_name)
         # Route to the multi-card path for a "choose any number" select. GamblingChip is ONLY ever
@@ -3349,29 +3595,24 @@ class STSLightspeedAgent:
             # search the same way and forward whatever it selects (empty => confirm nothing).
             gc = spirecomm_to_gamecontext(self.game)
             bc, slot_to_spire = convert_combat_state(self.game, gc)
-            mnum = min(num, bc.cards.cardsInHand)
+            self._mark_known_draw_cards(bc)
+            # Any-number semantics: pickCount == hand size lets the search keep selecting up to the
+            # whole hand (openSimpleCardSelectScreen has no canPickAnyNumber), matching the native
+            # any-number selects. GamblingChip's combat-start frame omits num_cards entirely -- an
+            # absent count must mean "the whole hand", not 1; a reported cap still applies via min().
+            mnum = min(num_cards, bc.cards.cardsInHand) if num_cards else bc.cards.cardsInHand
             # When driving, resolve on a bc reconciled from LIVE at the select (hand == the live screen)
             # with the carried hidden monster state, advancing the pbc through the whole select. NO
             # fallback: if it can't resolve, raise (crash) so the divergence is debuggable, not masked.
             if self._pbc_driving_at_select(multi_task):
                 sel_bc = self._pbc_reconcile_at_select(bc, slot_to_spire)
                 sel_bc.open_card_select(multi_task, mnum)
-                return CardSelectAction(self._pbc_resolve_multi_select(multi_task, action_name))
+                chosen = self._run_multi_select(sel_bc, multi_task, action_name, driven=True)
+                self._pbc_prev_action_desc = "MULTI_CARD_SELECT"   # DESYNC attribution
+                return CardSelectAction(chosen)
 
             bc.open_card_select(multi_task, mnum)
-            searcher = sts.BattleSearcher(bc)
-            searcher.search(self.search_agent.configure_searcher(searcher, bc))
-            sel_idxs = searcher.get_best_action().get_selected_idxs()
-            hand = bc.cards.hand
-            chosen = []
-            for i in sel_idxs:
-                if not (0 <= i < len(hand)):
-                    raise RuntimeError(f"MCTS multi-select idx {i} out of range "
-                                       f"(hand {len(hand)}, {multi_task})")
-                chosen.append(self._match_live_select_card(hand[i]))
-            print(f"[mcts] multi-select ({action_name}, {multi_task}) -> {len(chosen)} card(s)",
-                  file=sys.stderr)
-            return CardSelectAction(chosen)
+            return CardSelectAction(self._run_multi_select(bc, multi_task, action_name, driven=False))
 
         task = single_task
         if task is None:
@@ -3384,6 +3625,7 @@ class STSLightspeedAgent:
 
         gc = spirecomm_to_gamecontext(self.game)
         bc, slot_to_spire = convert_combat_state(self.game, gc)
+        self._mark_known_draw_cards(bc)
 
         if task in _DISCOVERY_TASKS or task == sts.CardSelectTask.CODEX:
             # Generated-card choice (Discovery / Nilry's Codex): the candidates are the offered cards
@@ -3464,6 +3706,21 @@ class STSLightspeedAgent:
                                f"pile (size {len(pool)}, task {task})")
         chosen = pool[sel_idx]
         live_card = self._match_live_select_card(chosen)
+        # A put-back/put-under select places the chosen card at a position the player KNOWS --
+        # Headbutt/Warcry on top, Forethought on the bottom -- knowledge kept until the card moves
+        # or the pile reshuffles. Record it so the next decisions' converted bcs mark it known
+        # (see _mark_known_draw_cards).
+        if task in (sts.CardSelectTask.HEADBUTT, sts.CardSelectTask.WARCRY,
+                    sts.CardSelectTask.FORETHOUGHT):
+            if self._known_draw_floor != self.game.floor:
+                self._known_draw_top = []
+                self._known_draw_bottom = []
+            self._known_draw_floor = self.game.floor
+            key = (map_card_id(live_card.card_id), live_card.upgrades)
+            if task == sts.CardSelectTask.FORETHOUGHT:
+                self._known_draw_bottom.insert(0, key)   # newest sinks to the very bottom
+            else:
+                self._known_draw_top.insert(0, key)      # newest lands on top
         print(f"[mcts] card-select ({action_name}) -> {chosen.getName()}"
               f"{'+' if chosen.upgraded else ''} ({pool_name} idx {sel_idx}"
               f"{', pbc-driven' if driven else ''})", file=sys.stderr)
@@ -3504,52 +3761,57 @@ class STSLightspeedAgent:
             return ChooseAction(sel_idx)
         return CardSelectAction([chosen])
 
-    def _pbc_resolve_multi_select(self, multi_task, action_name):
-        """Drive an in-combat multi-card-select (Gamble / Exhaust-many) on the parked pbc. The engine
-        models these sequentially: each SINGLE pick sets a bit and re-opens the screen; a MULTI confirm
-        applies the running set. Loop search+execute on the pbc until it leaves CARD_SELECT, collecting
-        the picked hand cards to mirror live (the search resolves these to "select nothing" in
-        practice, so the common result is an empty confirm). Raises (crashes -- no fallback) on a
-        pick that can't be matched live, non-convergence, or an unclean resolution."""
+    def _run_multi_select(self, select_bc, multi_task, action_name, driven):
+        """Resolve a multi-card select (Gamble / Exhaust-many) on `select_bc` by the engine's own
+        sequential protocol: each search picks either a SINGLE_CARD_SELECT (toggle one more hand card
+        into the running set; the screen re-opens) or the MULTI confirm (apply the set and exit the
+        select). Executes every pick on select_bc and collects the matching live screen cards --
+        DISTINCT live instances for duplicate picks (two Strikes must map to two different uuids, or
+        the live screen toggles one copy on and back off). Raises (no fallback) on an invalid pick,
+        an unmatchable card, non-convergence, or -- for a driven pbc -- an unclean landing state."""
         chosen = []
+        used_uuids = set()
         for _ in range(64):                       # bound: hand size is <= ~10; 64 is a safe backstop
-            if (self._pbc.input_state != sts.InputState.CARD_SELECT
-                    or self._pbc.card_select_task != multi_task):
+            if (select_bc.input_state != sts.InputState.CARD_SELECT
+                    or select_bc.card_select_task != multi_task):
                 break
-            searcher = sts.BattleSearcher(self._pbc)
-            searcher.search(self.search_agent.configure_searcher(searcher, self._pbc))
+            searcher = sts.BattleSearcher(select_bc)
+            searcher.search(self.search_agent.configure_searcher(searcher, select_bc))
             best = searcher.get_best_action()
             if best.get_action_type() == sts.ActionType.SINGLE_CARD_SELECT:
                 idx = best.get_select_idx()
-                hand = self._pbc.cards.hand
+                hand = select_bc.cards.hand
                 if not (0 <= idx < len(hand)):
                     raise RuntimeError(f"multi-select idx {idx} out of hand range "
                                        f"({len(hand)}, {multi_task})")
-                chosen.append(self._match_live_select_card(hand[idx]))
-            if not best.is_valid_action(self._pbc):
-                raise RuntimeError(f"multi-select action invalid on persistent bc ({multi_task})")
-            best.execute(self._pbc)               # SINGLE re-opens (loop continues); MULTI confirms (loop exits)
+                live = self._match_live_select_card(hand[idx], exclude_uuids=used_uuids)
+                used_uuids.add(live.uuid)
+                chosen.append(live)
+            if not best.is_valid_action(select_bc):
+                raise RuntimeError(f"multi-select action invalid ({multi_task})")
+            best.execute(select_bc)               # SINGLE re-opens (loop continues); MULTI confirms (loop exits)
         else:
             raise RuntimeError(f"multi-select did not converge ({multi_task})")
-        if (self._pbc.input_state != sts.InputState.PLAYER_NORMAL
-                or self._pbc.outcome != sts.BattleOutcome.UNDECIDED):
-            raise RuntimeError(f"multi-select left pbc unclean (input_state={self._pbc.input_state})")
-        self._pbc_prev_action_desc = "MULTI_CARD_SELECT"
-        print(f"[mcts] multi-select ({action_name}, {multi_task}) -> {len(chosen)} card(s), pbc-driven",
-              file=sys.stderr)
+        if driven and (select_bc.input_state != sts.InputState.PLAYER_NORMAL
+                       or select_bc.outcome != sts.BattleOutcome.UNDECIDED):
+            raise RuntimeError(f"multi-select left pbc unclean (input_state={select_bc.input_state})")
+        print(f"[mcts] multi-select ({action_name}, {multi_task}) -> {len(chosen)} card(s)"
+              f"{', pbc-driven' if driven else ''}", file=sys.stderr)
         return chosen
 
-    def _match_live_select_card(self, engine_card):
+    def _match_live_select_card(self, engine_card, exclude_uuids=None):
         """Find the live select-screen candidate matching the engine-chosen card by stable CardId +
-        upgrade count (robust to display-name drift). Duplicate instances (same id/upgrade) are
-        interchangeable -- they resolve identically -- so first match is correct. Raises if the
-        search picked a card not offered live."""
+        upgrade count (robust to display-name drift), skipping candidates whose uuid is in
+        `exclude_uuids` -- a multi-select that picks duplicate cards (two Strikes) needs a distinct
+        live instance per pick, since selecting the same uuid twice toggles it back off. Raises if
+        the search picked a card not offered (or no longer available) live."""
         want_id, want_upg = engine_card.id, engine_card.upgrade_count
+        exclude = exclude_uuids or ()
         for c in self.game.screen.cards:
-            if map_card_id(c.card_id) == want_id and c.upgrades == want_upg:
+            if c.uuid not in exclude and map_card_id(c.card_id) == want_id and c.upgrades == want_upg:
                 return c
         for c in self.game.screen.cards:  # tolerate an upgrade-count mismatch (e.g. Searing Blow)
-            if map_card_id(c.card_id) == want_id:
+            if c.uuid not in exclude and map_card_id(c.card_id) == want_id:
                 return c
         raise RuntimeError(
             f"MCTS-selected card {engine_card.getName()} (id {want_id}, +{want_upg}) is not on the "
@@ -4134,21 +4396,27 @@ class STSLightspeedAgent:
         """heart1's relic-vs-key pick when a chest/elite offers both (mutually exclusive for a
         sapphire key). The reconstructed gc is on the REWARDS screen with the relic and key injected,
         so net_pick_action -> construct_choice exposes the relic alongside TAKE_KEY. Returns a
-        CombatRewardAction or None to fall through. Defaults to the KEY on any ambiguity (net chose
-        skip / an unrepresentable action / reconstruction diverged) -- a heart agent never forfeits a
-        free key, so this can't regress heart access even if the net pick is off."""
+        CombatRewardAction (the relic when the net picks it, else the key -- the net choosing
+        skip/key IS the take-key decision) or None when no key is on offer. Raises when the
+        reconstruction diverges (wrong screen, out-of-range relic pick): every other net path fails
+        loud on divergence, and a silent take-key default would hide the reconstruction bug while
+        systematically forfeiting the relic choice."""
         key_item = next((r for r in rewards
                          if r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)), None)
         relic_items = [r for r in rewards if r.reward_type == RewardType.RELIC]
         gc = spirecomm_to_gamecontext(self.game)
-        if gc.screen_state == sts.ScreenState.REWARDS:
-            action = self.net_pick_action(gc)
-            if action is not None and action.rewards_action_type == sts.RewardsActionType.RELIC:
-                idx = action.idx1
-                if 0 <= idx < len(relic_items):
-                    print(f"[net] reward relic-vs-key -> relic {relic_items[idx].relic.name}",
-                          file=sys.stderr)
-                    return CombatRewardAction(relic_items[idx])
+        if gc.screen_state != sts.ScreenState.REWARDS:
+            raise RuntimeError(f"relic-vs-key: reconstructed gc is on {gc.screen_state}, not REWARDS "
+                               f"-- reward-screen reconstruction diverged")
+        action = self.net_pick_action(gc)
+        if action is not None and action.rewards_action_type == sts.RewardsActionType.RELIC:
+            idx = action.idx1
+            if not (0 <= idx < len(relic_items)):
+                raise RuntimeError(f"relic-vs-key: net picked relic idx {idx} but the live screen "
+                                   f"offers {len(relic_items)} relic(s) -- reconstruction diverged")
+            print(f"[net] reward relic-vs-key -> relic {relic_items[idx].relic.name}",
+                  file=sys.stderr)
+            return CombatRewardAction(relic_items[idx])
         if key_item is not None:
             print("[net] reward relic-vs-key -> key", file=sys.stderr)
             return CombatRewardAction(key_item)

@@ -532,7 +532,12 @@ void BattleContext::exitBattle(GameContext &g) const {
 }
 
 int BattleContext::postBattleHealedHp() const {
-    if (!isBossEncounter(encounter) || player.hasRelic<RelicId::MARK_OF_THE_BLOOM>()) {
+    // The act-transition heal follows only the boss ROOM fight; the same boss encounter spawned by
+    // an event (Mind Bloom) is followed by rewards, not a heal. A null gameContext (standalone
+    // battle harnesses) keeps the encounter-only behavior.
+    const bool actBossFight = isBossEncounter(encounter)
+            && (gameContext == nullptr || gameContext->curRoom == Room::BOSS);
+    if (!actBossFight || player.hasRelic<RelicId::MARK_OF_THE_BLOOM>()) {
         return player.curHp;
     }
     if (ascension >= 5) {
@@ -1115,8 +1120,13 @@ void BattleContext::useAttackCard() {
         }
 
         case CardId::PERFECTED_STRIKE: {
-            // hack because we calculate strikeCount while non purge cards are still in hand.
-            const int strikeDmg = cards.strikeCount * (up ? 3 : 2);
+            // strikeCount includes the in-flight copy. That matches a HAND play (the live game
+            // deals the damage last computed while the card was in hand, counting itself), but a
+            // top-of-pile play (Havoc/Mayhem, queued with autoplay) recomputes from limbo, where
+            // the played copy no longer counts -- exclude it there or the engine over-deals by
+            // one strike bonus.
+            const int count = cards.strikeCount - (item.autoplay ? 1 : 0);
+            const int strikeDmg = count * (up ? 3 : 2);
             const int baseDamage = 6 + strikeDmg;
             addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, baseDamage)) );
             break;
@@ -1667,6 +1677,7 @@ void BattleContext::onUseAttackCard() {
     }
 
     if (p.hasStatus<PS::PANACHE>() && --p.panacheCounter <= 0) {
+        p.panacheCounter = 5;   // countdown restarts after each proc (PanachePower.onUseCard)
         addToBot( Actions::DamageAllEnemy(p.getStatus<PS::PANACHE>()) );
     }
 
@@ -1803,6 +1814,7 @@ void BattleContext::onUseSkillCard() {
     }
 
     if (p.hasStatus<PS::PANACHE>() && --p.panacheCounter <= 0) {
+        p.panacheCounter = 5;   // countdown restarts after each proc (PanachePower.onUseCard)
         addToBot( Actions::DamageAllEnemy(p.getStatus<PS::PANACHE>()) );
     }
 
@@ -1882,6 +1894,7 @@ void BattleContext::onUsePowerCard() {
     }
 
     if (p.hasStatus<PS::PANACHE>() && --p.panacheCounter <= 0) {
+        p.panacheCounter = 5;   // countdown restarts after each proc (PanachePower.onUseCard)
         addToBot( Actions::DamageAllEnemy(p.getStatus<PS::PANACHE>()) );
     }
 
@@ -1945,6 +1958,7 @@ void BattleContext::onUseStatusOrCurseCard() {
     }
 
     if (p.hasStatus<PS::PANACHE>() && --p.panacheCounter <= 0) {
+        p.panacheCounter = 5;   // countdown restarts after each proc (PanachePower.onUseCard)
         addToBot( Actions::DamageAllEnemy(p.getStatus<PS::PANACHE>()) );
     }
 
@@ -2715,14 +2729,22 @@ void BattleContext::triggerOnOtherCardPlayed(const CardInstance &usedCard) {
 int BattleContext::getCardBaseDamage(const CardInstance &card) const {
     const bool up = card.isUpgraded();
     switch (card.getId()) {
-        // Combat-state-dependent bases (the play switch computes these inline; mirror them here).
+        // Combat-state- and instance-dependent bases (the play switch computes these inline;
+        // mirror them here).
         case CardId::PERFECTED_STRIKE:
             return 6 + cards.strikeCount * (up ? 3 : 2);
         case CardId::BODY_SLAM:
             return player.block;
+        case CardId::MIND_BLAST:
+            return static_cast<int>(cards.drawPile.size());
+        case CardId::RAMPAGE:
+            return 8 + card.specialData;   // grows per play; restored from the live card's misc
+        case CardId::SEARING_BLOW: {
+            const int n = card.getUpgradeCount();
+            return n * (n + 7) / 2 + 12;   // multi-upgrade schedule, matches the play switch
+        }
         default:
-            // Printed base from the card table; -1 for non-attacks. Permanently-buffed bases
-            // (Searing Blow / Rampage / Genetic Algorithm) live in the instance's specialData.
+            // Printed base from the card table; -1 for non-attacks.
             return sts::getBaseDamage(card.getId(), up);
     }
 }
@@ -2740,6 +2762,10 @@ int BattleContext::getCardDamageDisplay(const CardInstance &card) const {
     if (player.hasRelic<R::STRIKE_DUMMY>() && card.isStrikeCard()) damage += 3;
     if (player.hasRelic<R::WRIST_BLADE>() && card.costForTurn == 0) damage += 4;
     damage += static_cast<float>(player.getStatus<PS::STRENGTH>());
+    if (card.getId() == CardId::HEAVY_BLADE) {
+        // Strength applies 3x (5x upgraded) total; the generic line above added it once.
+        damage += static_cast<float>((card.isUpgraded() ? 4 : 2) * player.getStatus<PS::STRENGTH>());
+    }
     if (player.hasStatus<PS::VIGOR>()) damage += static_cast<float>(player.getStatus<PS::VIGOR>());
     if (player.hasStatus<PS::DOUBLE_DAMAGE>()) damage *= 2;
     if (player.hasStatus<PS::PEN_NIB>()) damage *= 2;

@@ -1527,8 +1527,10 @@ void Monster::takeTurn(BattleContext &bc) {     // todo, maybe for monsters that
         // ************ WRITHING MASS ************
 
         case MMID::WRITHING_MASS_FLAIL: // 2
+            // Block gained equals the flail damage (WrithingMass.takeTurn passes DamageInfo.base
+            // to GainBlockAction): 15, or 16 at A2+.
             attackPlayerHelper(bc, asc2 ? 16 : 15);
-            bc.addToBot( Actions::MonsterGainBlock(idx, asc2 ? 18 : 16) );
+            bc.addToBot( Actions::MonsterGainBlock(idx, asc2 ? 16 : 15) );
             bc.addToBot( Actions::RollMove(idx) );
             break;
 

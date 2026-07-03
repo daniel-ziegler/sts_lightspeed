@@ -124,10 +124,11 @@ namespace sts {
         void updateRelicsOnExit(GameContext &g) const;
         void updateCardsOnExit(Deck &d) const; // for cards like ritual dagger, and eventually lesson learned results
 
-        // HP the player will hold after exiting this battle victorious. Winning a boss fight
-        // triggers the act-transition heal (see GameContext::transitionToAct): full heal below
-        // ascension 5, 75% of missing HP at 5+, no heal with Mark of the Bloom. Other battles
-        // leave HP unchanged.
+        // HP the player will hold after exiting this battle victorious. Winning the act-boss ROOM
+        // fight triggers the act-transition heal (see GameContext::transitionToAct): full heal below
+        // ascension 5, 75% of missing HP at 5+, no heal with Mark of the Bloom. Every other battle
+        // leaves HP unchanged -- including a boss ENCOUNTER fought in an event room (Mind Bloom's
+        // I Am War), which ends with rewards and no heal.
         [[nodiscard]] int postBattleHealedHp() const;
 
 // ****************************************
