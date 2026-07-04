@@ -25,12 +25,19 @@ seeds can't just be dropped (crashes correlate with depth). Protocol, implemente
 fix-affected state (a decision showing Lagavulin move byte 4/6, or any Spire Shield/Spear
 decision, per era) -- then old and new code compute identical search distributions along the
 whole trajectory and the outcome is identically distributed under current code; DISCARD
-otherwise; REDO crashed seeds under current code after the grind. Interim at g40: **clean 14
-games, 0 wins** (all four raw wins -- 2 hearts, 2 act3 -- were in tainted deep games, as
-expected since depth correlates with meeting those states); 23 discarded; 3 to redo
-(JGQL0YT5ISZU, UCQNQ3U4KNZZ, 2LVX3CDNDVR9Q). g41-g100 are all current-era. Caveat: the
-2026-07-03 matched-seed control below compared the PRE-FIX live agent to offline; its
-no-gap conclusion is about that agent, and the fixes only move live upward.
+otherwise; REDO crashed seeds under current code after the grind.
+
+**Selection caveat (the load-bearing one): kept pre-fix games estimate only the CONDITIONAL
+distribution given never entering an affected state** -- an event anti-correlated with winning
+(a heart kill must fight the Spire elites, so deep pre-fix runs are tainted by construction).
+Their win rate is near zero by that selection alone; comparing it to the unconditional 18.6%
+benchmark is invalid. Likewise "keep-if-unaffected else redo" is biased downward: the redo draw
+is unconditional while the retention event is not (P(win|T<inf) > P(win)). The unconditional
+estimators are (a) current-era games only (g39+), or (b) redo ALL pre-fix seeds discarding
+their old outcomes. Headline number = (a), with (b) optional for the full 100-seed sample.
+Interim at g41: current-era 3 games, 0 wins; 3 crashed seeds queued for redo
+(JGQL0YT5ISZU, UCQNQ3U4KNZZ, 2LVX3CDNDVR9Q). Caveat: the 2026-07-03 matched-seed control below
+compared the PRE-FIX live agent to offline; its no-gap conclusion is about that agent.
 
 ## 2026-07-04 (A20 offline benchmark FINAL: 18.6% heart-kill @10k sims, n=1000)
 

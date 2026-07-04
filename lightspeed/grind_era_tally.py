@@ -11,6 +11,15 @@ different agents. Protocol (per game, on its realized trajectory):
   REDO     crashed (no outcome); replay the pre-committed seed under current code. Crashes are
            NOT ignorable: they correlate with depth/state, so dropping them would bias the rate.
 
+SELECTION WARNING: pre-fix KEEPs are samples of the distribution CONDITIONAL on never entering
+an affected state -- an event anti-correlated with winning (heart kills must fight the Spire
+elites, so deep pre-fix runs are tainted by construction). Do NOT pool them with current-era
+games or compare their win rate to an unconditional benchmark. "Keep-if-unaffected else redo"
+is also biased (the redo draw is unconditional; the retention event is not). The unconditional
+estimators are: current-era games only, or redo ALL pre-fix seeds ignoring their old outcomes.
+The tally below therefore reports current-era games as the headline and pre-fix keeps as a
+separate conditional stratum.
+
 Era boundaries (a game's era = bridge code at its comm.py launch; launch time = the previous
 game's errlog-archive timestamp):
 
@@ -97,10 +106,17 @@ def main():
                 clean.append((n, s, k))
         print(f"{n:>4} {s:<14} {k:<10} {era}  {','.join(sorted(mk)) or '-':<18} {v}")
 
-    wins = [(n, s, k) for n, s, k in clean if k.startswith(('heart', 'act3'))]
-    hearts = [x for x in wins if x[2].startswith('heart')]
-    print(f"\nclean: {len(clean)} | hearts {len(hearts)} | act3 {len(wins) - len(hearts)} "
-          f"| losses {len(clean) - len(wins)}")
+    def tally(rows, label):
+        wins = [(n, s, k) for n, s, k in rows if k.startswith(('heart', 'act3'))]
+        hearts = [x for x in wins if x[2].startswith('heart')]
+        print(f"{label}: {len(rows)} | hearts {len(hearts)} | act3 {len(wins) - len(hearts)} "
+              f"| losses {len(rows) - len(wins)}")
+
+    current = [(n, s, k) for n, s, k in clean if era_of(n) == 'F2']
+    stratum = [(n, s, k) for n, s, k in clean if era_of(n) != 'F2']
+    print()
+    tally(current, "HEADLINE current-era (unconditional)")
+    tally(stratum, "pre-fix keeps (CONDITIONAL stratum -- not comparable to a benchmark)")
     print(f"redo ({len(redo)}): {' '.join(redo)}")
     print(f"discarded ({len(discard)}): {' '.join(discard)}")
 
