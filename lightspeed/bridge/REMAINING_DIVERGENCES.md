@@ -86,7 +86,11 @@ and restores AO's stage from its stage-2-only moves — the drive52 g3 phantom v
 escape transient (a live escape plays a ~2.5s animation during which the room still reports
 COMBAT with the potion consumed; the drive waits it out instead of crashing — the drive52 g7
 crash. Java's escape fires in ANY room whose phase is COMBAT, events included; the only blocks
-are canUse's boss-type/BackAttack checks, which the engine mirrors).
+are canUse's boss-type/BackAttack checks, which the engine mirrors); Lagavulin wake turns (Java
+bytes 4 STUNNED and 6 OPEN_NATURAL do nothing on their turn then attack — they now park on
+LAGAVULIN_SLEEP with no ASLEEP, whose engine woken branch idles-then-attacks; ASLEEP seeding
+keys on live Metallicize presence, which Java's OPEN removes — the a20h10k g32 shadow line:
+the reconstruction attacked one turn early after a damage wake).
 
 ## How to refresh this list
 
