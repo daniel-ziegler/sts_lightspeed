@@ -16,7 +16,7 @@ from lightspeed.bridge.agent import STSLightspeedAgent
 
 
 
-DEFAULT_CKPT = os.path.join(RUNS_DIR, "heart1.pt.iter_2575")
+DEFAULT_CKPT = os.path.join(RUNS_DIR, "heart1.pt")
 
 
 def load_policy_service(ckpt_path, device=None):
