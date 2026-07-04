@@ -16,6 +16,22 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-04 (a20h10k live tally: behavior-era correction protocol)
+
+Bridge fixes shipped mid-grind (5831f2f Lagavulin wake park, 0200440 Surrounded facing,
+a510d70 byte-keyed ASLEEP seeding), so the raw live tally mixes different agents, and crashed
+seeds can't just be dropped (crashes correlate with depth). Protocol, implemented in
+`lightspeed/grind_era_tally.py`: KEEP a game iff its realized trajectory never entered a
+fix-affected state (a decision showing Lagavulin move byte 4/6, or any Spire Shield/Spear
+decision, per era) -- then old and new code compute identical search distributions along the
+whole trajectory and the outcome is identically distributed under current code; DISCARD
+otherwise; REDO crashed seeds under current code after the grind. Interim at g40: **clean 14
+games, 0 wins** (all four raw wins -- 2 hearts, 2 act3 -- were in tainted deep games, as
+expected since depth correlates with meeting those states); 23 discarded; 3 to redo
+(JGQL0YT5ISZU, UCQNQ3U4KNZZ, 2LVX3CDNDVR9Q). g41-g100 are all current-era. Caveat: the
+2026-07-03 matched-seed control below compared the PRE-FIX live agent to offline; its
+no-gap conclusion is about that agent, and the fixes only move live upward.
+
 ## 2026-07-04 (A20 offline benchmark FINAL: 18.6% heart-kill @10k sims, n=1000)
 
 The 1000-game extension of the A20 eval finished (heart1.pt iter_2575, seeds 1M+, 10k sims,
