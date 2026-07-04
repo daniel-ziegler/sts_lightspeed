@@ -54,6 +54,11 @@ def main():
                          '1.0/0.5 incl. boss, old eval weights) instead of the engine defaults')
     ap.add_argument('--battle-csv', default=None,
                     help='also write one row per battle (boss analysis) to this path')
+    ap.add_argument('--trace', action='store_true',
+                    help='also write a per-game decision trace to <out>.trace.jsonl: every '
+                         'multi-choice overworld decision (floor, hp, offered content, pick) plus '
+                         'post-battle hp snapshots -- the offline half of matched live-vs-offline '
+                         'trajectory diffs (requires --out)')
     ap.add_argument('--randomize-paths', action='store_true',
                     help='intervention arm: uniform-random path choices (prices the routing policy)')
     ap.add_argument('--ascension', type=int, default=0,
@@ -98,9 +103,11 @@ def main():
     elif not args.legacy_config and args.boss_widening == 'off':
         # pin boss widening to the general tuned values (engine default is the boss-gated set)
         legacy = dict(mcts_boss_widening_c=4.6, mcts_boss_widening_alpha=0.37)
+    if args.trace and not args.out:
+        raise SystemExit("--trace requires --out (the trace goes to <out>.trace.jsonl)")
     config = TrainConfig(
         mcts_simulations=args.mcts_sims,
-        log_battle_outcomes=args.battle_csv is not None,
+        log_battle_outcomes=args.battle_csv is not None or args.trace,
         randomize_path_choices=args.randomize_paths,
         fixed_ascension=args.ascension,
         **legacy,
@@ -177,6 +184,44 @@ def main():
         # traj.final_relics holds Relic objects (with .id RelicId and .data counter), not RelicIds.
         return {'id': int(r.id), 'name': str(r.id).split('.')[-1], 'data': int(r.data)}
 
+    # Decision trace (--trace): one line per game with every multi-choice overworld decision
+    # (single-choice steps and battle actions aren't in traj.experiences) plus post-battle hp
+    # snapshots. Seeds already present in the trace file are not re-written; note the main --out
+    # resume check governs whether a game runs at all, so a seed finished in --out but absent
+    # from the trace stays absent -- use a fresh --out for trace runs.
+    trace_fout = None
+    trace_done = set()
+    if args.trace:
+        trace_path = out_path + '.trace.jsonl'
+        if os.path.exists(trace_path):
+            with open(trace_path) as tin:
+                for tline in tin:
+                    if tline.strip():
+                        trace_done.add(json.loads(tline)['seed'])
+        trace_fout = open(trace_path, 'a')
+
+    def decision_rec(exp):
+        ch, m = exp.choice, exp.metrics
+        def cname(c):
+            return str(c.id).split('.')[-1] + ('+' if c.upgraded else '')
+        return {
+            'floor': int(m.floor_num), 'act': int(m.act), 'hp': int(m.cur_hp),
+            'max_hp': int(m.max_hp), 'keys': int(m.num_keys), 'encounter': int(m.encounter),
+            'choice_type': int(exp.choice_type), 'picked': exp.action_str,
+            'offered': {
+                'cards': [cname(c) for c in ch.cards_offered],
+                'relics': [str(r).split('.')[-1] for r in ch.relics_offered],
+                'potions': [str(p).split('.')[-1] for p in ch.potions_offered],
+                'paths': [int(x) for x in ch.paths_offered],
+                'fixed': [a['action'].name for a in ch.fixed_actions],
+            },
+        }
+
+    def battle_snap_rec(snap):
+        return {'floor': int(snap.floor), 'act': int(snap.act), 'encounter': int(snap.encounter),
+                'post_hp': int(snap.cur_hp), 'max_hp': int(snap.max_hp),
+                'potions': int(snap.potion_count), 'deck_size': int(snap.deck_size)}
+
     # Boss encounter ids (MonsterEncounter enum order; see constants/MonsterEncounters.h)
     BOSS_ENCOUNTERS = {18, 19, 20, 37, 38, 39, 52, 53, 54, 56}
     bwriter = bfout = None
@@ -202,6 +247,7 @@ def main():
             for f in as_completed(futs):
                 s = futs[f]
                 rec = None
+                traj = None
                 try:
                     traj = f.result()
                     m = traj.final_metrics
@@ -228,6 +274,12 @@ def main():
                     fout.write(json.dumps(rec) + '\n'); fout.flush()
                 else:
                     writer.writerow((s, won, floor, keys)); fout.flush()
+                if trace_fout is not None and traj is not None and s not in trace_done:
+                    trace_fout.write(json.dumps({
+                        'seed': s, 'won': won, 'floor': floor,
+                        'decisions': [decision_rec(e) for e in traj.experiences],
+                        'battles': [battle_snap_rec(b) for b in traj.battle_log],
+                    }) + '\n'); trace_fout.flush()
                 if bwriter is not None and won != -1:
                     for i, snap in enumerate(traj.battle_log):
                         bwriter.writerow((s, i, snap.floor, snap.act,
@@ -245,6 +297,8 @@ def main():
     fout.close()
     if bfout is not None:
         bfout.close()
+    if trace_fout is not None:
+        trace_fout.close()
 
     rows_clean = [r for r in rows if r[1] != -1]
     n = len(rows_clean)
