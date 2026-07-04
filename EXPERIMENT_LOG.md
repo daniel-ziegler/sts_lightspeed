@@ -16,6 +16,22 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-03 (matched-seed live-vs-offline control: NO bridge gap at A20)
+
+The a20h10k live grind opened 0-for-11 valid (2 seeds burned by launch-race/reshuffle crashes),
+p ≈ 0.05 vs the offline benchmark, so the matched-seed harness got built and run: eval_hero
+--seeds-file replays the exact live base-35 seeds offline (same checkpoint/A20/10k sims/temp 0).
+Result on the 10 valid seeds: **offline 1/10 (one act-3 clear, 0 hearts, avg floor 39.4) vs live
+0 hearts + 1 act-3 clear in 11 — the arms are indistinguishable.** Per-seed outcomes swing both
+ways (live died F10 where offline reached F50; live reached F56 where offline died F23) — MCTS
+stochasticity, not fidelity; only the aggregate is a fidelity signal. Against the benchmark
+(now 21% total wins / 20% hearts at n=268 of the 1000-game extension), the combined batch's
+≤2-wins-in-21 is P=0.16, and 0-hearts-in-21 collapses to P≈0.10 once you count the ~10 distinct
+maps instead of 21 games. Verdict: **the live bridge plays at offline strength; the 0/11 open
+was seed-batch luck plus a drifting-down benchmark estimate.** Tooling committed for future
+gaps: eval_hero --seeds-file/--trace (743fc66, dff67c0) + lightspeed/bridge/matched_diff.py
+first-divergence classifier ROUTE/CONTENT/PICK/COMBAT (f71c4b2).
+
 ## 2026-07-03 (A20 offline benchmark: 24% heart-kill @10k sims)
 
 eval_hero, heart1.pt (iter_2575), A20, 100 games (seeds 1M+), 10000 sims, temp 0, current
