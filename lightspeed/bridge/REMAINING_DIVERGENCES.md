@@ -44,9 +44,16 @@ Status legend: **ARTIFACT** (shadow measurement noise, not a real gap) · **DEFE
 5. **Writhing Mass residual hp-only ET diffs — OPEN.** Malleable / Flail block are modeled now
    (Hand of Greed routed through `attacked()`, asc-correct Flail block), but a small hp-only
    end-turn residue in WM fights is still unexplained.
-6. **Energy ±1 counter drift — OPEN (low volume).** Happy Flower / Art of War / Nunchaku /
-   Gremlin Horn counters advance on monster-turn events the per-decision reconstruction can't
-   see. The carried pbc tracks them correctly, so this is shadow-only.
+6. **Energy ±1 — RESOLVED as noise/RNG (2026-07-03 audit).** Every named model checked against
+   the decompiled Java came back correct: Art of War (attacksPlayedThisTurn gate, verified by
+   replaying a captured no-attack end-turn — the engine's +1 matched live), Happy Flower's
+   ++counter==3 convention, Gremlin Horn's death proc, recharge's reset (monster-turn energy
+   procs wiped identically), Ancient Tea Set (battle-start-only, can't re-fire on a converted
+   bc), and the per-combat relic counters restored from live. The surviving lines split into
+   (a) Snecko Eye / Mummified Hand cost rolls inside the one-step window — live RNG, now tagged
+   `[shadow unverifiable]` when the diff is energy-only under those relics — and (b) stale
+   energy emits (both directions in the same game with no counter relic). The driven pbc
+   re-syncs costs/energy from live every decision, so neither affects live play.
 7. **Runic Dome hidden miscInfo — DEFERRED.** Under Dome, made moves are force-committed onto
    the shadow (`commit_observed_move`), but the miscInfo monsters (Champ / Darkling / Book of
    Stabbing / Gremlin Wizard) keep hidden per-hit state that can't be recovered, so their

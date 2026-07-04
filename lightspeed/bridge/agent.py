@@ -438,6 +438,21 @@ class STSLightspeedAgent:
                     print(f"[shadow unverifiable] (ET) after {desc} (Runic Dome -- "
                           f"{mon_hidden - mon_forced} hidden move(s) unobserved): "
                           + "; ".join(diffs) + ctx, file=sys.stderr)
+                elif (len(diffs) == 1 and pred["energy"] != truth["energy"]
+                      and (truth_bc.player.hasRelic(sts.RelicId.SNECKO_EYE)
+                           or truth_bc.player.hasRelic(sts.RelicId.MUMMIFIED_HAND))):
+                    # An energy-ONLY diff under a cost-randomizing relic is a live RNG roll the
+                    # one-step can't reproduce: Snecko rerolls the cost of every card drawn inside
+                    # the step (end-turn draw, Battle Trance/Pommel draws), Mummified Hand zeroes a
+                    # RANDOM hand card on each power play -- either shifts a later play's cost by
+                    # the roll delta. Model checks against Java found no real bug in this class
+                    # (Art of War, Happy Flower convention, Gremlin Horn, recharge all verified);
+                    # an energy diff WITHOUT these relics, or paired with hp/block/hand deltas,
+                    # still counts as a divergence.
+                    which = ("Snecko Eye" if truth_bc.player.hasRelic(sts.RelicId.SNECKO_EYE)
+                             else "Mummified Hand")
+                    print(f"[shadow unverifiable] ({tag}) after {desc} ({which} cost roll -- "
+                          f"live RNG): " + "; ".join(diffs) + ctx, file=sys.stderr)
                 else:
                     # For a Runic Dome end-turn where every hidden move WAS forced from the observed
                     # last_move, this is now a real signal (the move was right), not move uncertainty.
