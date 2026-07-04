@@ -35,10 +35,20 @@ for seed in "${SEEDS[@]}"; do
   # Per-game ascension: a fixed level, or a random 0-20 when ASC=rand (mirrors run_batch.sh).
   if [ "$ASCLVL" = "rand" ]; then GAME_ASC=$(( RANDOM % 21 )); else GAME_ASC="$ASCLVL"; fi
   env PBC_DRIVE=1 SEED="$seed" ASC="$GAME_ASC" SIMS="$SIMS" TEMP=0 "$REPO/run_live.sh" "${RUN}" 1 >/dev/null 2>&1
+  # Wait for the game to finish. comm.py's absence only means "game over" once it has been SEEN
+  # at least once: a slow JVM/Steam launch can outlast run_live's 45s settle + the first tick,
+  # and declaring the game dead then pkills comm.py right as the mod spawns it (a banner-only
+  # errlog, driven=0, kind=CRASH -- a burned seed). Grace cap: if comm.py never appears within
+  # 20 ticks (5 min), the launch genuinely failed and the errlog classification proceeds.
   timedout=1
+  seen=0
   for t in $(seq 1 "$TICKS"); do
     sleep 15
-    pgrep -f '[c]omm.py --character' >/dev/null || { timedout=0; break; }
+    if pgrep -f '[c]omm.py --character' >/dev/null; then
+      seen=1
+    elif [ "$seen" -eq 1 ] || [ "$t" -ge 20 ]; then
+      timedout=0; break
+    fi
   done
   pkill -9 -f comm.py 2>/dev/null
   # Fallbacks are gone (divergence now crashes): a game that can't be resolved raises, so run_agent_cli
