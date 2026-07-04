@@ -30,8 +30,12 @@ Status legend: **ARTIFACT** (shadow measurement noise, not a real gap) · **DEFE
 2. **RNG-target rolls — ARTIFACT (unverifiable).** Shield Gremlin protects an engine-rolled
    ally; a Havoc'd attack picks a random target; Juggernaut fires its per-block-gain damage at a
    random enemy (the drive52 g11 SpireShield/Spear lines — every block card "dealt 7" to a
-   different monster in engine vs live). The one-step shadow can't know the live roll; these
-   could be reclassified `[shadow unverifiable]` the way Runic Dome moves already are.
+   different monster in engine vs live). Same family: hand-size diffs (both directions, ±1/±2)
+   in an Evolve deck with statuses in the pile (Mark of Pain / Dagger Wounds — drive52 g31) —
+   once a reshuffle re-orders the pile with engine RNG, the shadow draws a different number of
+   statuses and Evolve chains a different number of extra draws. The one-step shadow can't know
+   the live roll; these could be reclassified `[shadow unverifiable]` the way Runic Dome moves
+   already are.
 3. **Havoc on an EMPTY draw pile — DEFERRED.** `playTopCardInDrawPile` queues an
    `EmptyDeckShuffle` (`bc.rng`) whose order the replay can't reproduce, so the played card
    can't be forced. Non-empty Havoc chains are exact: `_pbc_force_live_draw_order` forces the
