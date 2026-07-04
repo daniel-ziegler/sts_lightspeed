@@ -25,6 +25,10 @@ def main():
     ap.add_argument('--ckpt', required=True, help='path to e.g. runs/hero.pt.iter_130')
     ap.add_argument('--n-games', type=int, default=100)
     ap.add_argument('--seed-start', type=int, default=1_000_000)
+    ap.add_argument('--seeds-file', default=None,
+                    help='play these exact seeds instead of --seed-start/--n-games: a file of '
+                         'base-35 seed strings, one per line; lines with a seed=XXX token (e.g. '
+                         'grind results files) work too, other lines are skipped')
     ap.add_argument('--mcts-sims', type=int, default=10_000)
     ap.add_argument('--num-workers', type=int, default=4)
     ap.add_argument('--battle-timeout', type=float, default=300.0,
@@ -113,7 +117,30 @@ def main():
     # update_weights one-shot in case service expects it
     service.update_weights(net)
 
-    seeds = list(range(args.seed_start, args.seed_start + args.n_games))
+    if args.seeds_file:
+        # Exact-seed mode (matched live-vs-offline runs): base-35 strings -> the signed int64 the
+        # engine expects. Grind results lines ("gN seed=XXX ...") and bare-seed lines both parse;
+        # anything else (headers, tallies) is skipped. Order-preserving dedupe.
+        import re
+        from lightspeed.bridge.seeds import seed_string_to_long
+        seeds = []
+        seen_strs = set()
+        with open(args.seeds_file) as fin:
+            for line in fin:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                m = re.search(r'\bseed=([0-9A-Z]+)\b', line)
+                tok = m.group(1) if m else (line if re.fullmatch(r'[0-9A-Za-z]+', line) else None)
+                if tok is None or tok in seen_strs:
+                    continue
+                seen_strs.add(tok)
+                seeds.append(seed_string_to_long(tok))
+        if not seeds:
+            raise SystemExit(f"no seeds parsed from {args.seeds_file}")
+        print(f"seeds-file: {len(seeds)} seeds from {args.seeds_file}", flush=True)
+    else:
+        seeds = list(range(args.seed_start, args.seed_start + args.n_games))
 
     # Output format: rich JSONL (--out) carries individual keys + final deck + relics per game;
     # the flat CSV (--out-csv) is the scalar fallback. Both are crash-resumable: one record per
