@@ -90,7 +90,12 @@ are canUse's boss-type/BackAttack checks, which the engine mirrors); Lagavulin w
 bytes 4 STUNNED and 6 OPEN_NATURAL do nothing on their turn then attack — they now park on
 LAGAVULIN_SLEEP with no ASLEEP, whose engine woken branch idles-then-attacks; ASLEEP seeding
 keys on live Metallicize presence, which Java's OPEN removes — the a20h10k g32 shadow line:
-the reconstruction attacked one turn early after a damage wake).
+the reconstruction attacked one turn early after a damage wake); Surrounded facing (the engine's
++50% back-attack keys on player.lastTargetedMonster, which conversion never set -- fresh
+reconstructions kept the struct default and mis-sided the bonus; now restored from which live
+monster carries the BackAttack power, exposed via a new lastTargetedMonster binding -- the
+a20h10k g33 Spire Shield/Spear hp-only ET line, reproduced to the point: post-fix replay gives
+live's exact 61hp/6blk).
 
 ## How to refresh this list
 

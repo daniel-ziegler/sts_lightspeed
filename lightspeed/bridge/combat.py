@@ -233,6 +233,21 @@ def convert_combat_state(spire_game: game.Game, gc: sts.GameContext) -> "tuple[s
         enc = _infer_elite_encounter(spire_game.monsters)
     bc.encounter = enc
 
+    # Facing (act-4 Surrounded): live marks the monster BEHIND the player with the BackAttack
+    # power, but the engine derives the +50% from player.lastTargetedMonster in
+    # calculateDamageToPlayer -- which nothing else here sets, so a fresh conversion keeps the
+    # struct default (slot 1) regardless of live facing. Face an alive monster that does NOT
+    # carry BackAttack. Live flips the power between the elites as the player retargets, so the
+    # per-decision reconcile tracks facing exactly.
+    back_slots = {slot for slot, si in slot_to_spire.items()
+                  if any(p.power_id == 'BackAttack' for p in spire_game.monsters[si].powers)}
+    if back_slots:
+        for slot in sorted(slot_to_spire):
+            m = spire_game.monsters[slot_to_spire[slot]]
+            if slot not in back_slots and not m.is_gone and not m.half_dead:
+                bc.player.lastTargetedMonster = slot
+                break
+
     return bc, slot_to_spire
 
 

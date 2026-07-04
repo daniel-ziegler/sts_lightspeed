@@ -1003,6 +1003,10 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("gold", &Player::gold)
         .def_readwrite("cardDrawPerTurn", &Player::cardDrawPerTurn)
         .def_readwrite("cardsPlayedThisTurn", &Player::cardsPlayedThisTurn)
+        // Facing under act-4 SURROUNDED: calculateDamageToPlayer gives +50% to a monster the
+        // player is not facing. Writable so a converted state restores facing from the live
+        // BackAttack power placement (the marked monster is the one behind).
+        .def_readwrite("lastTargetedMonster", &Player::lastTargetedMonster)
         .def_readwrite("attacksPlayedThisTurn", &Player::attacksPlayedThisTurn)
         .def_readwrite("skillsPlayedThisTurn", &Player::skillsPlayedThisTurn)
         .def_readwrite("cardsDiscardedThisTurn", &Player::cardsDiscardedThisTurn)

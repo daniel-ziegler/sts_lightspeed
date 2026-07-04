@@ -274,7 +274,8 @@ _POWER_IDS_ENGINE_INTRINSIC = frozenset({
     'Unawakened',  # Awakened One phase-1 -> awaken transition is move-driven
     'BackAttack',  # act-4 Spire elites: the +50% back-attack is driven by the player's SURROUNDED
                    # status (mapped, set from live powers) + facing in calculateDamageToPlayer, not a
-                   # monster status -- the monster flag itself is a passive with nothing to reconstruct
+                   # monster status. Skipped as a status, but convert_combat_state reads which
+                   # monster carries it to restore player.lastTargetedMonster (the live facing)
 })
 
 # Engine statuses applied via .debuff()/.addDebuff() (so Artifact and the like interact correctly);
