@@ -3,18 +3,16 @@
 Running log of training/eval experiments (RL session). Newest entries first within each day.
 See COORD.md for the MCTS-session side.
 
-## ⚠ Standing caveat: draw-order clairvoyance (discovered 2026-06-03)
+## Draw-order clairvoyance (discovered 2026-06-03; RESOLVED)
 
-The deployed battle search inherits the concrete draw-pile order at every decision root —
-**all absolute win rates below are inflated** (root-hiding probe: heroe2-270 @1000 sims drops
-69.4% → 35.2% honest; CardPile belief search recovers 56.2%). Note these honest figures are
-LOWER BOUNDS on honest-era performance: they evaluate a policy trained on clairvoyant battles
-with cheat-tuned search knobs — the ~34pp is the information value to this cheat-adapted
-system, not the intrinsic cost of honesty. Relative comparisons within cheat mode (paired
-A/Bs, schedule effects) likely keep their direction but are conditioned on the cheat.
-Open decisions: move RL collection to honest battles (expect a large apparent drop that is
-NOT a regression); retune search knobs under honest dynamics; honest-era retraining will
-recover an unknown chunk of the gap. All entries below predate honest mode unless noted.
+The battle search originally inherited the concrete draw-pile order at every decision root, so
+**absolute win rates in entries before 2026-06-04 are inflated** (root-hiding probe:
+heroe2-270 @1000 sims drops 69.4% → 35.2% honest; CardPile belief search recovers 56.2%).
+Resolved by the canonical CardPile engine (information-set draw pile with deferred shuffle
+randomness — draws are chance nodes; Frozen Eye keeps genuine concrete order), an honest-engine
+search-knob retune (exploration 25), and from-scratch honest retraining
+(honest1 → honest1asc → heart1). Entries from 2026-06-04 onward are honest-era; earlier
+paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
