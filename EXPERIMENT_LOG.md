@@ -16,6 +16,15 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-04 (A20 offline benchmark FINAL: 18.6% heart-kill @10k sims, n=1000)
+
+The 1000-game extension of the A20 eval finished (heart1.pt iter_2575, seeds 1M+, 10k sims,
+temp 0, 0 failures): **heart kills 186/1000 = 18.6% ± 2.4% (95% CI)**; total wins 194 (act3-only
+8); avg floor 39.9; 50% of games collect all 3 keys; losses by act 160/254/263/129, median death
+floor 33 (the act-2 boss). The initial 24/100 read was the optimistic tail of this estimate.
+This is the offline anchor for the live a20h10k grind (2 hearts + 2 act3 in 33 valid at this
+writing -- consistent with 18.6%).
+
 ## 2026-07-03 (matched-seed live-vs-offline control: NO bridge gap at A20)
 
 The a20h10k live grind opened 0-for-11 valid (2 seeds burned by launch-race/reshuffle crashes),
