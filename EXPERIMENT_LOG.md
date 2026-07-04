@@ -34,9 +34,11 @@ Their win rate is near zero by that selection alone; comparing it to the uncondi
 benchmark is invalid. Likewise "keep-if-unaffected else redo" is biased downward: the redo draw
 is unconditional while the retention event is not (P(win|T<inf) > P(win)). The unconditional
 estimators are (a) current-era games only (g39+), or (b) redo ALL pre-fix seeds discarding
-their old outcomes. Headline number = (a), with (b) optional for the full 100-seed sample.
-Interim at g41: current-era 3 games, 0 wins; 3 crashed seeds queued for redo
-(JGQL0YT5ISZU, UCQNQ3U4KNZZ, 2LVX3CDNDVR9Q). Caveat: the 2026-07-03 matched-seed control below
+their old outcomes. Approved scheme (user, 2026-07-04): keep the 12 unaffected pre-fix games
+and redo the 26 affected/crashed seeds (`runs/redo_seeds_a20h10k.txt`, via run_grind.sh
+SEEDS_FILE after the grind) -- valid because the mixture bias term P(T<inf)*[P(w)-P(w|T<inf)]
+vanishes per seed when hitting an affected state is temp-0 near-deterministic given the seed.
+Final sample = 12 keeps + 26 redos + 62 current-era = the full 100 pre-committed seeds. Caveat: the 2026-07-03 matched-seed control below
 compared the PRE-FIX live agent to offline; its no-gap conclusion is about that agent.
 
 ## 2026-07-04 (A20 offline benchmark FINAL: 18.6% heart-kill @10k sims, n=1000)
