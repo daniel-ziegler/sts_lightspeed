@@ -52,7 +52,9 @@ embedding (for PPO), and an auxiliary per-path-option destination-room classifie
 
 The released `heart1.pt` checkpoint was trained this way, uniformly across ascensions 0-20 on
 full 57-floor heart runs. At A0 it kills the heart in ~83% of eval games (600 matched seeds,
-1000 simulations per combat decision).
+1000 simulations per combat decision). At A20 — the game's hardest setting — it kills the heart
+in 18.6% ± 2.4% of eval games (n=1000, 10000 simulations per combat decision), and live grinds
+through the real game via the bridge below match that rate on shared seeds.
 
 ## Battle MCTS without cheating
 
