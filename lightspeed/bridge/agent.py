@@ -643,8 +643,26 @@ class STSLightspeedAgent:
             raise RuntimeError("[pbc] chosen action invalid on driven persistent bc: "
                                f"{self._describe_action(action, self._pbc)}")
         pre_shuffles = self._pbc.empty_deck_shuffle_count
+        # Pre-advance snapshot for decided-outcome forensics: when this advance ends the simulated
+        # combat, the exact input state is the evidence needed to root-cause a phantom outcome
+        # (the a20h10k g38 phantom PLAYER_LOSS was unreproducible because only post-crash state
+        # survived). Copy is cheap (value-type bc, same op the searcher does per simulation).
+        pre_bc = self._pbc.copy()
         action.execute(self._pbc)
         if self._pbc.outcome != sts.BattleOutcome.UNDECIDED:
+            print(f"[pbc] advance {self._describe_action(action, pre_bc)} reached "
+                  f"{self._pbc.outcome} (full pre/post state in pbc_decided_dumps.jsonl)",
+                  file=sys.stderr)
+            try:
+                with open(os.path.join(RUNS_DIR, "pbc_decided_dumps.jsonl"), "a") as f:
+                    raw = self.coordinator.last_raw_communication_state if self.coordinator else None
+                    f.write(json.dumps({
+                        "floor": self._pbc_floor, "outcome": str(self._pbc.outcome),
+                        "action": self._describe_action(action, pre_bc),
+                        "pre_bc": str(pre_bc), "post_bc": str(self._pbc), "raw": raw,
+                    }) + "\n")
+            except Exception:
+                pass
             # The engine predicts this combat is OVER. Normally live ends with it and the next combat
             # decision belongs to a new fight; if one arrives for THIS fight instead, the engine
             # mis-simulated the finish -- _pbc_reconcile_build checks the marker and crashes there.
