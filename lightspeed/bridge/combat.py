@@ -556,13 +556,14 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
     # to remove, regains 8 block every turn forever (the search then badly over-estimates its bulk, and
     # it "attacks" while it should be sleeping). The engine drops Metallicize only when it wakes FROM
     # ASLEEP (Monster::damageUnblockedHelper on a block break, or the turn-timeout wake), so seed ASLEEP
-    # from the sleep intent and let the engine model the wake. Live Metallicize presence is the
-    # ground truth for "still asleep": the do-nothing wake turns (STUNNED / OPEN_NATURAL) also park
-    # on LAGAVULIN_SLEEP, but Java's OPEN state has already removed Metallicize by then, and they
-    # must NOT get ASLEEP (the engine's woken branch is what models their idle-then-attack turn).
-    if move_known and move_history[0] == int(sts.MonsterMoveId.LAGAVULIN_SLEEP):
-        if any(p.power_id == 'Metallicize' for p in monster.powers):
-            sts_monster.buff(sts.MonsterStatus.ASLEEP, 1)
+    # from the sleep intent and let the engine model the wake. Only the live IDLE byte (5) means
+    # genuinely asleep: the do-nothing wake turns (STUNNED 4 / OPEN_NATURAL 6) also park on
+    # LAGAVULIN_SLEEP but must NOT get ASLEEP (the engine's woken branch models their
+    # idle-then-attack turn). Keying on the byte, not on Metallicize presence, because a burning
+    # elite's Metallicize buff survives the wake and would masquerade as sleep.
+    if (move_known and move_history[0] == int(sts.MonsterMoveId.LAGAVULIN_SLEEP)
+            and monster.move_id == 5):
+        sts_monster.buff(sts.MonsterStatus.ASLEEP, 1)
 
     if not move_known:
         # A deterministic alternator (Donu/Deca) with a known last move: infer the real next move from
@@ -829,9 +830,9 @@ def map_move_id(monster_string: str, move_id: int) -> sts.MonsterMoveId:
         
         # Lagavulin. Java bytes 4 (STUNNED, set on the damage wake) and 6 (OPEN_NATURAL) both DO
         # NOTHING on their turn and attack the next; parking them on LAGAVULIN_SLEEP with no
-        # ASLEEP status (Java's OPEN removes Metallicize, so the seeding below stays off) makes
-        # the engine's sleep case take its woken branch -- idle this turn, setMove(ATTACK) --
-        # exactly the Java behavior. Mapping them to ATTACK hits one turn early.
+        # ASLEEP status (the ASLEEP seeding fires only on the IDLE byte 5) makes the engine's
+        # sleep case take its woken branch -- idle this turn, setMove(ATTACK) -- exactly the
+        # Java behavior. Mapping them to ATTACK hits one turn early.
         ("Lagavulin", 1): sts.MonsterMoveId.LAGAVULIN_SIPHON_SOUL,  # DEBUFF
         ("Lagavulin", 3): sts.MonsterMoveId.LAGAVULIN_ATTACK,       # STRONG_ATK
         ("Lagavulin", 4): sts.MonsterMoveId.LAGAVULIN_SLEEP,        # OPEN (stun turn, damage wake)
