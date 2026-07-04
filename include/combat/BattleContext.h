@@ -57,6 +57,10 @@ namespace sts {
         int movesThisTurn = 0;
         int energyWasted = 0;
         int cardsDrawn = 0;
+        // Counts EmptyDeckShuffle resolutions (discard -> draw pile reshuffles). The live bridge
+        // reads it around a driven advance: an outcome that rests on a reshuffle the engine rolled
+        // with its own rng (e.g. an empty-pile Havoc) is unverifiable rather than a mis-simulation.
+        int emptyDeckShuffleCount = 0;
         // end for debugging purposes
 
         Random rng;

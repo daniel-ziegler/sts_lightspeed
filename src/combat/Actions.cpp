@@ -203,6 +203,7 @@ void _DrawCards::operator()(BattleContext &bc) const {
 }
 
 void _EmptyDeckShuffle::operator()(BattleContext &bc) const {
+    ++bc.emptyDeckShuffleCount;
     bc.cards.moveDiscardPileIntoToDrawPile(bc.rng);
 }
 

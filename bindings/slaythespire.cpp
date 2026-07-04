@@ -830,6 +830,7 @@ PYBIND11_MODULE(slaythespire, m) {
     battleContext.def_readwrite("turn", &BattleContext::turn)
         .def_readwrite("ascension", &BattleContext::ascension)
         .def_readonly("smoke_bomb_used", &BattleContext::smokeBombUsed)
+        .def_readonly("empty_deck_shuffle_count", &BattleContext::emptyDeckShuffleCount)
         .def_readwrite("potionCount", &BattleContext::potionCount)
         .def_readwrite("intents_hidden", &BattleContext::intentsHidden)
         .def_property_readonly("player", [](BattleContext &bc) -> Player& {

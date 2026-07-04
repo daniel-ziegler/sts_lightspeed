@@ -40,7 +40,11 @@ Status legend: **ARTIFACT** (shadow measurement noise, not a real gap) · **DEFE
    `EmptyDeckShuffle` (`bc.rng`) whose order the replay can't reproduce, so the played card
    can't be forced. Non-empty Havoc chains are exact: `_pbc_force_live_draw_order` forces the
    full live pile order before every driven advance, so recursive Havoc-into-Havoc replays
-   reality. Rare, and the next per-decision reconcile masks it.
+   reality. Rare; the next per-decision reconcile corrects the observables. On the DRIVEN path
+   a fight-ending outcome downstream of such a reshuffle is tagged unverified instead of arming
+   the decided-outcome crash (`bc.empty_deck_shuffle_count` around the advance) — the a20h10k
+   g2 crash: an empty-pile Havoc+ rolled a lethal top card in-engine (5/20 seeds kill the
+   14-hp Mystic) while live rolled Battle Trance.
 4. **Mayhem draw-top shift — DEFERRED (unverifiable residue).** Mayhem fires post-draw (engine
    fixed 2026-07-03) and the top it plays is forced when observable, but the top can shift
    between the end-turn decision and the play (monster-turn status shuffles, a reshuffle,

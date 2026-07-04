@@ -642,6 +642,7 @@ class STSLightspeedAgent:
         if not action.is_valid_action(self._pbc):
             raise RuntimeError("[pbc] chosen action invalid on driven persistent bc: "
                                f"{self._describe_action(action, self._pbc)}")
+        pre_shuffles = self._pbc.empty_deck_shuffle_count
         action.execute(self._pbc)
         if self._pbc.outcome != sts.BattleOutcome.UNDECIDED:
             # The engine predicts this combat is OVER. Normally live ends with it and the next combat
@@ -649,6 +650,19 @@ class STSLightspeedAgent:
             # mis-simulated the finish -- _pbc_reconcile_build checks the marker and crashes there.
             # A Smoke Bomb escape is flagged: live plays a ~2.5s escape animation during which the
             # room still reports COMBAT, so handle_combat waits that transient out instead.
+            #
+            # Exception: an advance that crossed an EmptyDeckShuffle reshuffled the discard in an
+            # engine-local order the live game rolls differently (an empty-pile Havoc plays a
+            # different card), so a fight-ending result downstream of it is UNVERIFIABLE rather
+            # than a mis-simulation -- don't arm the crash marker; drop the pbc and let live
+            # decide (a re-seed follows if the fight continues). Smoke Bomb escapes stay armed:
+            # the escape itself never depends on a reshuffle, and the escape wait needs the flag.
+            if (self._pbc.empty_deck_shuffle_count > pre_shuffles
+                    and not self._pbc.smoke_bomb_used):
+                print(f"[pbc] engine outcome {self._pbc.outcome} rests on an empty-pile reshuffle "
+                      f"(order unknowable) -- unverified, deferring to live", file=sys.stderr)
+                self._pbc = None
+                return
             self._pbc_decided = (self._pbc_floor, str(self._pbc.outcome),
                                  bool(self._pbc.smoke_bomb_used))
             self._pbc = None
