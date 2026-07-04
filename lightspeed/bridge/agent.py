@@ -40,7 +40,8 @@ from spirecomm.communication.action import (
 class STSLightspeedAgent:
 
     def __init__(self, chosen_class=PlayerClass.THE_SILENT, net=None, temperature=0.0, net_seed=0,
-                 start_seed=None, ascension=0, sims=1000, watch=False, watch_pre_ms=0, watch_post_ms=0):
+                 start_seed=None, ascension=0, sims=1000, watch=False, watch_pre_ms=0, watch_post_ms=0,
+                 watch_reward_ms=0):
         self.game = Game()
         self.errors = 0
         # Watch mode: when enabled, each net decision pauses watch_pre_ms, moves the cursor onto its
@@ -49,6 +50,8 @@ class STSLightspeedAgent:
         self.watch = watch
         self.watch_pre_ms = watch_pre_ms
         self.watch_post_ms = watch_post_ms
+        # Combat-reward claims tick through at their own (shorter) pause -- see _collect_combat_reward.
+        self.watch_reward_ms = watch_reward_ms
         # When set (a base-35 StS seed string, e.g. "54FYPZX13RLTT"), new runs start on this exact
         # seed -- used to replay a specific game (e.g. the captured slime-boss crash seed).
         self.start_seed = start_seed
@@ -1395,15 +1398,18 @@ class STSLightspeedAgent:
             pass
         return None
 
-    def _watch_pause(self, desc, hover_idx=None):
+    def _watch_pause(self, desc, hover_idx=None, pre_ms=None, post_ms=None):
         """Watch mode: pause `watch_pre_ms`, move the cursor onto the intended net choice (hover it,
         where the screen supports it), pause `watch_post_ms`, then return so the caller commits -- so
-        a human can follow the play. No-op at full speed (watch disabled)."""
+        a human can follow the play. No-op at full speed (watch disabled). pre_ms/post_ms override
+        the two pauses for this call (the combat-reward tick-through)."""
         if not self.watch:
             return
+        pre_ms = self.watch_pre_ms if pre_ms is None else pre_ms
+        post_ms = self.watch_post_ms if post_ms is None else post_ms
         # Pause BEFORE the cursor moves -- the screen sits a beat before the cursor travels to the pick.
-        if self.watch_pre_ms > 0:
-            time.sleep(self.watch_pre_ms / 1000.0)
+        if pre_ms > 0:
+            time.sleep(pre_ms / 1000.0)
         if hover_idx is not None and self.coordinator is not None:
             self.coordinator.send_message(f"hover {hover_idx}")
             # `hover` is a fire-and-forget on-screen signal: it warps the cursor but does NOT consume
@@ -1412,10 +1418,10 @@ class STSLightspeedAgent:
             # otherwise the real pick can't execute and the run stalls until the 30s silence-nudge.
             self.coordinator.game_is_ready = True
         print(f"[watch] {desc}{'' if hover_idx is None else f' [hover {hover_idx}]'} -- "
-              f"pre {self.watch_pre_ms}ms / post {self.watch_post_ms}ms", file=sys.stderr)
+              f"pre {pre_ms}ms / post {post_ms}ms", file=sys.stderr)
         # Pause AFTER the cursor moves, before the caller commits the pick.
-        if self.watch_post_ms > 0:
-            time.sleep(self.watch_post_ms / 1000.0)
+        if post_ms > 0:
+            time.sleep(post_ms / 1000.0)
 
     def _watch_select_pause(self, live_cards, desc):
         """Watch mode: hover the pending in-combat select pick before it commits -- the first card
@@ -1861,9 +1867,12 @@ class STSLightspeedAgent:
         has_key = any(r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)
                       for r in rewards)
 
-        # In watch mode, hover the reward-list item being taken before committing it.
+        # In watch mode, hover the reward-list item being taken before committing it. Claims tick
+        # through at the shorter reward pause (no pre-beat -- the cursor moves as soon as the screen
+        # re-opens) instead of the full decision pacing.
         def take(i):
-            self._watch_pause(f"reward {rewards[i].reward_type}", i)
+            self._watch_pause(f"reward {rewards[i].reward_type}", i,
+                              pre_ms=0, post_ms=self.watch_reward_ms)
             return CombatRewardAction(rewards[i])
 
         # Free pickups, one per call (the screen re-opens for the next).

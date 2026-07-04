@@ -88,7 +88,8 @@ def run_agent_cli():
     parser.add_argument("--sims", type=int, default=int(os.environ.get("STS_SIMS", 1000)),
                        help="Combat MCTS simulations per decision (simulation_count_base)")
     parser.add_argument("--watch", action="store_true",
-                       default=("STS_WATCH_PRE_MS" in os.environ or "STS_WATCH_POST_MS" in os.environ),
+                       default=("STS_WATCH_PRE_MS" in os.environ or "STS_WATCH_POST_MS" in os.environ
+                                or "STS_WATCH_REWARD_MS" in os.environ),
                        help="Enable watch mode (also auto-enabled by setting either watch delay / its "
                             "env var): at each net decision pause, move the cursor onto the intended "
                             "pick, pause, then commit. Off = full speed.")
@@ -96,6 +97,10 @@ def run_agent_cli():
                        help="Watch mode: ms to wait BEFORE moving the cursor to the pick (default 0).")
     parser.add_argument("--watch-post-ms", type=int, default=int(os.environ.get("STS_WATCH_POST_MS", 0)),
                        help="Watch mode: ms to wait AFTER moving the cursor, before committing (default 0).")
+    parser.add_argument("--watch-reward-ms", type=int, default=int(os.environ.get("STS_WATCH_REWARD_MS", 100)),
+                       help="Watch mode: shorter pause between combat-reward list claims, so the "
+                            "no-decision pickups tick through instead of using the full decision "
+                            "pacing (default 100).")
 
     args = parser.parse_args()
     
@@ -120,7 +125,7 @@ def run_agent_cli():
     agent = STSLightspeedAgent(chosen_class, net=net, temperature=args.temperature,
                                start_seed=args.seed, ascension=args.ascension, sims=args.sims,
                                watch=args.watch, watch_pre_ms=args.watch_pre_ms,
-                               watch_post_ms=args.watch_post_ms)
+                               watch_post_ms=args.watch_post_ms, watch_reward_ms=args.watch_reward_ms)
     coordinator = Coordinator()
     agent.coordinator = coordinator  # lets the agent capture raw decision states for replay
 

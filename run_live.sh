@@ -19,13 +19,15 @@ GAMES="${2:-20}"
 #   TEMP=<f>       net action-sampling temperature
 #   WATCH_PRE=<ms>  watch mode (enables it): ms before moving the cursor to the pick (default 0)
 #   WATCH_POST=<ms> watch mode (enables it): ms after moving the cursor, before committing (default 0)
-#                   -- setting either WATCH_PRE or WATCH_POST turns watch mode on; unset = full speed
+#   WATCH_REWARD=<ms> watch mode: shorter pause between combat-reward list claims (default 100)
+#                   -- setting any WATCH_* delay turns watch mode on; unset = full speed
 #   PBC_DRIVE=1    drive the live combat decision from the reconciled persistent bc (STS_PBC_DRIVE)
 SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
 # Watch defaults ON at 300/300ms so grind games are human-watchable (hover + short pauses;
 # decisions are unchanged). The env var's PRESENCE enables watch mode, so a 0 still hovers at
 # full speed; restore empty defaults ("${WATCH_PRE:-}") to disable watch entirely.
-WATCH_PRE="${WATCH_PRE:-300}"; WATCH_POST="${WATCH_POST:-300}"; PBC_DRIVE="${PBC_DRIVE:-}"
+WATCH_PRE="${WATCH_PRE:-300}"; WATCH_POST="${WATCH_POST:-300}"; WATCH_REWARD="${WATCH_REWARD:-}"
+PBC_DRIVE="${PBC_DRIVE:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
 CFG="/mnt/c/Users/zieDa/AppData/Local/ModTheSpire/CommunicationMod/config.properties"
@@ -59,7 +61,7 @@ fi
 # (the same way STS_COMM_CAPTURE survives). comm.py reads STS_START_SEED/STS_ASCENSION/STS_SIMS/
 # STS_TEMPERATURE as the defaults for its matching flags.
 sed -i "s/comm_capture_[A-Za-z0-9_]*/${CAP}/" "$CFG"
-sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ STS_WATCH_MS\\=[0-9]*//g; s/ STS_WATCH_PRE_MS\\=[0-9]*//g; s/ STS_WATCH_POST_MS\\=[0-9]*//g; s/ STS_PERSISTENT_BC\\=[0-9]*//g; s/ STS_PBC_DRIVE\\=[0-9]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
+sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ STS_WATCH_MS\\=[0-9]*//g; s/ STS_WATCH_PRE_MS\\=[0-9]*//g; s/ STS_WATCH_POST_MS\\=[0-9]*//g; s/ STS_WATCH_REWARD_MS\\=[0-9]*//g; s/ STS_PERSISTENT_BC\\=[0-9]*//g; s/ STS_PBC_DRIVE\\=[0-9]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
 sed -i "s/--games [0-9]*/--games ${GAMES}/" "$CFG"
 # Bot identity: runs started by this bot display "Silver Automaton" (mod fork's playerName option).
 if grep -q '^playerName=' "$CFG"; then
@@ -76,6 +78,7 @@ ENVV=" PYTHONHASHSEED\\=0"
 [ -n "$TEMP" ] && ENVV="$ENVV STS_TEMPERATURE\\=$TEMP"
 [ -n "$WATCH_PRE" ] && ENVV="$ENVV STS_WATCH_PRE_MS\\=$WATCH_PRE"
 [ -n "$WATCH_POST" ] && ENVV="$ENVV STS_WATCH_POST_MS\\=$WATCH_POST"
+[ -n "$WATCH_REWARD" ] && ENVV="$ENVV STS_WATCH_REWARD_MS\\=$WATCH_REWARD"
 [ -n "$PBC_DRIVE" ] && ENVV="$ENVV STS_PBC_DRIVE\\=$PBC_DRIVE"
 # Insert the env assignments right after the existing STS_COMM_CAPTURE\=... token.
 [ -n "$ENVV" ] && sed -i "s#\(STS_COMM_CAPTURE\\\\=[^ ]*\)#\1${ENVV}#" "$CFG"
