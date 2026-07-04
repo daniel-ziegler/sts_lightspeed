@@ -22,7 +22,10 @@ GAMES="${2:-20}"
 #                   -- setting either WATCH_PRE or WATCH_POST turns watch mode on; unset = full speed
 #   PBC_DRIVE=1    drive the live combat decision from the reconciled persistent bc (STS_PBC_DRIVE)
 SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
-WATCH_PRE="${WATCH_PRE:-}"; WATCH_POST="${WATCH_POST:-}"; PBC_DRIVE="${PBC_DRIVE:-}"
+# Watch defaults ON at 300/300ms so grind games are human-watchable (hover + short pauses;
+# decisions are unchanged). The env var's PRESENCE enables watch mode, so a 0 still hovers at
+# full speed; restore empty defaults ("${WATCH_PRE:-}") to disable watch entirely.
+WATCH_PRE="${WATCH_PRE:-300}"; WATCH_POST="${WATCH_POST:-300}"; PBC_DRIVE="${PBC_DRIVE:-}"
 REPO=/home/dmz/osrc/sts_lightspeed
 CAP="comm_capture_${RUN}"
 CFG="/mnt/c/Users/zieDa/AppData/Local/ModTheSpire/CommunicationMod/config.properties"

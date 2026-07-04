@@ -17,7 +17,10 @@ REPO=/home/dmz/osrc/sts_lightspeed
 ERRLOG="/mnt/c/Program Files (x86)/Steam/steamapps/common/SlayTheSpire/communication_mod_errors.log"
 RESULTS="$REPO/runs/grind_${RUN}_results.txt"
 ISSUES="$REPO/runs/grind_${RUN}_issues.txt"
-: > "$RESULTS"; : > "$ISSUES"
+# RESUME=1 continues an interrupted grind: keep RESULTS/ISSUES and (below, once the seed list is
+# built) skip the seeds already played. Requires invoking with the SAME seed list as the
+# interrupted run (same run_name/N or SEEDS_FILE).
+if [ -z "${RESUME:-}" ]; then : > "$RESULTS"; : > "$ISSUES"; fi
 TICKS=$(( TMO_MIN * 4 ))
 
 # Seed list: SEEDS_FILE=<path> plays an explicit list of base-35 seeds (one per line -- redo
@@ -34,9 +37,18 @@ print('\n'.join(comm.seed_long_to_string(r.getrandbits(63)) for _ in range($N)))
 ")
 fi
 
-echo "grind ${RUN}: ${N} PBC_DRIVE games at A${ASCLVL} / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap${SEEDS_FILE:+ (seeds from $SEEDS_FILE)}" | tee -a "$RESULTS"
+# Resume: every played game left one '^g<i>' line, in seed order, so the line count IS the
+# number of seeds to skip; numbering continues from there.
+START=0
+if [ -n "${RESUME:-}" ]; then
+  START=$(grep -c '^g[0-9]' "$RESULTS")
+  SEEDS=("${SEEDS[@]:$START}")
+  N=${#SEEDS[@]}
+fi
 
-i=0
+echo "grind ${RUN}: ${N} PBC_DRIVE games at A${ASCLVL} / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap${SEEDS_FILE:+ (seeds from $SEEDS_FILE)}${RESUME:+ (resumed at g$((START+1)))}" | tee -a "$RESULTS"
+
+i=$START
 for seed in "${SEEDS[@]}"; do
   i=$((i+1))
   # Per-game ascension: a fixed level, or a random 0-20 when ASC=rand (mirrors run_batch.sh).
