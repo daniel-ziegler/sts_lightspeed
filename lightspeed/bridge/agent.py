@@ -29,7 +29,8 @@ from lightspeed.bridge.seeds import seed_long_to_string
 from spirecomm.communication.action import (
     Action, BossRewardAction, CancelAction, CardRewardAction, CardSelectAction, ChooseAction,
     ChooseMapBossAction, ChooseMapNodeAction, ChooseShopkeeperAction, CombatRewardAction,
-    EndTurnAction, OpenChestAction, PlayCardAction, ProceedAction, RestAction, RewardType,
+    EndTurnAction, OpenChestAction, PlayCardAction, PotionAction, ProceedAction, RestAction,
+    RewardType,
     StartGameAction,
 )
 
@@ -846,6 +847,14 @@ class STSLightspeedAgent:
 
         print(f"Chosen action: {spirecomm_action}", file=sys.stderr)
 
+        # Watch mode: a potion drink shows nothing on screen until it resolves (unlike a card play,
+        # which the game animates), so hover the belt potion before committing it. Card plays and
+        # end-turn get no hover -- the pre-pause alone paces them.
+        if self.watch and isinstance(spirecomm_action, PotionAction):
+            verb = "use" if spirecomm_action.use else "discard"
+            slot = self.game.potions.index(spirecomm_action.potion)
+            self._watch_pause(f"potion {verb} {spirecomm_action.potion.name}", f"potion {slot}")
+
         # Diagnostic: Spot Weakness is rejected live if its target doesn't intend to attack. If the
         # search aimed it at a monster the live game shows as non-attacking (or gone / out of range),
         # the play wastes the card -- capture the full target picture (non-fatal) to root-cause it.
@@ -1087,10 +1096,15 @@ class STSLightspeedAgent:
                 sel_bc.open_card_select(multi_task, mnum)
                 chosen = self._run_multi_select(sel_bc, multi_task, action_name, driven=True)
                 self._pbc_prev_action_desc = "MULTI_CARD_SELECT"   # DESYNC attribution
+                self._watch_select_pause(
+                    chosen, f"select {', '.join(c.name for c in chosen) or 'nothing'} ({action_name})")
                 return CardSelectAction(chosen)
 
             bc.open_card_select(multi_task, mnum)
-            return CardSelectAction(self._run_multi_select(bc, multi_task, action_name, driven=False))
+            chosen = self._run_multi_select(bc, multi_task, action_name, driven=False)
+            self._watch_select_pause(
+                chosen, f"select {', '.join(c.name for c in chosen) or 'nothing'} ({action_name})")
+            return CardSelectAction(chosen)
 
         task = single_task
         if task is None:
@@ -1178,6 +1192,7 @@ class STSLightspeedAgent:
         print(f"[mcts] card-select ({action_name}) -> {chosen.getName()}"
               f"{'+' if chosen.upgraded else ''} ({pool_name} idx {sel_idx}"
               f"{', pbc-driven' if driven else ''})", file=sys.stderr)
+        self._watch_select_pause([live_card], f"select {live_card.name} ({action_name})")
         return live_card, chosen_action
 
     def _resolve_discovery(self, select_bc, task, ids, offered, action_name, driven):
@@ -1211,6 +1226,8 @@ class STSLightspeedAgent:
         if task == sts.CardSelectTask.CODEX and sel_idx == len(offered):
             print(f"[mcts] discovery ({action_name}) -> skip (idx {sel_idx}{suffix})",
                   file=sys.stderr)
+            self._watch_pause(f"codex skip ({action_name})",
+                              -1 if self.game.screen_type == ScreenType.CARD_REWARD else None)
             return CancelAction()
         if not (0 <= sel_idx < len(offered)):
             raise RuntimeError(f"MCTS discovery idx {sel_idx} out of range "
@@ -1222,7 +1239,9 @@ class STSLightspeedAgent:
         # "choose <index>" command (CardSelectAction only works on HAND_SELECT/GRID). The
         # choice_list / screen.cards order matches sel_idx.
         if self.game.screen_type == ScreenType.CARD_REWARD:
+            self._watch_pause(f"discovery {chosen.card_id} ({action_name})", sel_idx)
             return ChooseAction(sel_idx)
+        self._watch_select_pause([chosen], f"discovery {chosen.card_id} ({action_name})")
         return CardSelectAction([chosen])
 
     def _run_multi_select(self, select_bc, multi_task, action_name, driven):
@@ -1397,6 +1416,23 @@ class STSLightspeedAgent:
         # Pause AFTER the cursor moves, before the caller commits the pick.
         if self.watch_post_ms > 0:
             time.sleep(self.watch_post_ms / 1000.0)
+
+    def _watch_select_pause(self, live_cards, desc):
+        """Watch mode: hover the pending in-combat select pick before it commits -- the first card
+        of a multi-pick (spirecomm clicks the whole set in one command, so one hover is the best
+        single signal). The index space matches the mod's choice list for HAND_SELECT (the
+        not-yet-selected hand) and GRID (the target group) -- the same screen.cards order
+        CardSelectAction resolves against. Pause-only when nothing is picked (an empty Gamble) or
+        the card isn't on the live screen."""
+        if not self.watch:
+            return
+        idx = None
+        if live_cards:
+            try:
+                idx = self.game.screen.cards.index(live_cards[0])
+            except ValueError:
+                idx = None
+        self._watch_pause(desc, idx)
 
     def net_pick_action(self, gc, action_filter=None):
         """Run heart1 on gc's current choice screen and return the chosen sts.GameAction (in
