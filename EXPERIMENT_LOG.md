@@ -41,6 +41,19 @@ vanishes per seed when hitting an affected state is temp-0 near-deterministic gi
 Final sample = 12 keeps + 26 redos + 62 current-era = the full 100 pre-committed seeds. Caveat: the 2026-07-03 matched-seed control below
 compared the PRE-FIX live agent to offline; its no-gap conclusion is about that agent.
 
+**F3 era (g44+): effectiveGold Ectoplasm fix.** The search eval counted thief-held
+stolen gold as recoverable-by-kill; under Ectoplasm the refund arrives as a gold combat reward
+that obtainGold silently drops, so the search paid a phantom bonus (stolen x 0.25 weight) for
+killing a Looter/Mugger before it escapes. Fixed in `effectiveGold` (skip thief gold under
+Ectoplasm). g44 rolled Ectoplasm live and was killed mid-game for the fix + the watch-mode jar
+swap; it left no results line and replays under F3 (RESUME renumbers it g44). New taint marker
+ECTO_THIEF (a decision saw a Looter/Mugger while holding Ectoplasm): scanned zero hits across
+g1-g43, so no historical keeps/discards changed; the 5 F2 keeps (g39-43) formally move to the
+conditional stratum, but their conditioning event is near-null (the agent must actively pick
+Ectoplasm), so they pool with the keeps in the final sample: 17 keeps + 26 redos + 57 F3 games
+= 100. The 18.6% offline benchmark ran pre-fix; the fix only alters Ectoplasm+thief states, a
+negligible slice of unconditional play.
+
 ## 2026-07-04 (A20 offline benchmark FINAL: 18.6% heart-kill @10k sims, n=1000)
 
 The 1000-game extension of the A20 eval finished (heart1.pt iter_2575, seeds 1M+, 10k sims,

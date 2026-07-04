@@ -26,7 +26,10 @@ game's errlog-archive timestamp):
   E0  g1-g33   pre-fix
   E1  g34      5831f2f (Lagavulin wake park) only
   F1  g35-g38  + 0200440 (Surrounded facing); ASLEEP seeding still Metallicize-keyed
-  F2  g39+     current (a510d70 byte-keyed seeding; c740d3e forensics is logging-only)
+  F2  g39-g43  + a510d70 (byte-keyed ASLEEP seeding; c740d3e forensics is logging-only)
+  F3  g44+     current (effectiveGold Ectoplasm fix -- thief-held stolen gold is unrecoverable
+               under Ectoplasm, so the search no longer pays a phantom bonus to kill the thief;
+               the original g44 was killed mid-game for this fix and replays under F3)
 
 Fix-affected states, matched against the per-decision battle captures:
   LAGA46      a decision saw Lagavulin with live move byte 4 (STUNNED) or 6 (OPEN_NATURAL)
@@ -35,6 +38,8 @@ Fix-affected states, matched against the per-decision battle captures:
               [additionally taints F1 -- the Metallicize heuristic mis-seeded ASLEEP]
   SPIRE       any Spire Shield / Spire Spear decision
               [taints E0+E1 -- facing was never restored, mis-siding the +50% back-attack]
+  ECTO_THIEF  a decision saw a Looter/Mugger while the player held Ectoplasm
+              [taints E0-F2 -- effectiveGold counted thief-held gold as recoverable-by-kill]
 
 Usage: python -m lightspeed.grind_era_tally [results_txt] [battle_capture_jsonl]
 """
@@ -52,7 +57,9 @@ def era_of(n: int) -> str:
         return 'E1'
     if n <= 38:
         return 'F1'
-    return 'F2'
+    if n <= 43:
+        return 'F2'
+    return 'F3'
 
 
 def main():
@@ -73,6 +80,7 @@ def main():
         sd = gs.get('seed')
         if sd not in seed_nums:
             continue
+        ecto = any(r.get('id') == 'Ectoplasm' for r in gs.get('relics', []))
         for mn in gs.get('combat_state', {}).get('monsters', []):
             nm = mn['name'].replace(' ', '')
             if nm == 'Lagavulin' and mn.get('move_id') in (4, 6):
@@ -80,6 +88,8 @@ def main():
                 marks.setdefault(sd, set()).add('LAGA46_MET' if met else 'LAGA46')
             if nm in ('SpireShield', 'SpireSpear'):
                 marks.setdefault(sd, set()).add('SPIRE')
+            if ecto and nm in ('Looter', 'Mugger'):
+                marks.setdefault(sd, set()).add('ECTO_THIEF')
 
     clean, redo, discard = [], [], []
     print(f"{'g':>4} {'seed':<14} {'kind':<10} era  marks -> verdict")
@@ -93,11 +103,13 @@ def main():
         else:
             taint = set()
             if era == 'E0':
-                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE'}
+                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF'}
             elif era == 'E1':
-                taint = mk & {'SPIRE'}
+                taint = mk & {'SPIRE', 'ECTO_THIEF'}
             elif era == 'F1':
-                taint = mk & {'LAGA46_MET'}
+                taint = mk & {'LAGA46_MET', 'ECTO_THIEF'}
+            elif era == 'F2':
+                taint = mk & {'ECTO_THIEF'}
             if taint:
                 v = f"DISCARD ({'+'.join(sorted(taint))})"
                 discard.append(s)
@@ -112,8 +124,8 @@ def main():
         print(f"{label}: {len(rows)} | hearts {len(hearts)} | act3 {len(wins) - len(hearts)} "
               f"| losses {len(rows) - len(wins)}")
 
-    current = [(n, s, k) for n, s, k in clean if era_of(n) == 'F2']
-    stratum = [(n, s, k) for n, s, k in clean if era_of(n) != 'F2']
+    current = [(n, s, k) for n, s, k in clean if era_of(n) == 'F3']
+    stratum = [(n, s, k) for n, s, k in clean if era_of(n) != 'F3']
     print()
     tally(current, "HEADLINE current-era (unconditional)")
     tally(stratum, "pre-fix keeps (CONDITIONAL stratum -- not comparable to a benchmark)")
