@@ -87,10 +87,11 @@ escape transient (a live escape plays a ~2.5s animation during which the room st
 COMBAT with the potion consumed; the drive waits it out instead of crashing — the drive52 g7
 crash. Java's escape fires in ANY room whose phase is COMBAT, events included; the only blocks
 are canUse's boss-type/BackAttack checks, which the engine mirrors); Lagavulin wake turns (Java
-bytes 4 STUNNED and 6 OPEN_NATURAL do nothing on their turn then attack — they now park on
+bytes 4 STUNNED and 6 OPEN_NATURAL do nothing on their turn then attack — they park on
 LAGAVULIN_SLEEP with no ASLEEP, whose engine woken branch idles-then-attacks; ASLEEP seeding
-keys on live Metallicize presence, which Java's OPEN removes — the a20h10k g32 shadow line:
-the reconstruction attacked one turn early after a damage wake); Surrounded facing (the engine's
+keys on the live IDLE byte 5, the only reliable sleep signal since a burning elite's
+Metallicize buff survives the wake — the a20h10k g32 shadow line: the reconstruction attacked
+one turn early after a damage wake); Surrounded facing (the engine's
 +50% back-attack keys on player.lastTargetedMonster, which conversion never set -- fresh
 reconstructions kept the struct default and mis-sided the bonus; now restored from which live
 monster carries the BackAttack power, exposed via a new lastTargetedMonster binding -- the

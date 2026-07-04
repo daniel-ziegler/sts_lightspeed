@@ -559,8 +559,8 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
     # from the sleep intent and let the engine model the wake. Only the live IDLE byte (5) means
     # genuinely asleep: the do-nothing wake turns (STUNNED 4 / OPEN_NATURAL 6) also park on
     # LAGAVULIN_SLEEP but must NOT get ASLEEP (the engine's woken branch models their
-    # idle-then-attack turn). Keying on the byte, not on Metallicize presence, because a burning
-    # elite's Metallicize buff survives the wake and would masquerade as sleep.
+    # idle-then-attack turn). The byte is the only reliable sleep signal -- a burning elite's
+    # Metallicize buff survives the wake, so powers can't distinguish sleeping from woken.
     if (move_known and move_history[0] == int(sts.MonsterMoveId.LAGAVULIN_SLEEP)
             and monster.move_id == 5):
         sts_monster.buff(sts.MonsterStatus.ASLEEP, 1)
