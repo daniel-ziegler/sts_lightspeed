@@ -20,14 +20,21 @@ ISSUES="$REPO/runs/grind_${RUN}_issues.txt"
 : > "$RESULTS"; : > "$ISSUES"
 TICKS=$(( TMO_MIN * 4 ))
 
-# Fresh deterministic seeds (RNG seed distinct from the paired set so these are genuinely new games).
-mapfile -t SEEDS < <(python3 -c "
+# Seed list: SEEDS_FILE=<path> plays an explicit list of base-35 seeds (one per line -- redo
+# runs replaying specific seeds under current code); otherwise fresh deterministic seeds
+# (RNG seed distinct from the paired set so these are genuinely new games).
+if [ -n "${SEEDS_FILE:-}" ]; then
+  mapfile -t SEEDS < <(grep -v '^\s*$' "$SEEDS_FILE")
+  N=${#SEEDS[@]}
+else
+  mapfile -t SEEDS < <(python3 -c "
 import sys; sys.path.insert(0,'$REPO'); import comm, random
 r=random.Random(70150131)
 print('\n'.join(comm.seed_long_to_string(r.getrandbits(63)) for _ in range($N)))
 ")
+fi
 
-echo "grind ${RUN}: ${N} PBC_DRIVE games at A${ASCLVL} / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap" | tee -a "$RESULTS"
+echo "grind ${RUN}: ${N} PBC_DRIVE games at A${ASCLVL} / ${SIMS} sims / temp 0 / ${TMO_MIN}min cap${SEEDS_FILE:+ (seeds from $SEEDS_FILE)}" | tee -a "$RESULTS"
 
 i=0
 for seed in "${SEEDS[@]}"; do
