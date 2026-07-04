@@ -16,6 +16,15 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-03 (A20 offline benchmark: 24% heart-kill @10k sims)
+
+eval_hero, heart1.pt (iter_2575), A20, 100 games (seeds 1M+), 10000 sims, temp 0, current
+engine (incl. goldWeight + getTriIdx fixes): **24/100 heart kills (24% ± 8.4% 95% CI)**,
+avg floor 39.7, loss floors evenly spread (act1 19 / act2 24 / act3 21 / act4 12, median 33),
+52% of games collected all 3 keys. Companion LIVE measurement running via the a20h10k grind
+(100 games, same checkpoint/sims/temp, persistent-bc drive) — live-vs-offline agreement is the
+end-to-end bridge-fidelity number.
+
 ## 2026-07-03 (combat objective: unified gold delta — no-harm gate PASSED)
 
 goldWeight (0.25/gold, replacing goldLossWeight) now scores a root-baselined delta of EFFECTIVE
