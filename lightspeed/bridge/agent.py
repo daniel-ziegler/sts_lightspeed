@@ -40,7 +40,7 @@ from spirecomm.communication.action import (
 class STSLightspeedAgent:
 
     def __init__(self, chosen_class=PlayerClass.THE_SILENT, net=None, temperature=0.0, net_seed=0,
-                 start_seed=None, ascension=0, sims=1000, watch=False, watch_pre_ms=1000, watch_post_ms=500):
+                 start_seed=None, ascension=0, sims=1000, watch=False, watch_pre_ms=0, watch_post_ms=0):
         self.game = Game()
         self.errors = 0
         # Watch mode: when enabled, each net decision pauses watch_pre_ms, moves the cursor onto its

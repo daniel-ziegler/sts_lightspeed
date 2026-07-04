@@ -92,10 +92,10 @@ def run_agent_cli():
                        help="Enable watch mode (also auto-enabled by setting either watch delay / its "
                             "env var): at each net decision pause, move the cursor onto the intended "
                             "pick, pause, then commit. Off = full speed.")
-    parser.add_argument("--watch-pre-ms", type=int, default=int(os.environ.get("STS_WATCH_PRE_MS", 1000)),
-                       help="Watch mode: ms to wait BEFORE moving the cursor to the pick (default 1000).")
-    parser.add_argument("--watch-post-ms", type=int, default=int(os.environ.get("STS_WATCH_POST_MS", 500)),
-                       help="Watch mode: ms to wait AFTER moving the cursor, before committing (default 500).")
+    parser.add_argument("--watch-pre-ms", type=int, default=int(os.environ.get("STS_WATCH_PRE_MS", 0)),
+                       help="Watch mode: ms to wait BEFORE moving the cursor to the pick (default 0).")
+    parser.add_argument("--watch-post-ms", type=int, default=int(os.environ.get("STS_WATCH_POST_MS", 0)),
+                       help="Watch mode: ms to wait AFTER moving the cursor, before committing (default 0).")
 
     args = parser.parse_args()
     

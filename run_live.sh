@@ -17,8 +17,8 @@ GAMES="${2:-20}"
 #   ASC=<0-20>     ascension level
 #   SIMS=<n>       combat MCTS simulations per decision
 #   TEMP=<f>       net action-sampling temperature
-#   WATCH_PRE=<ms>  watch mode (enables it): ms before moving the cursor to the pick (default 1000)
-#   WATCH_POST=<ms> watch mode (enables it): ms after moving the cursor, before committing (default 500)
+#   WATCH_PRE=<ms>  watch mode (enables it): ms before moving the cursor to the pick (default 0)
+#   WATCH_POST=<ms> watch mode (enables it): ms after moving the cursor, before committing (default 0)
 #                   -- setting either WATCH_PRE or WATCH_POST turns watch mode on; unset = full speed
 #   PBC_DRIVE=1    drive the live combat decision from the reconciled persistent bc (STS_PBC_DRIVE)
 SEED="${SEED:-}"; ASC="${ASC:-}"; SIMS="${SIMS:-}"; TEMP="${TEMP:-}"
@@ -37,6 +37,21 @@ taskkill.exe /F /IM java.exe 2>/dev/null || true
 pkill -9 -f comm.py 2>/dev/null || true
 sleep 3
 echo "procs after kill (want java=0 comm.py=0): java=$(tasklist.exe 2>/dev/null | grep -ic java) comm.py=$(ps aux | grep -c '[c]omm.py')"
+
+# Install a staged CommunicationMod jar, if present. This is THE safe swap point for mod updates
+# mid-grind: java is guaranteed down right here, and swapping the jar under a running game breaks
+# ModTheSpire's lazy class loading (NoClassDefFoundError on the next unloaded class).
+STAGED="$REPO/runs/CommunicationMod.jar.staged"
+JAR="/mnt/c/Program Files (x86)/Steam/steamapps/workshop/content/646570/2131373661/CommunicationMod.jar"
+if [ -f "$STAGED" ]; then
+  cp "$STAGED" "$JAR.new" && mv "$JAR.new" "$JAR"
+  if cmp -s "$STAGED" "$JAR"; then
+    rm "$STAGED"
+    echo "staged CommunicationMod.jar installed ($(stat -c %s "$JAR") bytes)"
+  else
+    echo "WARNING: staged jar install FAILED (cmp mismatch); leaving staged file in place"
+  fi
+fi
 
 # Point the mod config at this run's capture name + game count. Run knobs go in as ENV vars in the
 # command's `/usr/bin/env ...` prefix, NOT as appended CLI flags: ModTheSpire re-normalizes
