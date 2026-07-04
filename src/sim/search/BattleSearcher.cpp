@@ -794,10 +794,13 @@ double getNonMinionMonsterCurHpRatio(const BattleContext &bc) {
 
 // The gold the player effectively holds in `bc`: their pocket plus any stolen gold a NOT-escaped
 // Looter/Mugger still carries (exitBattle refunds it whether the thief is dead or merely present
-// at the win). Gold on an ESCAPED thief is gone and excluded.
+// at the win). Gold on an ESCAPED thief is gone and excluded. Under Ectoplasm the refund never
+// lands -- it arrives as a gold combat reward, which obtainGold silently drops -- so thief-held
+// gold is unrecoverable the moment it is stolen and must not count as the player's (else the
+// search pays a phantom bonus for killing the thief before it escapes).
 static double effectiveGold(const BattleContext &bc) {
     double gold = bc.player.gold;
-    if (bc.requiresStolenGoldCheck()) {
+    if (bc.requiresStolenGoldCheck() && !bc.player.hasRelic<RelicId::ECTOPLASM>()) {
         for (int i = 0; i < bc.monsters.monsterCount; ++i) {
             const auto &m = bc.monsters.arr[i];
             const bool thief = m.id == MonsterId::LOOTER || m.id == MonsterId::MUGGER;
