@@ -1119,11 +1119,13 @@ void BattleContext::useAttackCard() {
 
         case CardId::PERFECTED_STRIKE: {
             // strikeCount includes the in-flight copy. That matches a HAND play (the live game
-            // deals the damage last computed while the card was in hand, counting itself), but a
-            // top-of-pile play (Havoc/Mayhem, queued with autoplay) recomputes from limbo, where
-            // the played copy no longer counts -- exclude it there or the engine over-deals by
-            // one strike bonus.
-            const int count = cards.strikeCount - (item.autoplay ? 1 : 0);
+            // deals the damage last computed while the card was in hand, counting itself) and a
+            // duplicated play (Necronomicon/Double Tap/..., queued with purgeOnUse: the live copy
+            // recomputes at its own play time, when the original has already landed in the discard
+            // pile and still counts). Only a top-of-pile play (Havoc/Mayhem, autoplay without
+            // purgeOnUse) recomputes from limbo, where the played copy no longer counts -- exclude
+            // it there or the engine over-deals by one strike bonus.
+            const int count = cards.strikeCount - (item.autoplay && !item.purgeOnUse ? 1 : 0);
             const int strikeDmg = count * (up ? 3 : 2);
             const int baseDamage = 6 + strikeDmg;
             addToBot( Actions::AttackEnemy(t, calculateCardDamage(c, t, baseDamage)) );
