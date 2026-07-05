@@ -63,11 +63,11 @@ fi
 sed -i "s/comm_capture_[A-Za-z0-9_]*/${CAP}/" "$CFG"
 sed -i 's/ STS_START_SEED\\=[0-9A-Za-z]*//g; s/ STS_ASCENSION\\=[0-9]*//g; s/ STS_SIMS\\=[0-9]*//g; s/ STS_TEMPERATURE\\=[0-9.]*//g; s/ STS_WATCH_MS\\=[0-9]*//g; s/ STS_WATCH_PRE_MS\\=[0-9]*//g; s/ STS_WATCH_POST_MS\\=[0-9]*//g; s/ STS_WATCH_REWARD_MS\\=[0-9]*//g; s/ STS_PERSISTENT_BC\\=[0-9]*//g; s/ STS_PBC_DRIVE\\=[0-9]*//g; s/ PYTHONHASHSEED\\=[0-9]*//g' "$CFG"
 sed -i "s/--games [0-9]*/--games ${GAMES}/" "$CFG"
-# Bot identity: runs started by this bot display "Silver Automaton" (mod fork's playerName option).
+# Bot identity: runs started by this bot display "silverbot" (mod fork's playerName option).
 if grep -q '^playerName=' "$CFG"; then
-  sed -i 's/^playerName=.*/playerName=Silver Automaton/' "$CFG"
+  sed -i 's/^playerName=.*/playerName=silverbot/' "$CFG"
 else
-  printf 'playerName=Silver Automaton\n' >> "$CFG"
+  printf 'playerName=silverbot\n' >> "$CFG"
 fi
 # PYTHONHASHSEED must be in the launch env (read at interpreter startup); pins Python dict/set
 # iteration order so the reconstruction is reproducible. Always present, independent of run knobs.
