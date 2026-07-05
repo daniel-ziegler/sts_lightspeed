@@ -1406,6 +1406,9 @@ class STSLightspeedAgent:
                 xs = sorted(n.x for n in (getattr(self.game.screen, "next_nodes", None) or []))
                 if action.idx1 in xs:
                     return xs.index(action.idx1)
+            elif st == ScreenType.CHEST:
+                # Treasure room: open (idx1 0) hovers the chest itself; skip hovers Proceed.
+                return 0 if action.idx1 == 0 else "proceed"
             elif st == ScreenType.GRID:
                 # Card-select grid (remove/upgrade/transform): idx1 is the card's index in the grid,
                 # which lines up with the mod's getGridScreenCards order.
