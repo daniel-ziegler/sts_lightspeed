@@ -591,8 +591,11 @@ class STSLightspeedAgent:
         only the few counters the snapshot can't see carried forward.
 
         Hidden fields transplanted per monster (matched by stable live monster_index -- spirecomm keeps
-        dead monsters listed, so indices survive deaths/repacks): `uniquePower0/1` always (pure hidden
-        counters the reconstruction never sets), and `miscInfo` EXCEPT where the reconstruction already
+        dead monsters listed, so indices survive deaths/repacks): `uniquePower0` ONLY for Hexaghost
+        (its move-sequence counter, the engine's one genuinely hidden uniquePower client -- for every
+        other monster uniquePower0/1 back OBSERVABLE statuses like Time Warp/Malleable/Mode Shift/
+        Ritual/Thorns/Invincible, which the reconstruction restores from the live powers list and
+        reality must win), and `miscInfo` EXCEPT where the reconstruction already
         restored it from an observable intent (current move in the _MISCINFO damage/hits tables, e.g.
         Giant Head's It Is Time slam damage) -- there the observed value wins. A monster absent from
         the carried pbc (a split/summon child) keeps the reconstruction's values (no carry).
@@ -626,8 +629,19 @@ class STSLightspeedAgent:
             omv, nmv = int(om.moveHistory[0]), int(nm.moveHistory[0])
             if omv != nmv:
                 d.append(f"{name}.move {omv}->{nmv}")     # usually RNG roll divergence; reconcile keeps fresh
-            nm.uniquePower0 = om.uniquePower0
-            nm.uniquePower1 = om.uniquePower1
+            # uniquePower0/1 are the engine's storage for a family of status-backed OBSERVABLE
+            # powers (Monster.h: Time Warp, Malleable, Mode Shift, Ritual, Thorns, Curl Up, ... in
+            # uniquePower0; Invincible, Reactive, Sharp Hide in uniquePower1); the fresh
+            # reconstruction restores those from the live powers list, so transplanting the carried
+            # values would clobber reality with a counter that never gets corrected again. That was
+            # the floor-50 phantom PLAYER_LOSS: a drifted carried Time Warp counter hit its
+            # in-engine trigger (+2 Str, end turn early) mid card-play advance, parking the pbc a
+            # full turn ahead of live, and the auto END_TURN advance then ran a second monster turn
+            # that killed the player. Hexaghost is the engine's only genuinely hidden uniquePower
+            # client (its Sear/Tackle/Inflame sequence counter, exposed by no live power) -- carry
+            # just that.
+            if nm.id == sts.MonsterId.HEXAGHOST:
+                nm.uniquePower0 = om.uniquePower0
             # Keep the reconstruction's miscInfo only when it was restored from an observable intent;
             # otherwise carry the engine-evolved counter (Book of Stabbing stab count, Champ phase, ...).
             if nmv not in _MISCINFO_DAMAGE_MOVE_INTS and nmv not in _MISCINFO_HITS_MOVE_INTS:
