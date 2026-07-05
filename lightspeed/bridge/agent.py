@@ -1409,6 +1409,20 @@ class STSLightspeedAgent:
             elif st == ScreenType.CHEST:
                 # Treasure room: open (idx1 0) hovers the chest itself; skip hovers Proceed.
                 return 0 if action.idx1 == 0 else "proceed"
+            elif st == ScreenType.COMBAT_REWARD:
+                # Only the relic-vs-key decision reaches net_pick_action on this screen (free
+                # pickups hover via _collect_combat_reward's take()). Mirror its commit logic:
+                # a RELIC pick hovers the idx1-th relic in the live reward list; any other pick
+                # IS the take-key decision, so hover the key item.
+                rewards = list(getattr(self.game.screen, "rewards", []) or [])
+                if rt == sts.RewardsActionType.RELIC:
+                    relic_idxs = [i for i, r in enumerate(rewards)
+                                  if r.reward_type == RewardType.RELIC]
+                    if 0 <= action.idx1 < len(relic_idxs):
+                        return relic_idxs[action.idx1]
+                for i, r in enumerate(rewards):
+                    if r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY):
+                        return i
             elif st == ScreenType.GRID:
                 # Card-select grid (remove/upgrade/transform): idx1 is the card's index in the grid,
                 # which lines up with the mod's getGridScreenCards order.
