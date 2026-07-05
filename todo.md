@@ -31,15 +31,21 @@
 
 ## tuning
 - [ ] LR decay
+- [ ] architecture tweaking
+    - probably increase size of net
 
 ## RL
-- [ ] exploration: per-run random card preference rewards
+- [ ] \(shaped) reward for outcome of simulated heart / boss battle with current deck
+- [ ] exploration: per-run random card preference rewards. (not sure if needed, plenty of randomness in cards offered)
 
 # throughput
+- [ ] lots of cpu optimization
 - [ ] multiprocessing
+- [ ] distributed training
 
 
 # battle search
+
 ## randomness
 - [x] record and replay randomness
 
@@ -49,9 +55,21 @@
 ## graph search
 - [x] implement hashing
 
+## objective
+- [ ] time discounting, giving some score for intermediate states?
+- [ ] evaluate winprob/value function at terminal nodes to determine actual value
+
+## policy
+- [ ] heuristic move proposals, maybe based on SimpleAgent
+- [ ] learned move policy instead of random + heuristic
+
+# further enhancements
+- [ ] tree search for out of combat decisions, maybe based on NN predictions of battle outcomes
+
 # cleanups
-- [ ] refactor comm.py
+- [x] audit for: correctness, duplicated logic that should be shared, papering over issues rather than root causing, ...
+- [ ] clean up bridge some more
     - share engine logic instead of reconstructing a bunch of it for the shadow
-    - split into multiple components, e.g. shadow state class that's fresh for each battle
-- [ ] audit for: correctness, duplicated logic that should be shared, papering over issues rather than root causing, ...
+    - maybe factor some more, e.g. shadow state class that's fresh for each battle
+    - get rid of shadow once we don't need it
 
