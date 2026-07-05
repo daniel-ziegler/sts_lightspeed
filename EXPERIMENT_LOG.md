@@ -69,6 +69,15 @@ after the in-flight redo grind; redo g1-g4 ran F3 code but never reached a TE fi
 25/24/-/33), so they keep. Final sample = 13 conditional keeps + 46 F3 no-TE keeps + 25 redo
 + 16 redo2 = 100 seeds, all F4-equivalent on their realized trajectories.
 
+**Determinism directly validated (2026-07-05, 12 redo seeds):** per-decision capture diff of
+each redo vs its original run shows every divergence at/immediately after the first
+fix-affected decision (the byte-4 Lagavulin records); prefixes match exactly for tens-to-
+hundreds of records, and the g38 seed replayed byte-identical into the same phantom crash.
+Zero unexplained divergences -- the keep-else-redo near-determinism premise is confirmed, not
+assumed. Protocol lesson: replay CRASHED seeds first, immediately after arming diagnostics
+(temp-0 makes crashes reproducible on demand); doing so here would have caught the Time Warp
+bug before the 57 F3 games ran and avoided the TE re-redo entirely.
+
 **Comparability caveat vs the offline benchmark: live has NO search-tree reuse.** Offline
 playoutBattle keeps one searcher per battle and reroots into the chosen subtree (cached visits
 carry over; exact-match only). The bridge constructs a fresh BattleSearcher every decision --
