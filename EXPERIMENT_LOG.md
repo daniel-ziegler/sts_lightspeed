@@ -16,6 +16,21 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-05 (F7: Necronomicon gate + Time-Warp-primed card defer)
+
+9c69157, closing the two edges flagged earlier today. (1) Engine Necronomicon gate transcribed
+from the live bytecode: `(costForTurn>=2 && !freeToPlayOnce && !item.freeToPlay) || (X-cost &&
+energyOnUse>=2)` -- a Forethought'd >=2-cost attack no longer phantom-duplicates, a free-played
+X-cost attack with 2+ energy banked now duplicates. Normal-dup regression validated on the g20
+capture (GL 104->56 unchanged); the freeToPlayOnce branch isn't reachable through Python
+bindings (hand indexing copies), validated by bytecode transcription review. (2) A card play
+with Time Warp primed at 11 under hidden intents defers its pbc advance like END_TURN (the
+forced end-of-turn would materialize guessed moves); a throwaway-copy probe exempts
+select-opening plays, which must park at the select input -- that sliver stays in
+CORRECTNESS_ISSUES. Era: F6 shipped no completed game; F7 = redo g25+. NECRO_EDGE taint
+(Necronomicon + Whirlwind/Forethought in deck) scans ZERO hits in both runs -- no redos added.
+Tally unchanged: 38 F3 keeps / 11 conditional / redo keeps 18 with g24 clean.
+
 ## 2026-07-05 (F6: Runic Dome fights were mis-modeled; redo-g23 crash root-caused)
 
 Redo g23 (1P0K6WD4YV5JG, the first F5 game) hit the decided-outcome crash at floor 21: the pbc

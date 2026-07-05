@@ -37,11 +37,16 @@ game's errlog-archive timestamp):
                autoplay -1 (Havoc/Mayhem-only in live) was also applied to Necronomicon/Double
                Tap purge-duplicates, under-dealing the dup hit by one strike bonus. No main-grind
                or redo g1-g22 games ran F5 (g22 launched 08:43, .so landed 08:55).
-  F6  (redo g25+) dd0bc8e Runic Dome fights fixed -- conversion parked no current move under a
+  F6  dd0bc8e Runic Dome fights fixed -- conversion parked no current move under a
                hidden intent, so firstTurn() made every deferred roll re-issue the fight OPENER
                in every search sim (and the pbc advance re-executed it: the redo-g23 phantom
-               PLAYER_LOSS crash); pbc END_TURN now defers and replays observed moves. No
-               main-grind or redo g1-g24 games ran F6 (g24 launched 09:27, fix landed ~10:05).
+               PLAYER_LOSS crash); pbc END_TURN now defers and replays observed moves. NO
+               completed game ran plain F6 (g24 launched 09:27 pre-fix; 9c69157 landed before
+               g25) -- superseded by F7.
+  F7  (redo g25+) 9c69157 Necronomicon gate transcribed from live bytecode (Forethought'd
+               attacks no longer phantom-duplicated; free-played X-cost attacks with 2+ energy
+               now duplicate) + Time-Warp-primed card advances defer under hidden intents like
+               END_TURN. First completed F7 game = redo g25.
 
 Fix-affected states, matched against the per-decision battle captures:
   LAGA46      a decision saw Lagavulin with live move byte 4 (STUNNED) or 6 (OPEN_NATURAL)
@@ -63,6 +68,9 @@ Fix-affected states, matched against the per-decision battle captures:
   DOME        a combat decision with Runic Dome held
               [taints E0-F5 -- with intents hidden the conversion parked no current move, so
               the search modeled every monster as re-issuing its fight OPENER every turn]
+  NECRO_EDGE  a combat decision with Necronomicon held and Whirlwind or Forethought in deck
+              [taints E0-F6 -- the engine's Necronomicon gate mismatched live on free-played
+              and X-cost attacks; zero historical hits in both runs (2026-07-05 scan)]
 
 Usage: python -m lightspeed.grind_era_tally [results_txt] [battle_capture_jsonl]
 """
@@ -107,6 +115,9 @@ def main():
         deck_ids = {c.get('id') for c in gs.get('deck', [])}
         if gs.get('combat_state') and any(r.get('id') == 'Runic Dome' for r in gs.get('relics', [])):
             marks.setdefault(sd, set()).add('DOME')
+        if gs.get('combat_state') and deck_ids & {'Whirlwind', 'Forethought'} and any(
+                r.get('id') == 'Necronomicon' for r in gs.get('relics', [])):
+            marks.setdefault(sd, set()).add('NECRO_EDGE')
         if 'Perfected Strike' in deck_ids and gs.get('combat_state') and (
                 any(r.get('id') == 'Necronomicon' for r in gs.get('relics', []))
                 or deck_ids & {'Double Tap', 'Echo Form'}
@@ -136,15 +147,15 @@ def main():
         else:
             taint = set()
             if era == 'E0':
-                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
+                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME', 'NECRO_EDGE'}
             elif era == 'E1':
-                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
+                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME', 'NECRO_EDGE'}
             elif era == 'F1':
-                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
+                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME', 'NECRO_EDGE'}
             elif era == 'F2':
-                taint = mk & {'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
+                taint = mk & {'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME', 'NECRO_EDGE'}
             elif era == 'F3':
-                taint = mk & {'TE_FIGHT', 'PS_DUP', 'DOME'}
+                taint = mk & {'TE_FIGHT', 'PS_DUP', 'DOME', 'NECRO_EDGE'}
             if taint:
                 v = f"DISCARD ({'+'.join(sorted(taint))})"
                 discard.append(s)
