@@ -2,12 +2,12 @@
 
 A fork of [gamerpuppy/sts_lightspeed](https://github.com/gamerpuppy/sts_lightspeed) — a
 high-performance C++ simulator of the roguelike deckbuilder *Slay the Spire* — that adds
-**neural-network training for out-of-combat decisions**, makes the **battle MCTS use random
-choice nodes instead of cheating** (the upstream search replayed the game's actual RNG stream,
-so it "knew" every future shuffle and enemy roll), and **fixes a large number of small fidelity
-and play-quality issues**.
+neural-network training for out-of-combat decisions, makes the battle MCTS use random
+choice nodes instead of cheating (the upstream search replayed the game's actual RNG stream,
+so it "knew" every future shuffle and enemy roll), and fixes a large number of small fidelity
+and play-quality issues.
 
-The combined system is **Silver Automaton**, a bot that plays full Ironclad runs: a
+The combined system is Silver Automaton, a bot that plays full Ironclad runs: a
 transformer policy network makes every out-of-combat decision (map routing, card rewards, events, shops, rest sites, Neow), and an
 expectimax MCTS plays out each battle on the C++ engine. A live-game bridge drives the actual
 game with the same agent through a forked CommunicationMod (included as a submodule), which
@@ -52,8 +52,8 @@ embedding (for PPO), and an auxiliary per-path-option destination-room classifie
 
 The released `heart1.pt` checkpoint was trained this way, uniformly across ascensions 0-20 on
 full 57-floor heart runs. At A0 it kills the heart in ~83% of eval games (600 matched seeds,
-1000 simulations per combat decision). At A20 — the game's hardest setting — it kills the heart
-in 18.6% ± 2.4% of simulated games (n=1000, 10000 simulations per combat decision). Real games
+1000 search iterations per combat decision). At A20 — the game's hardest setting — it kills the heart
+in 18.6% ± 2.4% of simulated games (n=1000, 10000 iterations per combat decision). Real games
 are driven via the bridge below and have a somewhat lower winrate due to a few lingering issues.
 
 ## Battle MCTS without cheating
@@ -63,10 +63,14 @@ enemy move rolls, card-generation rolls. This fork
 replaces it with an expectimax MCTS (`src/sim/search/BattleSearcher.cpp`) adapted to the
 engine design, which doesn't provide an easy hook point for random decisions. Hundreds of card and
 monster effects consume randomness at arbitrary points, so the search has to discover
-stochasticity *after the fact*. Each MCTS expansion does the following:
+stochasticity *after the fact*. Each MCTS iteration does the following:
 
 1. **Closed-loop graph search.** Every decision node stores its full `BattleContext`; the
-   search walks pointers instead of replaying actions from the root. Nodes are shared through
+   search walks pointers instead of replaying actions from the root. (Upstream queued a battle
+   state's pending combat effects as `std::function` lambdas, which can't be compared, hashed,
+   or cheaply copied; the fork rewrites them as one big tagged union of plain-data action
+   structs (`include/combat/Actions.h`), making `BattleContext` — pending effects included —
+   trivially copyable and hashable.) Nodes are shared through
    a transposition table whose hash and equality deliberately ignore the RNG state — two
    states differing only in their RNG have the same distribution of futures, so they are the
    same search state. The graph stays acyclic because the key includes the turn and
@@ -110,7 +114,7 @@ stochasticity *after the fact*. Each MCTS expansion does the following:
    playout to the end of combat. The terminal score — win bonus, remaining HP, potions kept,
    an effective-gold delta (thief gold, Hand of Greed), small turn penalties, and partial
    credit on losses (enemy HP fraction, energy wasted) — is backed up the descent path, and
-   after all simulations the root action with the most visits is played.
+   after all iterations the root action with the most visits is played.
 
 The draw pile plugs into this machinery rather than needing its own: `include/combat/CardPile.h`
 models the pile as the player's *information set* — an unknown region kept canonically sorted
@@ -128,8 +132,6 @@ departure from the base game's per-purpose streams). Residual modeling approxima
 
 ## Fidelity and play-quality fixes
 
-*(outline)*
-
 - **Era 1 — manual playtesting** (pre-ML; an initial batch was upstreamed, later ones are
   fork-only): dozens of mechanics fixes found by playing the simulator against the real game —
   e.g. Nunchaku, block potion amount, energy cost updates on upgrade, Panache counter not
@@ -137,20 +139,31 @@ departure from the base game's per-purpose streams). Residual modeling approxima
   Hand, Matryoshka, Buffer vs. `loseHp`, Golden Idol, Hypnotizing Colored Mushrooms, heart
   statuses, "transform two" always giving a curse — plus missing implementations (the Empty
   Cage, Meal Ticket, Meat on the Bone, and Orrery relics; the Smoke Bomb potion).
-- **Era 2 — source-audit + live-bridge era**: engine validated against decompiled game source
-  and against the live game itself (every live combat decision recreated in-engine; any
-  divergence in predicted damage/HP/block/intents/outcome is a crash to root-cause):
+- **Era 2 — source audit + live bridge**: the engine validated against decompiled game source
+  and against the live game itself — every decision of a live run is recreated in-engine, and
+  any divergence in predicted damage, HP, block, intent, or combat outcome is treated as a
+  crash and root-caused. Some representative fixes:
   - Ascension tier gates audited game-wide (`getTriIdx`): Champ Gloat strength, Collector
     block tiers, Gremlin Leader Encourage block.
-  - Awakened One rebirth (no phantom victory over a half-dead stage 1); Darkling two-phase
-    revive.
-  - Damage pipeline: Heavy Blade / Mind Blast / Rampage / Searing Blow; shared player
-    damage-modifier pipeline.
-  - Ritual under-application mid-fight, Mayhem timing (post-draw), Time Eater / Time Warp,
-    Writhing Mass Malleable/Flail, Centennial Puzzle, Necronomicon, Smoke Bomb rules
-    (boss/Surrounded only — works in events like Colosseum), stolen-gold accounting,
-    act-transition heal gating (Mind Bloom).
-  - (pick the strongest ~8-10; running taxonomy in `silverbot/bridge/REMAINING_DIVERGENCES.md`)
+  - Awakened One rebirth (no phantom victory over a half-dead stage 1); the Darkling
+    two-phase revive.
+  - Damage pipeline: a shared player damage-modifier pipeline, plus per-card fixes for Heavy
+    Blade, Mind Blast, Rampage, Searing Blow, and Perfected Strike (whose Strike count must
+    track cards entering and leaving combat, with different rules for duplicated and
+    Havoc-played copies).
+  - Necronomicon's exact duplication gate (attacks costing ≥2 after cost-for-turn modifiers,
+    or X-cost attacks played with ≥2 energy; once per turn) and Centennial Puzzle's
+    once-per-combat latch.
+  - Runic Dome: enemy move rolls are deferred while intents are hidden, then resolved from
+    the moves actually observed.
+  - Ritual applying one turn late when gained mid-fight; Mayhem playing its card after the
+    turn's draw; Time Eater / Time Warp end-of-turn sequencing.
+  - Smoke Bomb's real rules (banned in boss and Surrounded fights, but legal in event combats
+    like the Colosseum), stolen-gold accounting, and the act-transition heal gate (a boss
+    fight entered through an event room, e.g. Mind Bloom, gives no heal).
+
+  The remaining known engine/live gaps are cataloged in
+  `silverbot/bridge/REMAINING_DIVERGENCES.md`.
 - **Play-quality fixes** (search plays better, engine unchanged): effective-gold objective and
   other eval-shaping changes, each gated by a matched-seed paired winrate test (`run_paired.sh`,
   McNemar); experiments logged in `EXPERIMENT_LOG.md`.
@@ -225,11 +238,32 @@ ascension / sims as env vars, launches the game). See `COMM_README.md` for detai
 
 ## Building and running
 
-*(outline)*
+C++20 with CMake; nlohmann/json and pybind11 are vendored as git submodules. The Python side
+needs 3.10 with `torch`, `pyarrow`, and `tqdm`.
 
-- C++20, CMake, submodules (nlohmann/json, pybind11): `cmake . && make -j8` → `slaythespire`
-  Python module, `main` console simulator, `test` benchmark/tool suite.
-- Python: 3.10, torch + pyarrow + tqdm; everything runs as `python3 -m silverbot.<module>`
-  from the repo root.
-- Quick starts: console play (`./main`), random-playout benchmark, training a network,
-  running the live bridge (above).
+```bash
+git submodule update --init json pybind11
+cmake . && make -j8
+```
+
+This builds the `slaythespire` Python extension module, the `main` interactive console
+simulator, and the `test` benchmark/tool suite. All Python runs from the repo root as
+`python3 -m silverbot.<module>`, which keeps `slaythespire` and the vendored `spirecomm/`
+importable.
+
+```bash
+# Console play: enter "<seed> <character> <ascension>", e.g. "12345 I 0"
+./main
+
+# Random-playout benchmark
+./test simple_agent_mt <threads> <seed> <playouts> <print>
+
+# Battle MCTS from a real save file
+./test mcts_save <save_file> <iterations>
+```
+
+To train a network from scratch: generate supervised self-play data with
+`python3 -m silverbot.playouts` and train on it with `python3 -m silverbot.train`, then use
+that checkpoint to initialize PPO in `python3 -m silverbot.rl_train` (see
+`run_heart1_supervised.sh` for the full deployed hyperparameters). To play the released
+checkpoint or drive the real game, see the sections above.
