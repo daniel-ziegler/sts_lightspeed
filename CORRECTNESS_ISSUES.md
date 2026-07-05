@@ -3,7 +3,26 @@
 Issues found during autonomous work that could not be root-caused to full correctness.
 Each entry stays until resolved; resolution notes go to the relevant commit / doc.
 
-(none currently)
+### 2026-07-05 — Runic Dome + Time Eater forced end-turn: card advance can materialize guessed moves
+
+The dd0bc8e dome fix defers the pbc's END_TURN advance so monster turns replay OBSERVED moves.
+One path remains where a pbc advance runs a monster turn outside END_TURN: Time Eater's Time
+Warp trigger fires callEndTurnEarlySequence inside a CARD advance, materializing any deferred
+(dome-hidden) rolls as engine guesses. A guessed lethal turn there would park the pbc on a
+phantom decided outcome (crash). Requires Runic Dome + Time Eater simultaneously; no occurrence
+observed. A full fix would defer the card advance itself when it triggers Time Warp under
+hidden intents.
+
+### 2026-07-05 — Necronomicon trigger-gate edges vs live (engine)
+
+Live's gate (Necronomicon.class bytecode): `costForTurn >= 2 && !card.freeToPlayOnce`, OR
+`cost == -1 && energyOnUse >= 2` (X-cost, no freeToPlayOnce exclusion). The engine
+(BattleContext.cpp:1732) checks the queue-item's freeToPlay flag instead of the card's
+freeToPlayOnce, and applies it to both branches. Two edge mismatches: (1) a Forethought'd
+(freeToPlayOnce) >=2-cost attack is phantom-duplicated by the engine but not by live; (2) a
+free-played X-cost attack (Whirlwind) with energyOnUse >= 2 duplicates in live but not in the
+engine. Both need Necronomicon + a specific combo; no errlog signature observed. Fix pending
+user go-ahead (flagged 2026-07-05).
 
 ## Resolved
 

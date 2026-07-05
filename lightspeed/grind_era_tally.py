@@ -37,6 +37,11 @@ game's errlog-archive timestamp):
                autoplay -1 (Havoc/Mayhem-only in live) was also applied to Necronomicon/Double
                Tap purge-duplicates, under-dealing the dup hit by one strike bonus. No main-grind
                or redo g1-g22 games ran F5 (g22 launched 08:43, .so landed 08:55).
+  F6  (redo g25+) dd0bc8e Runic Dome fights fixed -- conversion parked no current move under a
+               hidden intent, so firstTurn() made every deferred roll re-issue the fight OPENER
+               in every search sim (and the pbc advance re-executed it: the redo-g23 phantom
+               PLAYER_LOSS crash); pbc END_TURN now defers and replays observed moves. No
+               main-grind or redo g1-g24 games ran F6 (g24 launched 09:27, fix landed ~10:05).
 
 Fix-affected states, matched against the per-decision battle captures:
   LAGA46      a decision saw Lagavulin with live move byte 4 (STUNNED) or 6 (OPEN_NATURAL)
@@ -55,6 +60,9 @@ Fix-affected states, matched against the per-decision battle captures:
               source (Necronomicon relic, Double Tap / Echo Form in deck, Duplication potion)
               [taints E0-F4 -- the search under-valued the duplicated PS hit by one strike
               bonus in every sim, whether or not live ever played the line]
+  DOME        a combat decision with Runic Dome held
+              [taints E0-F5 -- with intents hidden the conversion parked no current move, so
+              the search modeled every monster as re-issuing its fight OPENER every turn]
 
 Usage: python -m lightspeed.grind_era_tally [results_txt] [battle_capture_jsonl]
 """
@@ -97,6 +105,8 @@ def main():
             continue
         ecto = any(r.get('id') == 'Ectoplasm' for r in gs.get('relics', []))
         deck_ids = {c.get('id') for c in gs.get('deck', [])}
+        if gs.get('combat_state') and any(r.get('id') == 'Runic Dome' for r in gs.get('relics', [])):
+            marks.setdefault(sd, set()).add('DOME')
         if 'Perfected Strike' in deck_ids and gs.get('combat_state') and (
                 any(r.get('id') == 'Necronomicon' for r in gs.get('relics', []))
                 or deck_ids & {'Double Tap', 'Echo Form'}
@@ -126,15 +136,15 @@ def main():
         else:
             taint = set()
             if era == 'E0':
-                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
+                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
             elif era == 'E1':
-                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
+                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
             elif era == 'F1':
-                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
+                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
             elif era == 'F2':
-                taint = mk & {'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
+                taint = mk & {'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP', 'DOME'}
             elif era == 'F3':
-                taint = mk & {'TE_FIGHT', 'PS_DUP'}
+                taint = mk & {'TE_FIGHT', 'PS_DUP', 'DOME'}
             if taint:
                 v = f"DISCARD ({'+'.join(sorted(taint))})"
                 discard.append(s)

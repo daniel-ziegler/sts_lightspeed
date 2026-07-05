@@ -16,6 +16,29 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-05 (F6: Runic Dome fights were mis-modeled; redo-g23 crash root-caused)
+
+Redo g23 (1P0K6WD4YV5JG, the first F5 game) hit the decided-outcome crash at floor 21: the pbc
+predicted PLAYER_LOSS mid-fight while live continued on 4hp. Root cause is a Runic Dome
+modeling hole, dd0bc8e: with intents hidden the conversion parked NO current move
+(moveHistory[0]=INVALID), and the engine's firstTurn() is exactly moveHistory[0]==INVALID -- so
+every deferred roll materialized as the fight OPENER, in the pbc advance AND in every search
+sim of every dome fight. In g23 a mid-fight Shelled Parasite re-Fell (21 dmg + Frail 2) through
+12 block in the sim, while live's real turn (Suck 12 + Fungi Bite 11) left 4hp. Fix: (1) the
+conversion parks the executed move history (last/second_last_move_id stay public under dome) so
+the move AI reads reality; (2) pbc END_TURN advances defer under hidden intents and replay the
+monsters' ACTUAL moves (from the next snapshot's last_move_id, dead monsters included) --
+ground truth, not inference -- keeping the decided-outcome check meaningful. Validated on the
+g23 capture: the replayed turn reproduces live exactly (player 4hp, Fungi dead to Flame Barrier
+retaliation, SP 56/73 blk13, UNDECIDED).
+
+Era impact: DOME taint (Runic Dome held at any combat decision) taints E0-F5; F6 = redo g25+.
+Damage: main-run F3 keeps 42 -> 38, conditional keeps 13 -> 11 (all six newly-discarded dome
+games are losses); redo g23 crash + the 6 dome seeds -> redo2 (now 31 seeds). Sample math to
+100: 11 conditional + 38 F3 + 17 redo keeps + g24 (keep iff clean) + g25-g26 + 31 redo2.
+Search-quality note: dome games' fights were played with materially wrong monster-move
+modeling in ALL prior eras; the 0/6 record on dome games may partly reflect that.
+
 ## 2026-07-05 (F5: Perfected Strike duplicate fix; g64 watch item resolved)
 
 Redo g20's errlog resurfaced the dormant g64 signature (Perfected Strike one-step diffs) at

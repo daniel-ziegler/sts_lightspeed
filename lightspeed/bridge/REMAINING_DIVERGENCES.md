@@ -101,7 +101,14 @@ purgeOnUse duplicates -- Necronomicon/Double Tap/Echo Form/Duplication potion --
 recomputes the duplicate at its own play time, when the original already counts from the
 discard pile, so the dup hit under-dealt by one strike bonus; now `autoplay && !purgeOnUse`
 only -- the a20h10k g64 one-step diff and the redo-g20 seven-line cluster, validated on the
-g20 capture: Necronomicon'd PS into Gremlin Leader 104->56 exact).
+g20 capture: Necronomicon'd PS into Gremlin Leader 104->56 exact); Runic Dome move parking
+(the conversion left moveHistory[0]=INVALID under a hidden intent, and firstTurn() is exactly
+that check -- every deferred roll materialized as the fight OPENER in every search sim, and
+the pbc advance re-executed it: the redo-g23 phantom PLAYER_LOSS, a mid-fight Shelled Parasite
+re-Fell through 12 block while live's Suck+Bite left 4hp; now the executed history
+(last/second_last_move_id, public under dome) is parked so the move AI reads reality, and pbc
+END_TURN advances defer under hidden intents to replay the monsters' observed moves from the
+next snapshot -- validated to live-exact on the g23 capture).
 
 ## How to refresh this list
 
