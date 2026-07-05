@@ -493,8 +493,21 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
             raise ValueError(f"unmapped current move for {monster.monster_id} (move_id="
                              f"{monster.move_id}); add (monster, move_id) to map_move_id")
         move_history[0] = mapped
-    if monster.last_move_id is not None and monster.last_move_id >= 0:
-        move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
+        if monster.last_move_id is not None and monster.last_move_id >= 0:
+            move_history[1] = int(map_move_id(monster.monster_id, monster.last_move_id))
+    else:
+        # Current intent hidden (Runic Dome defers it; a between-moves transient omits it), but
+        # the EXECUTED move history stays public (last/second_last_move_id). Park it as the
+        # engine's history so the move AI reads reality: firstTurn() is moveHistory[0]==INVALID,
+        # so leaving [0] empty makes every deferred roll re-issue the fight OPENER (the redo-g23
+        # phantom PLAYER_LOSS: a mid-fight Shelled Parasite re-Fell for 21+Frail 2 instead of
+        # rolling its real move distribution), and lastMove/lastMoveBefore checks read garbage.
+        # The roll's setMove then shifts [0] into [1], evolving the history exactly like native
+        # play.
+        if monster.last_move_id is not None and monster.last_move_id >= 0:
+            move_history[0] = int(map_move_id(monster.monster_id, monster.last_move_id))
+        if monster.second_last_move_id is not None and monster.second_last_move_id >= 0:
+            move_history[1] = int(map_move_id(monster.monster_id, monster.second_last_move_id))
     sts_monster.moveHistory = move_history
 
     # A half-dead monster (Awakened One stage 1, Darkling) is mid-revive. Its committed move IS
@@ -512,7 +525,7 @@ def _set_sts_monster_fields(bc, sts_monster, monster, slot: int) -> None:
             if revival is None:
                 raise ValueError(f"half-dead {monster.monster_id} has no revival move; "
                                  f"add it to _HALF_DEAD_REVIVAL_MOVE")
-            sts_monster.moveHistory = [int(revival), move_history[1]]
+            sts_monster.moveHistory = [int(revival), move_history[0]]
         return
 
     # Awakened One's stage (miscInfo: 0 = unawakened -> die() parks it half-dead for Rebirth;

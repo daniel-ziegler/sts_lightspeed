@@ -15,7 +15,7 @@ from lightspeed import RUNS_DIR
 from lightspeed.bridge.mappings import map_card_id, map_relic_id
 from lightspeed.bridge.combat import (
     _MISCINFO_DAMAGE_MOVE_INTS, _MISCINFO_HITS_MOVE_INTS, assert_card_damage_matches,
-    assert_intent_damage_matches, convert_combat_state,
+    assert_intent_damage_matches, convert_combat_state, map_move_id,
 )
 from lightspeed.bridge.overworld import (
     _EVENTS_NOT_FAITHFULLY_RECONSTRUCTED, _inject_nloth_offers, _inject_wemeetagain,
@@ -98,6 +98,10 @@ class STSLightspeedAgent:
         # (get_next_action_in_game), to dedup a repeated end-turn emit (that path has no transient
         # guard). Reset per combat seed.
         self._pbc_last_end_turn = None
+        # True while an END_TURN advance is deferred (hidden-intent fight): the pbc sits pre-END_TURN
+        # until the next decision's snapshot exposes the monsters' actual moves. See
+        # _pbc_end_turn_or_defer.
+        self._pbc_end_turn_pending = False
         # Short description of the action the pbc was last advanced by, tagged onto the next DESYNC so
         # a divergence is attributable to a card mis-sim vs a monster-turn mis-sim.
         self._pbc_prev_action_desc = None
@@ -181,6 +185,7 @@ class STSLightspeedAgent:
         self._pbc_floor = None
         self._pbc_live_turn = None
         self._pbc_last_end_turn = None
+        self._pbc_end_turn_pending = False
         self._shadow_reset()
         self._known_draw_top = []
         self._known_draw_bottom = []
@@ -233,7 +238,7 @@ class STSLightspeedAgent:
                 live_turn = getattr(self.game, "turn", None)
                 if live_turn != self._pbc_last_end_turn:
                     self._pbc_last_end_turn = live_turn
-                    self._pbc_advance(sts.Action(sts.ActionType.END_TURN))
+                    self._pbc_end_turn_or_defer()
                     self._pbc_prev_action_desc = "END_TURN(auto)"
             return EndTurnAction()
         if self.game.cancel_available:
@@ -300,7 +305,12 @@ class STSLightspeedAgent:
             pm = prev_bc.monsters[slot]
             if pm.pending_move_rolls > 0 or int(pm.moveHistory[0]) == invalid:
                 hidden += 1
-                observed = int(truth_bc.monsters[slot].moveHistory[1])
+                tm = truth_bc.monsters[slot]
+                # The move the monster ACTUALLY took this turn: with a visible next intent the
+                # reconstruction parks it in [1] (last move); under a hidden intent (Runic Dome,
+                # deferred roll pending) the reconstruction parks the executed history in [0].
+                observed = int(tm.moveHistory[0] if tm.pending_move_rolls > 0
+                               else tm.moveHistory[1])
                 if observed != invalid:
                     pm.commit_observed_move(observed)
                     forced += 1
@@ -650,6 +660,61 @@ class STSLightspeedAgent:
             print(f"[pbc DESYNC after {self._pbc_prev_action_desc}] {', '.join(d)}", file=sys.stderr)
         return new
 
+    def _pbc_hidden_move_count(self):
+        """Monsters in the pbc whose CURRENT move is a deferred/unset roll (Runic Dome hides
+        intents, so rollMove banks the rng draw instead of committing a move)."""
+        invalid = int(sts.MonsterMoveId.INVALID)
+        ms = self._pbc.monsters
+        return sum(1 for i in range(ms.monsterCount)
+                   if ms[i].pending_move_rolls > 0 or int(ms[i].moveHistory[0]) == invalid)
+
+    def _pbc_end_turn_or_defer(self):
+        """Advance the pbc through END_TURN now, or -- when any monster's move is hidden (Runic
+        Dome) -- defer to the next combat decision. Advancing now would materialize ENGINE-GUESSED
+        moves for the monster turn (the live rolls are unobservable until they execute), and a
+        guessed lethal turn parks the pbc on a phantom decided outcome (the redo-g23 crash: a
+        guessed Shelled Parasite re-Fell killed the sim player while live survived on 4hp). The
+        moves the monsters actually take are public at the next snapshot (last_move_id), so the
+        deferred advance replays the real monster turn: ground truth, not inference."""
+        if self._pbc is None or self._pbc_hidden_move_count() == 0:
+            if self._pbc is not None:
+                self._pbc_advance(sts.Action(sts.ActionType.END_TURN))
+            return
+        self._pbc_end_turn_pending = True
+        print("[pbc] END_TURN advance deferred (hidden intents); replaying observed moves at the "
+              "next decision", file=sys.stderr)
+
+    def _pbc_run_deferred_end_turn(self):
+        """Complete a deferred END_TURN advance (hidden-intent fight): inject each hidden-move
+        monster's actual executed move, read straight from the live snapshot (last_move_id at the
+        NEXT decision is the move taken during the deferred turn; the spirecomm list keeps dead
+        monsters with their final move, so deaths during the monster turn keep their truth, and
+        _pbc_slots' live indices stay valid). A monster that died before acting replays a stale
+        parked move the engine never executes (it dies first, same as live). Drops the pbc
+        (reseeds at reconcile) when a hidden move is unobservable rather than replay a guess."""
+        self._pbc_end_turn_pending = False
+        if self._pbc is None:
+            return
+        invalid = int(sts.MonsterMoveId.INVALID)
+        ms = self._pbc.monsters
+        live_monsters = getattr(self.game, "monsters", None) or []
+        for slot in range(ms.monsterCount):
+            pm = ms[slot]
+            if not (pm.pending_move_rolls > 0 or int(pm.moveHistory[0]) == invalid):
+                continue
+            live_idx = (self._pbc_slots or {}).get(slot)
+            live_m = live_monsters[live_idx] if live_idx is not None and live_idx < len(live_monsters) else None
+            obs = invalid
+            if live_m is not None and live_m.last_move_id is not None and live_m.last_move_id >= 0:
+                obs = int(map_move_id(live_m.monster_id, live_m.last_move_id))
+            if obs == invalid:
+                print(f"[pbc] deferred END_TURN: slot {slot} hidden move unobservable; dropping "
+                      f"pbc to reseed", file=sys.stderr)
+                self._pbc = None
+                return
+            pm.commit_observed_move(obs)
+        self._pbc_advance(sts.Action(sts.ActionType.END_TURN))
+
     def _pbc_advance(self, action):
         """Carry the driven persistent bc forward through the action just committed live, to the next
         input point. The action was chosen by searching this exact bc, so it MUST be valid and MUST
@@ -826,6 +891,8 @@ class STSLightspeedAgent:
         # runs on the fresh reconstruction (the pbc is carried in parallel for measurement only).
         search_bc, search_slots = bc, slot_to_spire
         if self._pbc_drive:
+            if self._pbc_end_turn_pending:
+                self._pbc_run_deferred_end_turn()
             search_bc = self._pbc_reconcile_build(bc, slot_to_spire)
 
         # Configure the searcher with heart1's exact training/eval battle-search knobs
@@ -910,10 +977,12 @@ class STSLightspeedAgent:
             # chains, mid-resolution draws, potion draws).
             if self._pbc is search_bc:
                 self._pbc_force_live_draw_order()
-                self._pbc_advance(first_action)
-                self._pbc_prev_action_desc = self._describe_action(first_action, bc)
                 if first_action.get_action_type() == sts.ActionType.END_TURN:
+                    self._pbc_end_turn_or_defer()
                     self._pbc_last_end_turn = getattr(self.game, "turn", None)
+                else:
+                    self._pbc_advance(first_action)
+                self._pbc_prev_action_desc = self._describe_action(first_action, bc)
 
         # Remembered so a dropped send can be re-issued verbatim (see the dedup release above).
         self._last_combat_action_sent = spirecomm_action
