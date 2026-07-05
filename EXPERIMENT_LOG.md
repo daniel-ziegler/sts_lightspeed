@@ -54,6 +54,14 @@ Ectoplasm), so they pool with the keeps in the final sample: 17 keeps + 26 redos
 = 100. The 18.6% offline benchmark ran pre-fix; the fix only alters Ectoplasm+thief states, a
 negligible slice of unconditional play.
 
+**Comparability caveat vs the offline benchmark: live has NO search-tree reuse.** Offline
+playoutBattle keeps one searcher per battle and reroots into the chosen subtree (cached visits
+carry over; exact-match only). The bridge constructs a fresh BattleSearcher every decision --
+the per-decision reconcile rebuilds the bc with new card uniqueIds, so the exact-match reroot
+could never fire without uid-stable reconciliation. Expected magnitude ~couple % (the
+permuted-reuse deployment gate moved 60.6 vs 62.7 on 1000 paired seeds), direction: live below
+offline. Read the final live number against "offline with tree reuse", not as the same agent.
+
 ## 2026-07-04 (A20 offline benchmark FINAL: 18.6% heart-kill @10k sims, n=1000)
 
 The 1000-game extension of the A20 eval finished (heart1.pt iter_2575, seeds 1M+, 10k sims,
