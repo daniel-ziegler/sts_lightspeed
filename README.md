@@ -24,7 +24,7 @@ Singing Bowl), relic and potion pickups, event options, Neow bonuses, shop purch
 removals, and rest-site actions — a typed action space of
 `CARD` / `PATH` / `RELIC` / `POTION` / `EVENT_OPTION` / `FIXED` actions.
 
-**Architecture** (`lightspeed/network.py`, `lightspeed/inputs.py`). Everything the player can
+**Architecture** (`silverbot/network.py`, `silverbot/inputs.py`). Everything the player can
 see is embedded as a set of tokens in a shared space: each deck card (identity + upgrade
 count), each relic and potion, each map node (with graph features: room type,
 is-current/is-reachable), and a fixed-observation vector (HP, gold, floor, act, upcoming boss,
@@ -39,11 +39,11 @@ embedding (for PPO), and an auxiliary per-path-option destination-room classifie
 
 **Training.** Two pipelines share the model and action space:
 
-- *Supervised* (`lightspeed/playouts.py` + `lightspeed/train.py`): thousands of self-play
+- *Supervised* (`silverbot/playouts.py` + `silverbot/train.py`): thousands of self-play
   games with Boltzmann-sampled out-of-combat choices and MCTS-played battles, written as
   parquet; the network learns to predict the final win/loss outcome from each decision point.
   This bootstrapped the early agents.
-- *RL* (`lightspeed/rl_train.py`): PPO with GAE(λ) and entropy regularization on annealed
+- *RL* (`silverbot/rl_train.py`): PPO with GAE(λ) and entropy regularization on annealed
   schedules. Battles are played by the MCTS, so the network learns drafting, routing, and
   resource decisions *on top of* a strong fixed combat player; credit flows through a reward
   of normalized floor progress plus key and heart-kill bonuses, with potential-based shaping
@@ -150,7 +150,7 @@ departure from the base game's per-purpose streams). Residual modeling approxima
     Writhing Mass Malleable/Flail, Centennial Puzzle, Necronomicon, Smoke Bomb rules
     (boss/Surrounded only — works in events like Colosseum), stolen-gold accounting,
     act-transition heal gating (Mind Bloom).
-  - (pick the strongest ~8-10; running taxonomy in `lightspeed/bridge/REMAINING_DIVERGENCES.md`)
+  - (pick the strongest ~8-10; running taxonomy in `silverbot/bridge/REMAINING_DIVERGENCES.md`)
 - **Play-quality fixes** (search plays better, engine unchanged): effective-gold objective and
   other eval-shaping changes, each gated by a matched-seed paired winrate test (`run_paired.sh`,
   McNemar); experiments logged in `EXPERIMENT_LOG.md`.
@@ -172,11 +172,11 @@ Three ways to play it (after building — see below):
 
 ```bash
 # Watch it play a full run in the console, one decision at a time
-python3 -m lightspeed.watch_game --model-path runs/heart1.pt \
+python3 -m silverbot.watch_game --model-path runs/heart1.pt \
     --seed 42 --ascension 0 --temperature 0
 
 # Batch evaluation: win rate over N seeded games
-python3 -m lightspeed.eval_hero --ckpt runs/heart1.pt \
+python3 -m silverbot.eval_hero --ckpt runs/heart1.pt \
     --n-games 100 --mcts-sims 1000 --temperature 0
 
 # Drive the real game (see the live-game bridge section below)
@@ -185,7 +185,7 @@ python3 comm.py --games 10
 
 ## Live-game bridge
 
-- `lightspeed/bridge/` + repo-root `comm.py`: plays the real game through a
+- `silverbot/bridge/` + repo-root `comm.py`: plays the real game through a
   [forked CommunicationMod](https://github.com/daniel-ziegler/CommunicationMod) (the
   `CommunicationMod/` submodule). The fork adds state the bridge needs — per-turn play counts,
   per-card computed base damage, relic `grayscale`/`activated`, draw-pile order — plus
@@ -194,7 +194,7 @@ python3 comm.py --games 10
 - Persistent `BattleContext`: one engine-advanced battle state carried across a whole combat,
   reconciled against the live game every decision; hidden state (RNG rolls, observed enemy
   moves) transplanted from live observations. Divergence taxonomy in
-  `lightspeed/bridge/REMAINING_DIVERGENCES.md`.
+  `silverbot/bridge/REMAINING_DIVERGENCES.md`.
 
 ### Building the mod
 
@@ -229,7 +229,7 @@ ascension / sims as env vars, launches the game). See `COMM_README.md` for detai
 
 - C++20, CMake, submodules (nlohmann/json, pybind11): `cmake . && make -j8` → `slaythespire`
   Python module, `main` console simulator, `test` benchmark/tool suite.
-- Python: 3.10, torch + pyarrow + tqdm; everything runs as `python3 -m lightspeed.<module>`
+- Python: 3.10, torch + pyarrow + tqdm; everything runs as `python3 -m silverbot.<module>`
   from the repo root.
 - Quick starts: console play (`./main`), random-playout benchmark, training a network,
   running the live bridge (above).

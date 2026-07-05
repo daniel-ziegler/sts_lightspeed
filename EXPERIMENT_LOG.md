@@ -82,7 +82,7 @@ in redo2 like the rest; it won despite the search under-valuing its PS dup lines
 Bridge fixes shipped mid-grind (5831f2f Lagavulin wake park, 0200440 Surrounded facing,
 a510d70 byte-keyed ASLEEP seeding), so the raw live tally mixes different agents, and crashed
 seeds can't just be dropped (crashes correlate with depth). Protocol, implemented in
-`lightspeed/grind_era_tally.py`: KEEP a game iff its realized trajectory never entered a
+`silverbot/grind_era_tally.py`: KEEP a game iff its realized trajectory never entered a
 fix-affected state (a decision showing Lagavulin move byte 4/6, or any Spire Shield/Spear
 decision, per era) -- then old and new code compute identical search distributions along the
 whole trajectory and the outcome is identically distributed under current code; DISCARD
@@ -169,7 +169,7 @@ stochasticity, not fidelity; only the aggregate is a fidelity signal. Against th
 ≤2-wins-in-21 is P=0.16, and 0-hearts-in-21 collapses to P≈0.10 once you count the ~10 distinct
 maps instead of 21 games. Verdict: **the live bridge plays at offline strength; the 0/11 open
 was seed-batch luck plus a drifting-down benchmark estimate.** Tooling committed for future
-gaps: eval_hero --seeds-file/--trace (743fc66, dff67c0) + lightspeed/bridge/matched_diff.py
+gaps: eval_hero --seeds-file/--trace (743fc66, dff67c0) + silverbot/bridge/matched_diff.py
 first-divergence classifier ROUTE/CONTENT/PICK/COMBAT (f71c4b2).
 
 ## 2026-07-03 (A20 offline benchmark: 24% heart-kill @10k sims)

@@ -75,10 +75,10 @@ The `test` executable provides various testing and simulation modes:
 
 ### Python Integration
 
-All Python code lives in the `lightspeed/` package and runs from the repo root as
-`python3 -m lightspeed.<module>` (keeping the root `slaythespire` extension module and the
-vendored `spirecomm/` importable). One-off analysis/probe scripts are in `lightspeed/analysis/`;
-the live-game bridge is the `lightspeed/bridge/` subpackage (mappings / combat / overworld /
+All Python code lives in the `silverbot/` package and runs from the repo root as
+`python3 -m silverbot.<module>` (keeping the root `slaythespire` extension module and the
+vendored `spirecomm/` importable). One-off analysis/probe scripts are in `silverbot/analysis/`;
+the live-game bridge is the `silverbot/bridge/` subpackage (mappings / combat / overworld /
 actions / seeds / agent / cli), with the repo-root `comm.py` as its runnable entry point.
 
 Key modules for ML training and data generation:
