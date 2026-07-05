@@ -15,6 +15,7 @@
 /main
 /slaythespire.cpython-310-x86_64-linux-gnu.so
 /node-modules
+/runs/
 __pycache__
 libsts_core.a
 package-lock.json

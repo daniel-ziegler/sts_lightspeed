@@ -1,4 +1,4 @@
-# sts_lightspeed
+# Silver Automaton (silverbot)
 
 A fork of [gamerpuppy/sts_lightspeed](https://github.com/gamerpuppy/sts_lightspeed) — a
 high-performance C++ simulator of the roguelike deckbuilder *Slay the Spire* — that adds
@@ -13,7 +13,7 @@ expectimax MCTS plays out each battle on the C++ engine. A live-game bridge driv
 game with the same agent through a forked CommunicationMod (included as a submodule), which
 doubles as an end-to-end fidelity test of the engine.
 
-Everything from upstream is still here: the standalone C++ engine with all enemies, all
+Retains everything from upstream except for RNG cheat search: the standalone C++ engine with all enemies, all
 relics, all Ironclad and colorless cards, the full overworld across all four acts, console play,
 save-file loading, and ~1M random playouts in 5 seconds on 16 threads.
 
@@ -53,22 +53,21 @@ embedding (for PPO), and an auxiliary per-path-option destination-room classifie
 The released `heart1.pt` checkpoint was trained this way, uniformly across ascensions 0-20 on
 full 57-floor heart runs. At A0 it kills the heart in ~83% of eval games (600 matched seeds,
 1000 simulations per combat decision). At A20 — the game's hardest setting — it kills the heart
-in 18.6% ± 2.4% of eval games (n=1000, 10000 simulations per combat decision), and live grinds
-through the real game via the bridge below match that rate on shared seeds.
+in 18.6% ± 2.4% of simulated games (n=1000, 10000 simulations per combat decision). Real games
+are driven via the bridge below and have a somewhat lower winrate due to a few lingering issues.
 
 ## Battle MCTS without cheating
 
 Upstream's tree search replayed the game's concrete RNG stream: it knew the shuffle order,
-every enemy's move roll, every card-generation roll. That produces great scores but a
-clairvoyant policy — its plans depend on information a real player doesn't have. This fork
-replaces it with an expectimax MCTS (`src/sim/search/BattleSearcher.cpp`) built around one
-awkward fact: **the engine doesn't declare which actions are random.** Hundreds of card and
+enemy move rolls, card-generation rolls. This fork
+replaces it with an expectimax MCTS (`src/sim/search/BattleSearcher.cpp`) adapted to the
+engine design, which doesn't provide an easy hook point for random decisions. Hundreds of card and
 monster effects consume randomness at arbitrary points, so the search has to discover
-stochasticity *after the fact* — and still average over it correctly. How one simulation works:
+stochasticity *after the fact*. Each MCTS expansion does the following:
 
 1. **Closed-loop graph search.** Every decision node stores its full `BattleContext`; the
    search walks pointers instead of replaying actions from the root. Nodes are shared through
-   a transposition table whose hash and equality deliberately **ignore the RNG state** — two
+   a transposition table whose hash and equality deliberately ignore the RNG state — two
    states differing only in their RNG have the same distribution of futures, so they are the
    same search state. The graph stays acyclic because the key includes the turn and
    cards-played counters, which never decrease along a path.
@@ -123,9 +122,8 @@ chance node, with no draw-specific logic in the searcher. Frozen Eye legitimatel
 pile to concrete observed order. Hidden enemy intents under Runic Dome get the same treatment:
 the move roll is deferred and resolves as a chance outcome.
 
-To make all this well-defined, combat runs on a **single unified RNG stream** (a deliberate
-departure from the base game's per-purpose streams) — "this action consumed randomness" has to
-be one observable event. Residual modeling approximations are documented in
+To simplify checking whether RNG was consumed, combat runs on a single unified RNG stream (a deliberate
+departure from the base game's per-purpose streams). Residual modeling approximations are documented in
 `SEARCH_MODEL_INACCURACIES.md`.
 
 ## Fidelity and play-quality fixes
