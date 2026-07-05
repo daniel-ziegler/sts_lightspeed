@@ -96,7 +96,12 @@ one turn early after a damage wake); Surrounded facing (the engine's
 reconstructions kept the struct default and mis-sided the bonus; now restored from which live
 monster carries the BackAttack power, exposed via a new lastTargetedMonster binding -- the
 a20h10k g33 Spire Shield/Spear hp-only ET line, reproduced to the point: post-fix replay gives
-live's exact 61hp/6blk).
+live's exact 61hp/6blk); Perfected Strike duplicate plays (the autoplay -1 also fired for
+purgeOnUse duplicates -- Necronomicon/Double Tap/Echo Form/Duplication potion -- but live
+recomputes the duplicate at its own play time, when the original already counts from the
+discard pile, so the dup hit under-dealt by one strike bonus; now `autoplay && !purgeOnUse`
+only -- the a20h10k g64 one-step diff and the redo-g20 seven-line cluster, validated on the
+g20 capture: Necronomicon'd PS into Gremlin Leader 104->56 exact).
 
 ## How to refresh this list
 

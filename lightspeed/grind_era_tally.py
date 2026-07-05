@@ -33,6 +33,10 @@ game's errlog-archive timestamp):
   F4  (redo g5+) e9f82d8 reconcile keeps live-observed uniquePower0/1 (Time Warp counter et al);
                transplant only Hexaghost's hidden sequence counter. No main-grind games ran F4;
                redo-run eras: g1-g4 F3-code (kept iff no TE fight), g5+ F4.
+  F5  (redo g23+) fec405c Perfected Strike duplicate plays keep the full strike count -- the
+               autoplay -1 (Havoc/Mayhem-only in live) was also applied to Necronomicon/Double
+               Tap purge-duplicates, under-dealing the dup hit by one strike bonus. No main-grind
+               or redo g1-g22 games ran F5 (g22 launched 08:43, .so landed 08:55).
 
 Fix-affected states, matched against the per-decision battle captures:
   LAGA46      a decision saw Lagavulin with live move byte 4 (STUNNED) or 6 (OPEN_NATURAL)
@@ -47,6 +51,10 @@ Fix-affected states, matched against the per-decision battle captures:
               [taints E0-F3 -- the reconcile transplanted a drifting engine Time Warp counter
               over the live-observed one, mis-planning around the forced end-of-turn; fatal in
               the g38/redo-g3 phantom, distorting in any driven TE fight]
+  PS_DUP      a combat decision with Perfected Strike in the deck alongside a duplication
+              source (Necronomicon relic, Double Tap / Echo Form in deck, Duplication potion)
+              [taints E0-F4 -- the search under-valued the duplicated PS hit by one strike
+              bonus in every sim, whether or not live ever played the line]
 
 Usage: python -m lightspeed.grind_era_tally [results_txt] [battle_capture_jsonl]
 """
@@ -88,6 +96,12 @@ def main():
         if sd not in seed_nums:
             continue
         ecto = any(r.get('id') == 'Ectoplasm' for r in gs.get('relics', []))
+        deck_ids = {c.get('id') for c in gs.get('deck', [])}
+        if 'Perfected Strike' in deck_ids and gs.get('combat_state') and (
+                any(r.get('id') == 'Necronomicon' for r in gs.get('relics', []))
+                or deck_ids & {'Double Tap', 'Echo Form'}
+                or any(p.get('id') == 'DuplicationPotion' for p in gs.get('potions', []))):
+            marks.setdefault(sd, set()).add('PS_DUP')
         for mn in gs.get('combat_state', {}).get('monsters', []):
             nm = mn['name'].replace(' ', '')
             if nm == 'Lagavulin' and mn.get('move_id') in (4, 6):
@@ -112,15 +126,15 @@ def main():
         else:
             taint = set()
             if era == 'E0':
-                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT'}
+                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
             elif era == 'E1':
-                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT'}
+                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
             elif era == 'F1':
-                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT'}
+                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
             elif era == 'F2':
-                taint = mk & {'ECTO_THIEF', 'TE_FIGHT'}
+                taint = mk & {'ECTO_THIEF', 'TE_FIGHT', 'PS_DUP'}
             elif era == 'F3':
-                taint = mk & {'TE_FIGHT'}
+                taint = mk & {'TE_FIGHT', 'PS_DUP'}
             if taint:
                 v = f"DISCARD ({'+'.join(sorted(taint))})"
                 discard.append(s)

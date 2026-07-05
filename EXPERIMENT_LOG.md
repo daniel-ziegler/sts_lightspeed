@@ -16,6 +16,27 @@ paired comparisons likely keep their direction but are conditioned on the cheat.
 
 ---
 
+## 2026-07-05 (F5: Perfected Strike duplicate fix; g64 watch item resolved)
+
+Redo g20's errlog resurfaced the dormant g64 signature (Perfected Strike one-step diffs) at
+scale: seven shadow lines, live consistently one strike bonus (+2, or +3 into Vulnerable)
+above prediction. Root cause (validated on the g20 capture, Necronomicon'd PS into Gremlin
+Leader 104->56 vs engine 58): the engine's PERFECTED_STRIKE autoplay adjustment subtracted one
+strike for ALL autoplay queue items. That -1 is correct for Havoc/Mayhem top-of-pile plays
+(live recomputes from limbo, card in no counted pile) but wrong for purgeOnUse duplicates
+(Necronomicon/Double Tap/Echo Form/Duplication potion): live recomputes the duplicate at its
+own play time, when the original already sits in the discard pile and still counts. Fixed
+fec405c: subtract only when `autoplay && !purgeOnUse`.
+
+Era impact: the search under-valued duplicated PS hits in every sim wherever the deck had PS +
+a dup source, so a new PS_DUP taint marker (deck has Perfected Strike AND Necronomicon relic /
+Double Tap / Echo Form / Duplication potion at any combat decision) taints E0-F4. F5 = redo
+g23+ (g22 launched 08:43, fixed .so landed 08:55). Damage: main-run F3 keeps 46 -> 42 (4
+losses discarded, incl. g64 = 22MPH3XLQQQ0P -- the watch item's game, confirming the g64 diff
+was this bug); redo g9/g13/g20 tainted (g20 was act3:52). All 7 PS_DUP seeds appended to
+redo2 (now 23 seeds). Sample math to 100: 13 conditional + 42 F3 + 17 redo keeps (g1-g21
+minus crash g3, minus g9/g13/g20) + g22 (keep iff clean) + g23-g26 + 23 redo2.
+
 ## 2026-07-04 (a20h10k live tally: behavior-era correction protocol)
 
 Bridge fixes shipped mid-grind (5831f2f Lagavulin wake park, 0200440 Surrounded facing,
