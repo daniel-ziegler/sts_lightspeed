@@ -2026,19 +2026,19 @@ class STSLightspeedAgent:
         return action
 
     def _collect_combat_reward(self):
-        """Take the post-combat rewards. Gold (always) and potions (when the belt has room) are
-        free, no-decision pickups, as are relics UNLESS a key shares the screen. A sapphire key and
-        the relic are mutually exclusive (taking the relic clears the key, executeRewardsAction in
-        GameAction.cpp), so when both are present the relic-vs-key choice is a real value decision --
-        heart1 makes it (relic identity visible via construct_choice), the same as run_episode.
+        """Take the post-combat rewards. Gold (always), potions (when the belt has room) and the
+        EMERALD key (no interaction with anything -- both it and the relic are always takeable) are
+        free, no-decision pickups, as are relics UNLESS a SAPPHIRE key shares the screen. Only the
+        sapphire key and its linked relic are mutually exclusive (taking either clears the other,
+        executeRewardsAction in GameAction.cpp), so that pair is a real value decision -- heart1
+        makes it (relic identity visible via construct_choice), the same as run_episode.
 
         A CARD reward opens the separate CARD_REWARD screen where heart1 chooses the card (its
         identities are opaque here), so on this screen the net decides relic-vs-key WITHOUT the card
         in view -- an unavoidable live-play split run_episode doesn't have. skipped_cards (set when
         heart1 skipped the card) stops us re-opening it."""
         rewards = self.game.screen.rewards
-        has_key = any(r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)
-                      for r in rewards)
+        has_key = any(r.reward_type == RewardType.SAPPHIRE_KEY for r in rewards)
 
         # In watch mode, hover the reward-list item being taken before committing it. Claims tick
         # through at the shorter reward pause (no pre-beat -- the cursor moves as soon as the screen
@@ -2050,7 +2050,8 @@ class STSLightspeedAgent:
 
         # Free pickups, one per call (the screen re-opens for the next).
         for i, reward_item in enumerate(rewards):
-            if reward_item.reward_type in (RewardType.GOLD, RewardType.STOLEN_GOLD):
+            if reward_item.reward_type in (RewardType.GOLD, RewardType.STOLEN_GOLD,
+                                           RewardType.EMERALD_KEY):
                 return take(i)
             if reward_item.reward_type == RewardType.POTION and not self.game.are_potions_full():
                 return take(i)
@@ -2075,8 +2076,8 @@ class STSLightspeedAgent:
         return ProceedAction()
 
     def _net_relic_or_key_action(self, rewards):
-        """heart1's relic-vs-key pick when a chest/elite offers both (mutually exclusive for a
-        sapphire key). The reconstructed gc is on the REWARDS screen with the relic and key injected,
+        """heart1's relic-vs-key pick when a boss chest offers a sapphire key (mutually exclusive
+        with its linked relic; the emerald key never reaches here -- it's a free pickup). The reconstructed gc is on the REWARDS screen with the relic and key injected,
         so net_pick_action -> construct_choice exposes the relic alongside TAKE_KEY. Returns a
         CombatRewardAction (the relic when the net picks it, else the key -- the net choosing
         skip/key IS the take-key decision) or None when no key is on offer. Raises when the
@@ -2084,7 +2085,7 @@ class STSLightspeedAgent:
         loud on divergence, and a silent take-key default would hide the reconstruction bug while
         systematically forfeiting the relic choice."""
         key_item = next((r for r in rewards
-                         if r.reward_type in (RewardType.EMERALD_KEY, RewardType.SAPPHIRE_KEY)), None)
+                         if r.reward_type == RewardType.SAPPHIRE_KEY), None)
         relic_items = [r for r in rewards if r.reward_type == RewardType.RELIC]
         gc = spirecomm_to_gamecontext(self.game)
         if gc.screen_state != sts.ScreenState.REWARDS:
