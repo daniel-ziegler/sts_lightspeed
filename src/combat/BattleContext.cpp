@@ -1729,8 +1729,14 @@ void BattleContext::onUseAttackCard() {
         addToBot( Actions::BuffPlayer(PS::STRENGTH, 1) );
     }
 
-    if (p.hasRelic<R::NECRONOMICON>() && !p.haveUsedNecronomiconThisTurn && !item.freeToPlay && !item.purgeOnUse &&
-        (c.costForTurn >= 2 || c.isXCost() && item.energyOnUse >= 2)) {
+    // Live gate (Necronomicon.onUseCard bytecode): attack && ((costForTurn >= 2 &&
+    // !freeToPlayOnce) || (cost == -1 && energyOnUse >= 2)). The free-play exclusion applies
+    // only to the fixed-cost branch -- a free-played X-cost attack (Havoc'd Whirlwind) with 2+
+    // energy banked still duplicates -- and it keys on the CARD's freeToPlayOnce (Forethought)
+    // as well as a top-of-pile play (our queue-item freeToPlay).
+    if (p.hasRelic<R::NECRONOMICON>() && !p.haveUsedNecronomiconThisTurn && !item.purgeOnUse &&
+        (c.costForTurn >= 2 && !c.freeToPlayOnce && !item.freeToPlay
+         || c.isXCost() && item.energyOnUse >= 2)) {
         queuePurgeCard(c, item.target);
         p.haveUsedNecronomiconThisTurn = true;
     }
