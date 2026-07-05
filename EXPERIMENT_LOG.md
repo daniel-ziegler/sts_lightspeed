@@ -54,6 +54,21 @@ Ectoplasm), so they pool with the keeps in the final sample: 17 keeps + 26 redos
 = 100. The 18.6% offline benchmark ran pre-fix; the fix only alters Ectoplasm+thief states, a
 negligible slice of unconditional play.
 
+**F4 era (redo g5+): uniquePower reconcile fix (e9f82d8) -- the g38 phantom root-caused.** The
+redo replay of 2LVX3CDNDVR9Q reproduced the floor-50 phantom PLAYER_LOSS deterministically with
+the c740d3e forensics armed: the reconcile's blanket uniquePower0/1 transplant clobbered Time
+Eater's live-observed Time Warp counter (the engine stores that status IN uniquePower0) with an
+engine value that never got corrected; it drifted to 11 vs live 4, fired the in-engine trigger
+(+2 Str, end-turn-early) mid card-play advance, and the auto END_TURN advance then ran a second
+monster turn that killed the player. Fix: transplant uniquePower0 only for Hexaghost (the one
+genuinely hidden client); all other uniquePower-backed statuses are live-observable and reality
+wins. New TE_FIGHT taint (any Time Eater combat decision) applies to ALL driven eras E0-F3 --
+the tally's discards grow 23 -> 38 (3 F3 hearts + the g42 F2 heart fought TE). Follow-up:
+`runs/redo2_seeds_a20h10k.txt` (15 newly-tainted + the crashed 2LVX3CDNDVR9Q = 16 seeds) to run
+after the in-flight redo grind; redo g1-g4 ran F3 code but never reached a TE fight (floors
+25/24/-/33), so they keep. Final sample = 13 conditional keeps + 46 F3 no-TE keeps + 25 redo
++ 16 redo2 = 100 seeds, all F4-equivalent on their realized trajectories.
+
 **Comparability caveat vs the offline benchmark: live has NO search-tree reuse.** Offline
 playoutBattle keeps one searcher per battle and reroots into the chosen subtree (cached visits
 carry over; exact-match only). The bridge constructs a fresh BattleSearcher every decision --

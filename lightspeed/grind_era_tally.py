@@ -27,9 +27,12 @@ game's errlog-archive timestamp):
   E1  g34      5831f2f (Lagavulin wake park) only
   F1  g35-g38  + 0200440 (Surrounded facing); ASLEEP seeding still Metallicize-keyed
   F2  g39-g43  + a510d70 (byte-keyed ASLEEP seeding; c740d3e forensics is logging-only)
-  F3  g44+     current (effectiveGold Ectoplasm fix -- thief-held stolen gold is unrecoverable
+  F3  g44-g100 effectiveGold Ectoplasm fix -- thief-held stolen gold is unrecoverable
                under Ectoplasm, so the search no longer pays a phantom bonus to kill the thief;
-               the original g44 was killed mid-game for this fix and replays under F3)
+               the original g44 was killed mid-game for this fix and replays under F3
+  F4  (redo g5+) e9f82d8 reconcile keeps live-observed uniquePower0/1 (Time Warp counter et al);
+               transplant only Hexaghost's hidden sequence counter. No main-grind games ran F4;
+               redo-run eras: g1-g4 F3-code (kept iff no TE fight), g5+ F4.
 
 Fix-affected states, matched against the per-decision battle captures:
   LAGA46      a decision saw Lagavulin with live move byte 4 (STUNNED) or 6 (OPEN_NATURAL)
@@ -40,6 +43,10 @@ Fix-affected states, matched against the per-decision battle captures:
               [taints E0+E1 -- facing was never restored, mis-siding the +50% back-attack]
   ECTO_THIEF  a decision saw a Looter/Mugger while the player held Ectoplasm
               [taints E0-F2 -- effectiveGold counted thief-held gold as recoverable-by-kill]
+  TE_FIGHT    any Time Eater combat decision
+              [taints E0-F3 -- the reconcile transplanted a drifting engine Time Warp counter
+              over the live-observed one, mis-planning around the forced end-of-turn; fatal in
+              the g38/redo-g3 phantom, distorting in any driven TE fight]
 
 Usage: python -m lightspeed.grind_era_tally [results_txt] [battle_capture_jsonl]
 """
@@ -90,6 +97,8 @@ def main():
                 marks.setdefault(sd, set()).add('SPIRE')
             if ecto and nm in ('Looter', 'Mugger'):
                 marks.setdefault(sd, set()).add('ECTO_THIEF')
+            if nm == 'TimeEater':
+                marks.setdefault(sd, set()).add('TE_FIGHT')
 
     clean, redo, discard = [], [], []
     print(f"{'g':>4} {'seed':<14} {'kind':<10} era  marks -> verdict")
@@ -103,13 +112,15 @@ def main():
         else:
             taint = set()
             if era == 'E0':
-                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF'}
+                taint = mk & {'LAGA46', 'LAGA46_MET', 'SPIRE', 'ECTO_THIEF', 'TE_FIGHT'}
             elif era == 'E1':
-                taint = mk & {'SPIRE', 'ECTO_THIEF'}
+                taint = mk & {'SPIRE', 'ECTO_THIEF', 'TE_FIGHT'}
             elif era == 'F1':
-                taint = mk & {'LAGA46_MET', 'ECTO_THIEF'}
+                taint = mk & {'LAGA46_MET', 'ECTO_THIEF', 'TE_FIGHT'}
             elif era == 'F2':
-                taint = mk & {'ECTO_THIEF'}
+                taint = mk & {'ECTO_THIEF', 'TE_FIGHT'}
+            elif era == 'F3':
+                taint = mk & {'TE_FIGHT'}
             if taint:
                 v = f"DISCARD ({'+'.join(sorted(taint))})"
                 discard.append(s)
@@ -124,8 +135,8 @@ def main():
         print(f"{label}: {len(rows)} | hearts {len(hearts)} | act3 {len(wins) - len(hearts)} "
               f"| losses {len(rows) - len(wins)}")
 
-    current = [(n, s, k) for n, s, k in clean if era_of(n) == 'F3']
-    stratum = [(n, s, k) for n, s, k in clean if era_of(n) != 'F3']
+    current = [(n, s, k) for n, s, k in clean if era_of(n) == 'F3']   # F3 keeps = no-TE trajectories,
+    stratum = [(n, s, k) for n, s, k in clean if era_of(n) != 'F3']   # identically distributed under F4
     print()
     tally(current, "HEADLINE current-era (unconditional)")
     tally(stratum, "pre-fix keeps (CONDITIONAL stratum -- not comparable to a benchmark)")
