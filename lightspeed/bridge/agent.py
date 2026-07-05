@@ -1365,7 +1365,10 @@ class STSLightspeedAgent:
         try:
             if st == ScreenType.CARD_REWARD:
                 if rt == sts.RewardsActionType.CARD:
-                    if 0 <= action.idx2 < len(getattr(self.game.screen, "cards", []) or []):
+                    cards = getattr(self.game.screen, "cards", []) or []
+                    if action.idx2 == 5 and getattr(self.game.screen, "can_bowl", False):
+                        return len(cards)   # Singing Bowl: the mod's choice list is [cards..., "bowl"]
+                    if 0 <= action.idx2 < len(cards):
                         return action.idx2
                 elif rt == sts.RewardsActionType.SKIP:
                     return -1   # sentinel: hover the skip button
