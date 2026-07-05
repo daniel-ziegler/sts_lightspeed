@@ -1,10 +1,14 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Project documentation for developers and coding agents. `README.md` covers what the project
+is (the neural network, the battle MCTS, the live-game bridge); this file covers how to work
+on the code.
 
 ## Project Overview
 
-**sts_lightspeed** is a high-performance C++20 implementation of Slay the Spire designed for tree search algorithms and machine learning. It achieves 1M random playouts in 5 seconds with 16 threads and is optimized for ML training and data generation (note: RNG accuracy is no longer maintained).
+A high-performance C++20 implementation of Slay the Spire designed for tree search and
+machine learning, plus the Python training/bridge package `silverbot/`. See `README.md` for
+the full picture.
 
 ## Build Commands
 
@@ -81,28 +85,19 @@ vendored `spirecomm/` importable). One-off analysis/probe scripts are in `silver
 the live-game bridge is the `silverbot/bridge/` subpackage (mappings / combat / overworld /
 actions / seeds / agent / cli), with the repo-root `comm.py` as its runnable entry point.
 
-Key modules for ML training and data generation:
+Key modules (the network architecture and training pipelines are described in `README.md`):
 
-- **`network.py`** - Complete neural network architecture using transformer layers to predict win probabilities for card/relic choices and fixed actions. Includes custom embeddings, attention mechanisms, and data processing utilities
-- **`train.py`** - Training pipeline with hyperparameter sweeping, validation splits, and comprehensive evaluation including ROC curves and card/relic statistics. Supports command-line arguments for flexible training configuration
-- **`playouts.py`** - High-performance data generation script that runs thousands of games using neural network guidance with Boltzmann sampling. Features multi-threaded batched inference, choice statistics, and parallel game execution
-- **`ppo_train.py`** - Proximal Policy Optimization (PPO) reinforcement learning training system. Collects experience trajectories from games and trains policy/value networks using GAE advantages
-- **`inputs.py`** - Generic input space framework with embedding builders for sequences, enums, fixed vectors, and composite types. Provides abstraction layer for neural network input processing
-- **`run.py`** - Simple game runner that plays a single game with neural network agent, useful for testing and debugging
-- Various `.parquet` files contain training data rollouts from different experiments
-
-
-### PPO Training Details
-
-The **`ppo_train.py`** implements Proximal Policy Optimization reinforcement learning with the following key characteristics:
-
-- **Experience Collection**: Runs parallel game episodes using `ThreadPoolExecutor` and `as_completed()` to collect trajectories
-- **Trajectory Bias**: Since `as_completed()` returns finished games in completion order, shorter (typically worse-performing) games complete first and appear earlier in the batch. This creates a systematic bias where the first trajectories are often poor performers
-- **Debug Output**: Uses random trajectory selection instead of first trajectory to avoid the completion order bias when displaying training progress
-- **Network Architecture**: Supports both single network with value head or separate policy/value networks
-- **Reward Functions**: Multiple reward function options including sparse victory rewards, dense floor progress, and perfected strike counting
-- **Checkpointing**: Automatic model saving with resume functionality using `--resume-from-step` and checkpoint paths based on `--save-path`
-- **GAE Advantages**: Computes Generalized Advantage Estimation for stable policy gradient training
+- **`network.py`** - the transformer policy/value network, embeddings, and choice space
+- **`inputs.py`** - generic input-space framework (sequence/enum/fixed-vector/composite
+  embedding builders) the network is built on
+- **`playouts.py`** - supervised data generation: parallel self-play games with batched
+  network inference, written as parquet
+- **`train.py`** - supervised training pipeline on playout parquet data
+- **`rl_train.py`** - PPO training (GAE, annealed entropy/LR schedules, separate or shared
+  policy/value networks, checkpoint resume via `--resume-from-step`); collection and
+  optimization are pipelined across worker processes
+- **`eval_hero.py`** - batch win-rate evaluation over seeded games
+- **`bridge/`** - the live-game bridge (see `README.md` and `COMM_README.md`)
 
 ### Neural Network Action Support
 
@@ -116,7 +111,7 @@ When adding actions that map to existing choice categories (like rest site actio
    - Add new screen state case in `construct_choice()` function
    - Map C++ action indices to appropriate `FixedAction` types
    - Add screen state to neural network condition in `run_game()`
-3. **`ppo_train.py`**: Add screen state to neural network condition in `run_ppo_episode()`
+3. **`rl_train.py`**: Add screen state to neural network condition in `run_episode()`
 
 #### Adding New Choice Categories
 If you needed to add a completely new choice type (like `events_offered` field to `Choice`):
@@ -130,24 +125,16 @@ If you needed to add a completely new choice type (like `events_offered` field t
    - Add new `ActionType` enum value
    - Add new field to `choice_space` DictSpace definition
    - Update network architecture if needed for new input dimensions
-3. **`ppo_train.py`**: Add path handling for new choice type in experience collection
+3. **`rl_train.py`**: Add path handling for new choice type in experience collection
 4. **`train.py`**: Update validation and statistics collection for new choice type
 
 #### Key Patterns
 - **C++ Integration**: Game actions use `idx1`, `idx2` fields and `rewards_action_type` for structured actions
 - **Choice Mapping**: `construct_choice()` maps C++ actions to typed Python choice objects
 - **Path System**: `choice_space.ix_to_path()` converts flat neural network indices back to semantic choices
-- **Consistency**: Both `playouts.py` and `ppo_train.py` must handle the same screen states identically
+- **Consistency**: Both `playouts.py` and `rl_train.py` must handle the same screen states identically
 
 The system is designed to be extensible - most new action types can be added by following these established patterns without changing the core neural network architecture.
-
-## Development Notes
-
-- C++20 standard required
-- Uses CMake build system with git submodules for dependencies
-- All Ironclad cards and colorless cards implemented
-- Complete enemy roster and relic system
-- Console playable with full overworld/map system
 
 ## Common Pitfalls and Solutions
 
@@ -448,11 +435,13 @@ The counter enables RNG state synchronization for replay/debugging. All combat-r
 
 ## MCTS Battle Search Algorithm
 
-The battle AI uses a sophisticated Monte Carlo Tree Search (MCTS) variant with graph search and explicit randomization handling. Implementation lives in `src/sim/search/BattleSearcher.cpp`.
+The battle AI is an expectimax MCTS with graph search and after-the-fact randomness
+detection; the conceptual walkthrough is in `README.md` ("Battle MCTS without cheating").
+This section documents the implementation in `src/sim/search/BattleSearcher.cpp`.
 
 ### Core Architecture
 
-The searcher is **closed-loop**: every node stores its game state, and the tree is walked by
+The searcher is closed-loop: every node stores its game state, and the graph is walked by
 following pointers and reading `node.state` — actions are not replayed from the root each
 iteration.
 
@@ -500,31 +489,18 @@ for (Node* candidate : bucket) {
 // otherwise allocate a new node, store its state, add to the bucket
 ```
 
-**`equalForSearch` (and the hash) deliberately ignore the RNG stream** (and pure-debug
-counters). Two states that differ only in their RNG have the *same distribution of futures*, so
-the search — which averages over randomness at chance nodes — must treat them as the same node.
-Using the full `operator==` (which compares `rng`) would prevent almost all transposition and is
-semantically wrong here.
-
-**Benefits:**
-- Avoids redundant exploration of transposed states
-- Pools statistics across different paths to the same state
-- More sample-efficient than pure tree search
-
-**Exclusions:**
-- Chance nodes are never deduplicated (they represent a branching point, not a game state)
-- Only decision nodes participate in state sharing
-
-The graph is acyclic because the search key includes `turn` and `cardsPlayedThisTurn`, both
-non-decreasing along any action path, so a state can never recur deeper in a path.
+`equalForSearch` (and the hash) deliberately ignore the RNG stream and pure-debug counters
+(rationale in the README); using the full `operator==`, which compares `rng`, would prevent
+almost all transposition. Only decision nodes participate in sharing — chance nodes are never
+deduplicated (they represent a branching point, not a game state). The graph is acyclic
+because the search key includes `turn` and `cardsPlayedThisTurn`, both non-decreasing along
+any action path.
 
 ### Randomization Handling
 
-We can't enumerate an action's outcome distribution a priori — we only learn an action was
-stochastic *after* executing it. So a stochastic action's child becomes a **chance node** that
-samples outcomes on demand. The guiding principle (standard expectimax MCTS): decision nodes use
-UCB; **chance nodes sample outcomes from the true distribution, and their value is the
-visit-weighted average — i.e. the expectation.**
+A stochastic action's child becomes a **chance node** that samples outcomes on demand
+(decision nodes use UCB; a chance node's value is the visit-weighted average over sampled
+outcomes, i.e. the expectation).
 
 #### Detection
 
@@ -564,19 +540,18 @@ seed through `murmurHash3` twice, so `base+0`, `base+1`, … are decorrelated st
 way.
 
 **Double Progressive Widening (DPW).** A chance node holds at most
-`ceil(C * (n+1)^alpha)` distinct outcomes after `n` visits (`C=1`, `alpha=0.5`). Below the cap it
-draws a fresh outcome; at the cap it re-selects an existing outcome **proportional to its edge
-visit count**. This bounds the branching of high-entropy events so outcome subtrees actually
-deepen, while keeping the realized descent frequencies tracking the true probabilities. Low-entropy
-events (a coin flip, a 2-move enemy) collapse to a couple of children and converge quickly.
+`ceil(C * (n+1)^alpha)` distinct outcomes after `n` visits (defaults `C=1`, `alpha=0.5`;
+boss fights use separately-tuned `bossChanceWideningC/Alpha` — see `SearchAgent.h`). Below
+the cap it draws a fresh outcome; at the cap it re-selects an existing outcome proportional
+to its edge visit count.
 
 **Common random numbers:** sibling stochastic actions from the same decision node draw the *same*
-`randomnessBase` (sampled from the shared, immutable parent state), which reduces variance when UCB
-compares those actions. Identical outcomes still merge via `equalForSearch` regardless of base.
+`randomnessBase` (sampled from the shared, immutable parent state). Identical outcomes still
+merge via `equalForSearch` regardless of base.
 
 ### Search Algorithm (UCT with Rollouts)
 
-Each simulation performs one iteration:
+Each iteration:
 
 1. **Selection**: Traverse from root using UCT. The exploration term uses the **edge's** visit
    count (not the child's `simulationCount`, which transposition inflates), so node sharing
@@ -671,9 +646,8 @@ Action bestAction = searcher.getBestAction();
 bestAction.execute(bc);
 ```
 
-Typical simulation budgets:
-- Normal encounters: 50,000 simulations
-- Boss encounters: 150,000 simulations (3x multiplier)
+Default iteration budgets (`SearchAgent.h`): `simulationCountBase = 50000`, boss encounters
+×`bossSimulationMultiplier = 3`.
 
 ### Performance Characteristics
 
