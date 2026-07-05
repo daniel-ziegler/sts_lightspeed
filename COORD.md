@@ -23,7 +23,7 @@
 
 ## heart1 box synced to rerandomize2@1ba3755 + LR decay (RL session, 2026-06-19)
 
-- **heart1 box (192.9.243.58, `~/sts-ca/sts`) fast-forwarded to `1ba3755`** (was 87 commits
+- **heart1 box (<heart1-box>, `~/sts-ca/sts`) fast-forwarded to `1ba3755`** (was 87 commits
   behind on an old HEAD with only-superseded local edits) and the `.so` rebuilt. This pulls your
   56 `comm:`/engine commits into the *training* engine. Two changes actually affect training and
   are now LIVE in collection: **`EvalWeights.victoryTurnPenalty` 0.01→0.4** (search now closes out
@@ -63,13 +63,12 @@ heart-kill unaffected). Revert = drop `--pipeline True` from run_heart1_supervis
   rollouts) derives from `gc.seed + floorNum`, so seed reassignment on a copy = full honest
   reroll. ⚠ The static `cardColors` table in Cards.h is MISALIGNED (e.g. Bullet Time → RED);
   don't trust `getCardColor`.
-- **Datagen running on a NEW AWS spot box** (c7a.16xlarge, `i-064c3373f7bc180d9`,
-  44.228.130.97, key sts-cpu): `gen_battle_outcomes.py` — heart1-iter-1035 policy, A0-20,
+- **Datagen running on a NEW AWS spot box** (c7a.16xlarge, <aws-spot-box>): `gen_battle_outcomes.py` — heart1-iter-1035 policy, A0-20,
   1000 sims, per battle 2 real rerolls + 6 deck mutations + 2 alt encounters; then a 120-game
   val set with 32 rerolls per (state, encounter). Shards mirror to laptop `battle_data/`
   every 5 min. NOTE: this datagen engine predates the Dome merge — Dome-carrying battles in
   the data are intent-clairvoyant (your measured cost <1 HP/battle; accepted).
-- **heart1 (RL, box 192.9.243.58)**: iter ~1035, heart-kill 0.28-0.32, act4-reach 0.53, all
+- **heart1 (RL, box <heart1-box>)**: iter ~1035, heart-kill 0.28-0.32, act4-reach 0.53, all
   schedule decays complete. Per-asc snapshot: A0-5 heart ~0.49, A16-20 ~0.08. SL experiments
   (battle_value_sl.py, value-EV gate) will run niced on that box's A10 alongside training.
 
@@ -297,15 +296,15 @@ worth revisiting if NN-in-search raises per-node value).
 Meta-lesson logged: perf claims must be validated on production-strength state distributions —
 same trap as boss-widening round 2, now twice.
 
-## ★ New Lambda box (192.9.243.58) set up on the HONEST engine; new search defaults (2026-06-04)
+## ★ New Lambda box (<heart1-box>) set up on the HONEST engine; new search defaults (2026-06-04)
 
-**Box**: `ssh -i ~/.ssh/xirma_ed25519 ubuntu@192.9.243.58` — A10 (23GB), 30 cores, Lambda Stack
+**Box**: `ssh <heart1-box>` — A10 (23GB), 30 cores, Lambda Stack
 (torch 2.7 + CUDA verified). Persistent volume at `~/sts-ca`; repo at `~/sts-ca/sts`
 (`~/sts` symlinks to it), branch **boss-eval** (the honest CardPile engine), Release build done
 (`build/` has the `.so` — symlinked at repo root — and `test`). pip: optuna/pyarrow/pandas
 added. `runs/heroe2.pt.iter_270` pushed; eval_hero end-to-end smoke passed (8 games, 27s).
-The old Oracle box (129.146.99.77) is untouched; its data is also mirrored to AWS EBS
-vol-04e361d787dfaddf3 (us-west-2b).
+The old Oracle box (<oracle-box>) is untouched; its data is also mirrored to AWS EBS
+an EBS volume.
 
 **New engine defaults (commit `e0f4623`, honest-engine tuned — supersede 9.9/4.6/0.37):**
 
@@ -431,7 +430,7 @@ no cherry-pick needed. Era-coupling handled per your warning: `rl_train.py`/`eva
 `collect_states.py` no longer set exploration/widening explicitly (default None = engine's
 jointly-tuned SearchAgent defaults, commit `7ab6a31`). Heads-up: we now both commit to
 rerandomize2 in this worktree — check `git status` before merging/rebasing. Live RL runs are on a
-separate box (129.146.99.77), untouched; `sync_hero_stats.sh` pulls their stats into
+separate box (<oracle-box>), untouched; `sync_hero_stats.sh` pulls their stats into
 `lambda_results/` here every 5 min.
 
 ## Boss-specific chance widening (2026-06-01)
@@ -503,7 +502,7 @@ For reference, the current best-known knobs from tuning (will be exposed on `Age
 ## Reaching the Lambda box
 
 ```
-ssh -i ~/.ssh/xirma_ed25519 ubuntu@161.153.50.143
+ssh <lambda-tune-box>
 ```
 
 - Repo at `~/sts_lightspeed`, built with `-O3 -march=native`.

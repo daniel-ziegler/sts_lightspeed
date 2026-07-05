@@ -1,5 +1,5 @@
 #!/bin/bash
-# Live heart1 RL training supervisor (snapshot of the box config: ubuntu@192.9.243.58:~/sts-ca/sts/).
+# Live heart1 RL training supervisor (snapshot of the training box's config: ~/sts-ca/sts/).
 # Auto-resumes from the latest checkpoint and restarts on exit. This is a record of the deployed
 # launch args -- the box runs its own copy; sync changes there and re-snapshot here.
 #
