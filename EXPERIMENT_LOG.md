@@ -34,8 +34,10 @@ Double Tap / Echo Form / Duplication potion at any combat decision) taints E0-F4
 g23+ (g22 launched 08:43, fixed .so landed 08:55). Damage: main-run F3 keeps 46 -> 42 (4
 losses discarded, incl. g64 = 22MPH3XLQQQ0P -- the watch item's game, confirming the g64 diff
 was this bug); redo g9/g13/g20 tainted (g20 was act3:52). All 7 PS_DUP seeds appended to
-redo2 (now 23 seeds). Sample math to 100: 13 conditional + 42 F3 + 17 redo keeps (g1-g21
-minus crash g3, minus g9/g13/g20) + g22 (keep iff clean) + g23-g26 + 23 redo2.
+redo2. Sample math to 100: 13 conditional + 42 F3 + 17 redo keeps (g1-g21 minus crash g3,
+minus g9/g13/g20) + g23-g26 (F5) + 24 redo2. redo g22 (U6DB3VK0MATW) landed a HEART KILL but
+is PS_DUP-tainted (Duplication potion held with PS in deck; launched 08:43, pre-F5) -- redone
+in redo2 like the rest; it won despite the search under-valuing its PS dup lines.
 
 ## 2026-07-04 (a20h10k live tally: behavior-era correction protocol)
 
